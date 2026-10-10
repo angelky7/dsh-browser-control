@@ -357,7 +357,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			},
 			render: (_args, value) => [{
 				type: 'text',
-				text: `${value.title} (${value.url}) — ${value.content.length} chars${value.truncated ? ', truncated' : ''}`,
+				text: `${value.title} (${value.url}) [${value.mode}${value.truncated ? ', truncated' : ''}, ${value.content.length} chars]\n\n${value.content}`,
 			}],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Read browser page', kind: 'other' as const }),
