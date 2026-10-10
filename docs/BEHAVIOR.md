@@ -10,7 +10,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 
 ## 自动等待
 
-- `browser_navigate` / `tabs.open` 等待 `document.readyState === 'complete'`（上限 15s，`timeoutMs` 可调）后才返回。
+- `browser_navigate` / `tabs.open` 等待新文档落地（上限 15s，`timeoutMs` 可调）后才返回；15s 内没等到时结果带 `loadPending: true` 与 `pendingUrl`，`browser_navigate` 的文案会说「仍在加载」而不是「已显示」，模型不该把没落地的导航当成功。
 - **不保证** SPA 路由或懒渲染内容就绪——导航返回后再用 `browser_wait` 显式等目标元素。
 
 ## 原生弹窗（alert / confirm / prompt）
