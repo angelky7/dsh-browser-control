@@ -1,16 +1,24 @@
-// 依赖声明实测：范围形状、宿主包的归属、构建产物的 import 闭包、以及本地实际解析到的版本。
+// 依赖声明实测：同一条 peer 范围有**两个读法完全不同的消费者**，必须同时满足。
 //
-// 这条断言的存在理由（issue #13）：v1.0.8 把 peer 写成
-//   ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0"
-// 看着像「放宽到 0.2 也能装」，但 semver 对预发布版有条硬规则——一个版本只要带
-// `-rc`/`-alpha` 后缀，就只有当范围里**有一个同 [major,minor,patch] 元组**的比较符也带
-// 预发布后缀时才匹配。于是上面那条范围实际只匹配 `0.1.0-rc.2 … 0.1.0-rc.8` 这 5 个包，
-// 0.1.1-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.2 全都不在其中（实测：`npm view
-// "@deepseek-ai/dsh-settings@<那条范围>" version` 只吐 0.1.0-rc.*）。而 @deepseek-ai
-// 这一族**从来没有稳定版**（`latest` dist-tag 是 `0.0.1-rc.1`），所以任何「范围」写法都
-// 不可能覆盖宿主实际在用的版本；官方插件一律直接钉具体版本（`"0.2.0-rc.2"`）或只用
-// `~4.0.4` 这种稳定版波浪号。这里的断言就是把这个约定钉死，别再自己发明范围。
+//   1) 宿主的兼容门禁（@deepseek-ai/dsh-app-boot/lib/index.js:294-300，实测读法）：
+//      只看名字是 `@deepseek-ai/dsh` 或 `@deepseek-ai/dsh-*` 的 peer，拿**宿主版本号**
+//      去 `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`；
+//      不过就 throw（:931），插件 bundle 被整个跳过，要 `dsh plugin allow-version` 才救得回来。
+//   2) 包管理器（pnpm/npm，默认语义，不带 includePrerelease）：拿**包自己的版本列表**去匹配。
+//      semver 对预发布版的规则是「范围里必须有同 [major,minor,patch] 元组的预发布比较符」，
+//      而 `@deepseek-ai/dsh-*` 全族没有任何稳定版。
+//
+// v1.0.8 栽在只想着 1)：`">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0"` 对宿主门禁全过
+// （实测 `satisfies('0.2.0-rc.2', …, includePre)` = true），但对 2) 最大只解析到
+// **0.1.0-rc.8**——pnpm 默认 `auto-install-peers=true`，于是干净目录里装发布包真的拉了
+// 一整棵 0.1.0 时代的依赖树（19 个包，含 `dsh-agent@0.1.0-*`），typecheck 也一直在校半年前的 API。
+// 只钉精确版本（`"0.2.0-rc.2"`）则反过来死在 1)：dsh 0.1.7 / 0.2.1 宿主上门禁直接判不兼容。
+//
+// 所以能同时过两关的写法只有一种：**精确钉版 `||` 宽范围**——
+// `"0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0"`。实测：包管理器 maxSatisfying 得到 0.2.0-rc.2，
+// 宿主门禁对 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 全过。
 import { readFile } from "node:fs/promises";
+import semver from "semver";
 
 let fails = 0;
 const check = (name, ok, detail = "") => {
@@ -18,65 +26,20 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  -> " + detail : ""}`);
 };
 
-const pkg = JSON.parse(await readFile("package.json", "utf8"));
-const peers = pkg.peerDependencies ?? {};
-const deps = pkg.dependencies ?? {};
-
-/** 宿主自己提供的包：必须是 peer，不能是 dependency（否则装出第二份 cordis/dsh-tools）。 */
+/** 本插件声称兼容、且实测过（假宿主形状 + 特性探测）的宿主世代。抬 ceiling 是一次有意的决定。 */
+const SUPPORTED_HOSTS = ["0.1.2-rc.1", "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.2"];
+/** 宿主注入的包：必须是 peer，且只有 @deepseek-ai/dsh* 会被门禁检查。 */
 const HOST_OWNED = ["@deepseek-ai/cordis", "@deepseek-ai/dsh-tools", "@deepseek-ai/dsh-settings", "@deepseek-ai/dsh-invariants"];
 /** 跟着包一起发的纯工具库：官方插件（dsh-persona / dsh-skill）都放 dependencies。 */
 const BUNDLED = ["@deepseek-ai/schemastery"];
 
-// ---- 1) 范围形状：每个选择支都必须是「精确版本 / ^stable / ~stable」 ----
-// 允许 `"0.1.7-rc.2 || 0.2.0-rc.2"` 这种「把支持的宿主世代逐个精确列出」的写法——
-// 预发布版只有作为**同元组的精确比较符**时才匹配得上。禁止的是 `>=x-rc.y <z` 这类
-// 「下限带 rc、上限是别的元组」的复合比较：看着宽松，实际谁也匹配不到。
-const ONE = /^(\^|~)?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+const pkg = JSON.parse(await readFile("package.json", "utf8"));
+const peers = pkg.peerDependencies ?? {};
+const deps = pkg.dependencies ?? {};
+const gated = (name) => name === "@deepseek-ai/dsh" || name.startsWith("@deepseek-ai/dsh-");
 const alternatives = (range) => String(range).split("||").map((s) => s.trim()).filter(Boolean);
-for (const [label, table] of [["peer", peers], ["dependency", deps]]) {
-  for (const [name, range] of Object.entries(table)) {
-    const parts = alternatives(range);
-    const bad = parts.filter((p) => !ONE.test(p));
-    check(`${label} ${name} 的每个选择支都是单一比较符`, bad.length === 0, `实际写成 "${range}"`);
-    const preOp = parts.filter((p) => /-/.test(p.replace(/^[\^~]/, "")) && /^[\^~]/.test(p));
-    check(`${label} ${name} 的预发布支用精确钉版（^/~ 配 rc 在 semver 里永远匹配不上）`, preOp.length === 0,
-      preOp.join(" / "));
-  }
-}
-
-// ---- 2) 归属：宿主包只能当 peer，工具库必须是 dependency ----
-for (const name of HOST_OWNED) {
-  const why = !(name in peers) ? "peer 里缺它" : name in deps ? "同时出现在 dependencies，会装出第二份宿主包" : "";
-  check(`${name} 声明为 peer 且没有同时是 dependency`, why === "", why);
-}
-for (const name of BUNDLED) {
-  check(`${name} 声明为 dependency`, name in deps && !(name in peers), `dependencies=${deps[name] ?? "(无)"}`);
-}
-
-// ---- 3) 本地实际解析到的版本必须符合声明 ----
-const parse = (v) => {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v).trim());
-  return m ? { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] } : null;
-};
-/** 只实现本仓库允许的那几种形状：精确、^stable、~stable，以及它们的 `||` 并列。 */
-function satisfies(range, version) {
-  return alternatives(range).some((part) => satisfiesOne(part, version))
-}
-function satisfiesOne(range, version) {
-  const op = range.startsWith("^") ? "^" : range.startsWith("~") ? "~" : "";
-  const base = parse(range.replace(/^[\^~]/, ""));
-  const v = parse(version);
-  if (!base || !v) return false;
-  if (base.pre || v.pre || op === "") return `${op}${fmt(base)}` === version;
-  if (op === "~") return v.major === base.major && v.minor === base.minor && v.patch >= base.patch;
-  if (op === "^") {
-    if (base.major > 0) return v.major === base.major && (v.minor > base.minor || (v.minor === base.minor && v.patch >= base.patch));
-    if (base.minor > 0) return v.major === 0 && v.minor === base.minor && v.patch >= base.patch;
-    return v.major === 0 && v.minor === 0 && v.patch === base.patch;
-  }
-  return false;
-}
-const fmt = (p) => `${p.major}.${p.minor}.${p.patch}${p.pre ? `-${p.pre}` : ""}`;
+const isExact = (part) => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(part);
+const isStableCaretTilde = (part) => /^[\^~]\d+\.\d+\.\d+$/.test(part);
 
 const installed = {};
 for (const name of new Set([...Object.keys(peers), ...Object.keys(deps)])) {
@@ -86,40 +49,65 @@ for (const name of new Set([...Object.keys(peers), ...Object.keys(deps)])) {
     installed[name] = undefined;
   }
 }
+
+/* 1 —— 形状：每个选择支都得是包管理器看得懂的形式，且至少要有一个精确支 */
+for (const [label, table] of [["peer", peers], ["dependency", deps]]) {
+  for (const [name, range] of Object.entries(table)) {
+    const parts = alternatives(range);
+    const junk = parts.filter((p) => !isExact(p) && !isStableCaretTilde(p) && !/^>=[^|]*<[^|]*$/.test(p));
+    check(`${label} ${name} 的选择支形式合法`, junk.length === 0, junk.length ? `"${range}" 里的 ${junk.join(" / ")}` : "");
+    const needsAnchor = parts.some((p) => /-/.test(p.replace(/^[\^~]/, "")));
+    check(`${label} ${name} 涉及预发布版时必须有一条精确支当锚点（否则解析器只会拿到远古版）`,
+      !needsAnchor || parts.some(isExact), needsAnchor && !parts.some(isExact) ? `"${range}" 没有精确支` : "");
+  }
+}
+
+/* 2 —— 包管理器视角：我们构建时用的那个版本，必须满足我们对外声明的范围 */
 for (const [name, range] of Object.entries({ ...peers, ...deps })) {
-  check(`${name} 本地解析到的版本满足 "${range}"`,
-    installed[name] !== undefined && satisfies(range, installed[name]),
-    `实际装的是 ${installed[name] ?? "(未安装)"}`);
+  const have = installed[name];
+  if (have === undefined) { check(`${name} 本地已安装`, false, "node_modules 里没有它"); continue; }
+  check(`包管理器视角：${name}@${have} 满足 "${range}"`, semver.satisfies(have, range),
+    semver.satisfies(have, range) ? "" : `satisfies=false，解析器只会拿到 ${semver.maxSatisfying([have], range) ?? "null"}`);
 }
 
-// ---- 4) 构建产物的 import 闭包：裸模块必须都有声明 ----
-for (const bundle of ["lib/index.js", "lib/invariant.js"]) {
-  const code = await readFile(bundle, "utf8");
-  const bare = [...code.matchAll(/from\s+"([^"./][^"]*)"/g)]
-    .map((m) => m[1])
-    .filter((s) => !s.startsWith("node:"));
-  const undeclared = [...new Set(bare)].filter((s) => !(s in deps) && !(s in peers));
-  check(`${bundle} 的裸 import 全部有声明`, undeclared.length === 0,
-    undeclared.length ? `没声明：${undeclared.join(", ")}` : `扫到 ${new Set(bare).size} 个：${[...new Set(bare)].join(", ")}`);
+/* 3 —— 宿主门禁视角：声称支持的每一代宿主都必须过 evaluatePluginCompatibility */
+for (const [name, range] of Object.entries(peers)) {
+  if (!gated(name)) continue;
+  for (const host of SUPPORTED_HOSTS) {
+    check(`宿主门禁：dsh ${host} 装本插件时 peer ${name} 要判兼容`,
+      semver.satisfies(host, range, { includePrerelease: true }), semver.satisfies(host, range, { includePrerelease: true }) ? "" : `宿主会被判不兼容：${range}`);
+  }
 }
 
-// ---- 5) 运行时 import 的宿主包必须是 peer（否则发布出去的包自带一份旧的） ----
+/* 4 —— 归属：宿主包只能当 peer，工具库必须是 dependency */
+for (const name of HOST_OWNED) {
+  const why = !(name in peers) ? "peer 里缺它" : name in deps ? "同时出现在 dependencies，会装出第二份宿主包" : "";
+  check(`${name} 声明为 peer 且没有同时是 dependency`, why === "", why);
+}
+for (const name of BUNDLED) {
+  check(`${name} 声明为 dependency`, name in deps && !(name in peers), `dependencies=${deps[name] ?? "(无)"}`);
+}
+
+/* 5 —— 构建产物的 import 闭包：裸模块必须都有声明 */
 const runtime = new Set();
 for (const bundle of ["lib/index.js", "lib/invariant.js"]) {
   const code = await readFile(bundle, "utf8");
-  for (const m of code.matchAll(/from\s+"(@deepseek-ai\/[^"]+)"/g)) runtime.add(m[1]);
+  const bare = [...code.matchAll(/from\s+"([^"./][^"]*)"/g)].map((m) => m[1]).filter((s) => !s.startsWith("node:"));
+  for (const s of bare) runtime.add(s);
+  const undeclared = [...new Set(bare)].filter((s) => !(s in deps) && !(s in peers));
+  check(`${bundle} 的裸 import 全部有声明`, undeclared.length === 0,
+    undeclared.length ? `没声明：${undeclared.join(", ")}` : `扫到 ${new Set(bare).size} 个：${[...new Set(bare)].join(", ") || "(无)"}`);
 }
 const asDeps = [...runtime].filter((s) => s in deps && HOST_OWNED.includes(s));
 check("运行时引用的宿主包没有被塞进 dependencies", asDeps.length === 0, asDeps.join(", "));
-console.log(`   产物运行时真正 import 的宿主包：${[...runtime].join(", ")}`);
+console.log(`   产物运行时真正 import 的外部包：${[...runtime].join(", ")}`);
 
-// ---- 6) schemastery 的范围与宿主自身的选择保持一致 ----
+/* 6 —— schemastery 与宿主同族（~），且不需要门禁锚点（它有稳定版） */
 const schemaRange = deps["@deepseek-ai/schemastery"] ?? "";
-check("schemastery 用 ~（跟宿主 ~3.18.x 同族），不是会跨 minor 的裸范围", /^~\d+\.\d+\.\d+$/.test(schemaRange), schemaRange);
+check("schemastery 用 ~（宿主自己也是 ~3.18.x）", /^~\d+\.\d+\.\d+$/.test(schemaRange), schemaRange);
 
-// ---- 7) 不声明 engines：Node 版本由宿主决定，写死了反而多一条硬失败路径 ----
-// （npm 上官方 dsh 插件一个都没写 engines；而 pnpm/npm 在 engine-strict 下会因它直接拒绝安装）
+/* 7 —— 不声明 engines：Node 版本由宿主决定；宿主门禁实测只看 peerDependencies */
 check("package.json 不写 engines", pkg.engines === undefined, pkg.engines === undefined ? "" : JSON.stringify(pkg.engines));
 
-console.log(`\n结论：${fails === 0 ? "依赖声明符合宿主约定" : fails + " 项不符合"}`);
+console.log(`\n结论：${fails === 0 ? "依赖声明同时过宿主门禁与包管理器两关" : fails + " 项不过"}`);
 process.exit(fails ? 1 : 0);

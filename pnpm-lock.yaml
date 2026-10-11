@@ -30,6 +30,9 @@ importers:
       publint:
         specifier: ^0.3.21
         version: 0.3.24
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(publint@0.3.24)(typescript@6.0.3)

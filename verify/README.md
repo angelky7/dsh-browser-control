@@ -14,7 +14,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | 脚本 | 证明什么 | 关联 |
 |---|---|---|
 | `verify_config_patch.mjs` | `Config({enabled:false})` 得到的是 `false`——即包内 `cordis.patch.yml` 的显式值压过 v1.0.6 的 schema 默认 `true`，这就是「装上后 9777 无人监听」的根因 | #4 |
-| `verify_peers.mjs` | 依赖声明的形状与归属：范围只允许「精确钉版 / `^stable` / `~stable`（或其 `||` 并列）」、宿主包必须是 peer 且不能同时是 dependency、本地解析到的版本要真的满足声明、`lib/` 产物里每个裸 import 都得有交代。存在的理由是那条 semver 预发布规则——`">=0.1.0-rc.1 <0.3.0-0"` 这种写法实际匹配不到任何现代宿主版本 | #13 |
+| `verify_peers.mjs` | 用**宿主自己用的那个 semver**把同一条 peer 范围的两个读者各跑一遍：包管理器视角（默认语义——本地装的版本必须满足对外声明，且涉及预发布时必须有精确支当锚点）与宿主门禁视角（`includePrerelease:true`，拿 0.1.2-rc.1 / 0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-alpha.2 四代宿主版本逐个试），外加宿主包只能是 peer、产物裸 import 全有交代、`engines` 必须不存在。v1.0.8 那条宽范围在前者只解析到 0.1.0-rc.8、在后者全绿，就是这个台把它暴露出来的 | #13 |
 | `verify_plugin.mjs [legacy\|conflict\|new]` | 用假 cordis 上下文跑真 `apply()`，三种宿主形状（有 `register` / `register` 抛错 / 根本没有 `register`）下都必须「回调不抛、端口监听、工具全部注册」；legacy 模式还额外回归「改 `enabled` 能实时关/开端口」 | #8、#4 |
 | `verify_surface.mjs` | 四方对账：扩展 `COMMANDS` 表 ↔ 插件 `controller.execute()` 实际调用的命令 ↔ 两份 README 的工具表 ↔ 构建产物 `lib/index.js`。防「扩展实现了但 agent 调不到」「文档吹了不存在的工具」「npm 包比源码少工具」三类复发 | v1.0.7 11/16、`browser_wait` |
 | `verify_tab_groups.mjs` | 在 node:vm 里加载扩展的 service worker，配一台**有状态**的假 `chrome.tabs`/`chrome.tabGroups`，断言建组 / 复用同组 / 退避重试（含「只多打一次」和「4 枪封顶」）/ 用户手动拆组后不往死 groupId 上塞 / 按标题找回 / 按窗口拆组 / 无权限降级，并直接检查 manifest 声明了 `tabGroups` | 标签可见化 |
@@ -34,6 +34,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 - cordis 的 `ctx.effect(execute, label)` 里，`execute` 的返回值才是 teardown 函数，所以注册 disposer 要写 `ctx.effect(() => dispose, 'label')`。
 - 宿主 `latest` 已经是 dsh `0.2.0-rc.2`，插件 peer 上限写 `<0.2.0-0` 会让新宿主装不上；放宽前先把 0.2 的 `dsh-tools` 抓下来对比导出面（结论：`defineTool` 等完全一致）。
 - 判断一个范围能不能匹配预发布版，别用心算，把解析器叫出来：`npm view "@deepseek-ai/dsh-settings@<范围>" version`。`@deepseek-ai` 全族都是预发布版，所以 `*` 这种"最宽松"的写法反而**一个版本都匹配不到**，而 `>=0.1.0-rc.1 <0.3.0-0` 只匹配 0.1.0 元组那批。
+- 宿主的插件兼容规则不在文档里，在 `@deepseek-ai/dsh-app-boot/lib/index.js` 里（`npm pack` 解包 grep 就能看到）：它只检查 `@deepseek-ai/dsh*` 名字的 peer，用**宿主版本号**配 `includePrerelease:true` 去判，不通过就 throw 让整包被跳过。想装明白「我们的 package.json 会被怎么读」，读宿主的码比读自己的码更有效。
 - 构建产物 `lib/` 是提交进仓库的，改完 `src/` 必须 `npm run build`，否则发布出去的包和源码不一致（1.0.7 已经栽过一次：npm 包只有 11 个工具，源码有 16 个）。
 - 想在没有浏览器的机器上跑扩展代码：`node:vm` 建 context，`chrome` 给一个自动打桩的 Proxy 就够了。**只有顶层 `function` 声明能从 context 上取到**（`cmdTabsOpen`、`addToAgentGroup` 能调），`const`/`class` 取不到（`COMMANDS`、`agentGroupsByWindow` 直接 `undefined`），所以断言要写在能被调用的函数与看得见的假状态上。
 - 打桩的 Proxy 会让 `typeof chrome.tabGroups.update === 'function'` **永远成立**，于是「能力探测 + 降级」这条路永远测不到。要么显式让该命名空间返回 `undefined`，要么像 `ext_harness.mjs` 那样把 `tabs`/`tabGroups` 换成有状态的假浏览器；换成立实现之后，**每个建模过的命名空间还要再套一层 fallback Proxy**，否则 `chrome.storage.onChanged.addListener` 这种没建模到的成员会直接 `undefined` 炸在加载期。
