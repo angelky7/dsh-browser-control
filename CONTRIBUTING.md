@@ -44,6 +44,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 - schemastery 的 schema 本身就是校验函数：`Config(data)` 直接返回补齐默认值后的对象，没有 `.parse()`。
 - cordis 的 `ctx.effect(execute, label)`，`execute` 的**返回值**才是 teardown 函数，所以注册 disposer 写成 `ctx.effect(() => dispose, 'label')`。
 - 桥接的 Token 是唯一的实际边界，回环绑定不是。任何放宽 HTTP 面的改动都要同时考虑 `Origin` 与 `Host`（WebSocket 握手不受 CORS 约束）。
+- **本机 `npm config get registry` 指的是 `registry.npmmirror.com`，它会滞后。** 判断「npm 上到底有没有某个版本」必须显式走官方源：`npm view <pkg> versions --registry=https://registry.npmjs.org/`，或直接 `curl https://registry.npmjs.org/<转义后的包名>`。踩过一次：拿镜像的结果断言「1.0.9 从没发布」，而官方源文档里它是 `2026-10-10T13:42:43Z` 就发出去了。
 - **一条 peer 范围有两个读法完全不同的消费者，必须同时过两关。**
   - 宿主门禁（`@deepseek-ai/dsh-app-boot`，实测 `lib/index.js:294-300`）：只看名字为 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer，拿**宿主版本号**做 `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`，不过就 throw（`:931`）→ 整个插件 bundle 被跳过，要 `dsh plugin allow-version` 才救得回来。`cordis` / `schemastery` 不在这套筛选里。
   - 包管理器（pnpm / npm，默认语义**不带** includePrerelease）：拿**包自己的版本列表**匹配。semver 的预发布规则是「范围里得有同 `[major,minor,patch]` 元组的预发布比较符」，而 `@deepseek-ai/dsh-*` 全族没有任何稳定版（`latest` 停在 `0.0.1-rc.1`，真版本在 `next`/`alpha`）。

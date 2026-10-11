@@ -55,6 +55,7 @@ Build it with Python `zipfile` or `tar`, and make sure the artifact **starts wit
 - **Do not add `engines.node`.** No official dsh plugin declares it, the host owns the Node decision, and the gate never reads engines — keeping the field only hands `engine-strict` users one more way for our own package to refuse an install.
 - Host-injected packages (cordis / dsh-tools / dsh-settings / dsh-invariants) are **peers only**, never simultaneously `dependencies`: a second copy of a host package breaks service injection and tool registration. `@deepseek-ai/schemastery` is the opposite — it must be a `dependency` (`~3.18.4`), which is what the official plugins do. When the host generation moves, retarget the exact anchor; `verify_peers.mjs` runs both consumers with the host's own semver and rejects a wrong move.
 - The token is the only real boundary; the loopback bind is not. Any change widening the HTTP face must consider `Origin` and `Host` together (WebSocket handshakes are not CORS-guarded).
+- **This machine's `npm config get registry` points at `registry.npmmirror.com`, which lags.** Any claim about whether a version exists on npm must come from the official registry: `npm view <pkg> versions --registry=https://registry.npmjs.org/`, or `curl https://registry.npmjs.org/<escaped-name>`. It burned once already: "1.0.9 was never published" was declared from mirror data while the official document had carried it since `2026-10-10T13:42:43Z`.
 
 ## Reporting issues
 
