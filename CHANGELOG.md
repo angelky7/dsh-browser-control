@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 新增 `verify/verify_cdp_retry.mjs`（已串进 `npm run verify`）：把 PR #7 的两个面都变成护栏——**核心修复该做的事**（会话被 Chrome 抢走后要能恢复）和**它第一版犯的错**（重放整个闭包导致 `Input.dispatchMouseEvent` 从 2 次变 3 次、`mode:'type'` 重复输入）。跑法是真的加载 `extension/background.js`，配一台**有状态的假 `chrome.debugger`**：它自己维护 `attached` 集合，所以「扩展缓存还说附着着、Chrome 早就收回了」会如实表现为 `Debugger is not attached to the tab with id: N.`。六个场景 S1~S6，其中 S3 断言重试有界（≤2 次）、S4 断言非会话类错误一次都不许多打。
+  - **同一条命令可以换代码跑**：`node verify/verify_cdp_retry.mjs <相对路径>` + `CDP_RETRY_FIXED=1`。实测两份文件都能全绿且**能区分**：仓库当前版 S1 =「失败：Debugger is not attached…attach 次数 1（不重连）」，把 PR #7 三方合并到当前 main 的预览文件（`git merge-file`，零冲突）则是「成功｜attach 次数 2」，S3 从 1 次尝试变 2 次仍然有界，S2 两边都只派发 2 个鼠标事件。合并 PR #7 时把 `CDP_RETRY_FIXED=1` 一起改进调用，S1 的断言方向随之翻正——不留永远绿的空断言。
+  - 顺带修掉一个会让整类测试**假绿**的坑：`ext_harness.mjs` 里假 `chrome.runtime.lastError` 原来是静态 `undefined` 属性，而扩展全靠读它来判失败——所有错误都被吞掉，S2/S3/S4 当时全过但什么都没测到。改成 getter 之后才暴露出真实行为。
+- 顺带核对过 PR #7 的现状（未合并，等用户决定）：作者已按评审把重放收紧成「闭包第一次 send 就失败才重放」（`sends > started + 1` 直接抛），base 是 `cffb884`（v1.0.9），与当前 main 的标签分组代码不冲突；合并要动 `extension/` → 需要重打扩展 zip 并重发 npm（即 1.0.11）。
+
 - 发布流程纠正（中英 `CONTRIBUTING.md`）：检查表顺序改成 **先 `npm publish` → 确认镜像也同步到该版本、`dist-tags.latest` 跟上 → 再打 tag / 建 Release / 宣布**。v1.0.10 就是按老顺序先把 Release 发出去了，结果维护者自己在本机 `dsh plugin add` 立刻撞到 `ERR_PNPM_NO_MATCHING_VERSION`——宿主把依赖钉成确切版本号，而 pnpm 用的是用户配置的源（这台机器是 `registry.npmmirror.com`，当时官方源已有 1.0.10、镜像 `latest` 还停在 1.0.8）。
 - 文档新增一类「看着像包坏了」的安装失败：README（中英）安装节 + `dsh-config/README.md` 都写清镜像滞后的判断方法与三条解法（这一次显式 `--registry=https://registry.npmjs.org/`；改用 Release 里的离线包 `add file:<解压目录>`；等镜像同步后重试原命令）。
 - issue #13 的机制定位（仍未定案）：本机等价复现出的失败路径「目录/宿主钉版本 → 用户源还没这个版本 → `ERR_PNPM_NO_MATCHING_VERSION`」比之前怀疑的 peer 范围更能解释报告者的现象——而且 hub 的失败分类表里没有这个错误码的分支，会一路落到兜底标签给插件仓库提 issue。已在 #13 里向报告者说明并给出可试的绕法。

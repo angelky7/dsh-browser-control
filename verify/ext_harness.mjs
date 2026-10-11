@@ -28,10 +28,29 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
     nextGroupId: 500,
     calls: { group: 0, ungroup: 0, create: 0 },
     failGroupTimes,
+    /**
+     * 假 CDP 会话。`attached` 是 **Chrome 侧**的事实，扩展里的 `attachedTabs`
+     * 是它的缓存——两者故意分开，才能测出「缓存说了谎」这类缺陷。
+     * `failPlan(method, nth)` 返回错误文案，模拟会话中途丢失。
+     */
+    dbg: {
+      attached: new Set(),
+      attachCount: 0,
+      detachCount: 0,
+      sends: {},
+      failPlan: null,
+      attachPlan: null,
+      listeners: { onEvent: [], onDetach: [] },
+    },
     addTab(windowId, url) {
       const id = this.nextTabId++;
       this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false });
       return id;
+    },
+    /** 模拟 Chrome 单方面丢掉会话（DevTools 抢占 / 导航竞态），并广播 onDetach。 */
+    fireDetach(tabId, reason = "target_closed") {
+      this.dbg.attached.delete(tabId);
+      for (const fn of this.dbg.listeners.onDetach) fn({ tabId, targetType: "page" }, reason);
     },
   };
 }
@@ -133,10 +152,51 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     },
   };
 
+  const dbg = model.dbg;
+  /**
+   * 假 debugger。语义照着真 Chrome 来：会话已经被 Chrome 收回时，
+   * `sendCommand` 回 `Debugger is not attached to the tab with id: N.`——
+   * 这正是「扩展缓存还说附着着」暴露出来的方式。
+   */
+  const debuggerApi = {
+    attach: (target, version, cb) => {
+      const done = typeof version === "function" ? version : cb;
+      dbg.attachCount++;
+      const forced = typeof dbg.attachPlan === "function" ? dbg.attachPlan(Number(target?.tabId), dbg.attachCount) : null;
+      state.lastError = forced ? { message: forced } : undefined;
+      if (!forced) dbg.attached.add(Number(target?.tabId));
+      if (done) { done(); return undefined; }
+      return forced ? Promise.reject(new Error(forced)) : Promise.resolve();
+    },
+    detach: (target, cb) => {
+      dbg.detachCount++;
+      dbg.attached.delete(Number(target?.tabId));
+      state.lastError = undefined;
+      if (cb) { cb(); return undefined; }
+      return Promise.resolve();
+    },
+    sendCommand: (target, method, params, cb) => {
+      const done = typeof params === "function" ? params : cb;
+      const tabId = Number(target?.tabId);
+      const nth = (dbg.sends[method] || 0) + 1;
+      dbg.sends[method] = nth;
+      let message;
+      if (!dbg.attached.has(tabId)) message = `Debugger is not attached to the tab with id: ${tabId}.`;
+      else if (typeof dbg.failPlan === "function") message = dbg.failPlan(method, nth, tabId);
+      state.lastError = message ? { message } : undefined;
+      const result = { result: { value: null } };
+      if (done) { done(message ? undefined : result); return undefined; }
+      return message ? Promise.reject(new Error(message)) : Promise.resolve(result);
+    },
+    onEvent: { addListener: (fn) => { dbg.listeners.onEvent.push(fn); } },
+    onDetach: { addListener: (fn) => { dbg.listeners.onDetach.push(fn); } },
+  };
+
   const runtime = {
     getManifest: () => manifest,
     id: "test-extension-id",
-    lastError: undefined,
+    // 必须是 getter：Chrome 在每次回调前改这个值，扩展就是读它来判失败的
+    get lastError() { return state.lastError; },
   };
 
   const storageArea = {
@@ -157,6 +217,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
   const modeled = {
     tabs: withFallback(tabs, "chrome.tabs"),
     runtime: withFallback(runtime, "chrome.runtime"),
+    debugger: withFallback(debuggerApi, "chrome.debugger"),
     storage: withFallback({ local: storageArea, session: storageArea, onChanged: listener() }, "chrome.storage"),
   };
   if (withTabGroups) modeled.tabGroups = withFallback(tabGroups, "chrome.tabGroups");
@@ -176,9 +237,12 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
  * 加载真实的 background.js。
  * @param options.model 复用同一台假浏览器（模拟 service worker 重启：缓存没了，状态还在）
  * @param options.realWebSocket 注入 Node 的全局 WebSocket，让它真的去连本地 BridgeServer
+ * @param options.backgroundPath 换一份扩展代码来跑（评审外部补丁 / 合并预览用），默认仓库的 extension/background.js
  */
-export async function bootBackground({ model, withTabGroups = true, storage = {}, realWebSocket = false, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
-  bgCode ??= await readFile(BG_PATH, "utf8");
+export async function bootBackground({ model, withTabGroups = true, storage = {}, realWebSocket = false, backgroundPath, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
+  const code = backgroundPath
+    ? await readFile(new URL(backgroundPath, import.meta.url), "utf8")
+    : (bgCode ??= await readFile(BG_PATH, "utf8"));
   // 扩展在加载期就读 getManifest().version 并把它报给桥，所以喂真的 manifest.json，
   // 免得一发布版本号就和一个写死在测试台里的字符串悄悄分家
   realManifest ??= JSON.parse(await readFile(MANIFEST_PATH, "utf8"));
@@ -196,7 +260,7 @@ export async function bootBackground({ model, withTabGroups = true, storage = {}
   if (realWebSocket) sandbox.WebSocket = globalThis.WebSocket;
   sandbox.globalThis = sandbox.self = sandbox;
   const ctx = vm.createContext(sandbox);
-  vm.runInContext(bgCode, ctx, { filename: "extension/background.js" });
+  vm.runInContext(code, ctx, { filename: backgroundPath ? "background.candidate.js" : "extension/background.js" });
   await new Promise((r) => setTimeout(r, 5));
   return { model: browser, ctx, sandbox };
 }

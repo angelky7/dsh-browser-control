@@ -257,6 +257,7 @@ Chrome browser
 | `npm run verify` harness: config resolution, three host shapes, HTTP auth and upgrade origin, published-bundle behaviour | ✅ 2026-10-10, see [verify/README.md](verify/README.md) |
 | `verify_tab_groups` harness: group creation / reuse / backoff retry / stale cache / per-window dissolve / graceful degrade | ✅ 2026-10-11, node:vm plus a stateful fake `chrome.tabs`/`chrome.tabGroups` — **not re-run in a real Chrome** |
 | `verify_extension_e2e` harness: real bridge + real extension code + real WebSocket end to end (frame contract, command reachability, error classification) | ✅ 2026-10-11 — only `chrome.*` is faked; visuals and real CDP behaviour still need a live browser |
+| `verify_cdp_retry` harness: session recovery after Chrome steals the attach, replay must not re-run side effects, bounded retries (6 scenarios) | ✅ 2026-10-11, real `background.js` against a stateful fake `chrome.debugger`; cross-checked on a merge-preview build |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 
 There have been no unit tests since v1.0.4 removed `tests/`; the three browser rows above are historical runs that were not repeated for this change, while every claim in this release comes from the repeatable harness under `verify/`.
