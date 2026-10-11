@@ -1,11 +1,11 @@
-// 标签分组的真实行为：在 node:vm 里加载扩展的 service worker，用一套**有状态**的
-// chrome.tabs / chrome.tabGroups 假浏览器来跑，断言「建组 / 复用 / 退避重试 /
-// 缓存失效 / 按窗口拆组 / 无权限降级」。
+// 标签分组的真实行为：在 node:vm 里跑扩展**真实的** service worker，配一台有状态的
+// 假 `chrome.tabs` / `chrome.tabGroups`（verify/ext_harness.mjs），断言建组 / 复用 /
+// 退避重试 / 缓存失效 / 按标题找回 / 按窗口拆组 / 无权限降级。
 //
-// 这套断言存在的原因：分组是给用户看的可见副作用。建出两个组、往已死的 groupId
-// 上塞标签、或者漏了 manifest 权限却当成能用了，都不会让工具报错，只会悄悄变难看。
+// 这套断言存在的原因：分组是给用户看的可见副作用。建出两个组、往已死的 groupId 上塞
+// 标签、或者漏了 manifest 权限却当成能用了，都不会让工具报错，只会悄悄变难看。
 import { readFile } from "node:fs/promises";
-import vm from "node:vm";
+import { bootBackground, makeModel } from "./ext_harness.mjs";
 
 let fails = 0;
 const check = (name, ok, detail = "") => {
@@ -13,165 +13,13 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  -> " + detail : ""}`);
 };
 
-const BG_URL = new URL("../extension/background.js", import.meta.url);
-const BG_CODE = await readFile(BG_URL, "utf8");
-
-/** 一台内存里的假浏览器：标签页和分组是真的对象，操作会改状态。 */
-function makeModel({ failGroupTimes = 0 } = {}) {
-  return {
-    tabs: new Map(),
-    groups: new Map(),
-    nextTabId: 100,
-    nextGroupId: 500,
-    calls: { group: 0, ungroup: 0, create: 0 },
-    failGroupTimes,
-    addTab(windowId, url) {
-      const id = this.nextTabId++;
-      this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false });
-      return id;
-    },
-  };
-}
-
-/** 未建模的 chrome 命名空间一律打桩，保证 background.js 加载不炸。 */
-function stub(path, state) {
-  return new Proxy(function () {}, {
-    get: (_t, k) => {
-      if (typeof k !== "string") return undefined;
-      if (k === "lastError") return state.lastError;
-      if (k === "then" || k === "catch" || k === "finally") return undefined;
-      if (k === "addListener") return () => {};
-      return stub(`${path}.${k}`, state);
-    },
-    apply: () => Promise.resolve({ result: { value: null } }),
-  });
-}
-
-function makeChrome(model, { withTabGroups }) {
-  const state = { lastError: undefined };
-  const resolve = (v) => Promise.resolve(v);
-  const reject = (m) => Promise.reject(new Error(m));
-
-  const dropEmptyGroups = () => {
-    for (const [gid, group] of model.groups) {
-      if (![...model.tabs.values()].some((t) => t.groupId === gid)) model.groups.delete(gid);
-    }
-  };
-
-  const listener = () => ({ addListener: () => {}, removeListener: () => {} });
-
-  const tabs = {
-    onRemoved: listener(),
-    onUpdated: listener(),
-    onActivated: listener(),
-    onCreated: listener(),
-    onMoved: listener(),
-    create: ({ url, active = true, windowId }) => {
-      model.calls.create++;
-      const id = model.addTab(windowId ?? 1, url ?? "");
-      model.tabs.get(id).active = active;
-      return resolve({ ...model.tabs.get(id) });
-    },
-    get: (id) => (model.tabs.has(id) ? resolve({ ...model.tabs.get(id) }) : reject(`No tab with id: ${id}`)),
-    query: (info = {}) => {
-      let list = [...model.tabs.values()];
-      if (info.windowId !== undefined) list = list.filter((t) => t.windowId === info.windowId);
-      if (info.groupId !== undefined) list = list.filter((t) => t.groupId === info.groupId);
-      return resolve(list.map((t) => ({ ...t })));
-    },
-    group: ({ tabIds, groupId, createProperties }) => {
-      model.calls.group++;
-      if (model.failGroupTimes > 0) {
-        model.failGroupTimes--;
-        return reject("Cannot group the tab because it is being moved");
-      }
-      const ids = tabIds.map(Number);
-      for (const id of ids) if (!model.tabs.has(id)) return reject(`No tab with id: ${id}`);
-      let gid = groupId;
-      if (gid === undefined) {
-        const windowId = createProperties?.windowId ?? model.tabs.get(ids[0]).windowId;
-        gid = model.nextGroupId++;
-        model.groups.set(gid, { id: gid, windowId, title: "", color: "grey" });
-      } else if (!model.groups.has(gid)) {
-        // 往一个不存在的 groupId 上塞标签：真 Chrome 就是这么报错的
-        return reject(`No group with id: ${gid}`);
-      }
-      for (const id of ids) model.tabs.get(id).groupId = gid;
-      return resolve(gid);
-    },
-    ungroup: (tabIds) => {
-      model.calls.ungroup++;
-      const ids = (Array.isArray(tabIds) ? tabIds : [tabIds]).map(Number);
-      for (const id of ids) {
-        if (!model.tabs.has(id)) return reject(`No tab with id: ${id}`);
-        model.tabs.get(id).groupId = -1;
-      }
-      dropEmptyGroups();
-      return resolve();
-    },
-  };
-
-  const tabGroups = {
-    get: (id) => (model.groups.has(id) ? resolve({ ...model.groups.get(id) }) : reject(`No group with id: ${id}`)),
-    query: (info = {}) => {
-      let list = [...model.groups.values()];
-      if (info.title !== undefined) list = list.filter((g) => g.title === info.title);
-      if (info.windowId !== undefined) list = list.filter((g) => g.windowId === info.windowId);
-      return resolve(list.map((g) => ({ ...g })));
-    },
-    update: (id, props) => {
-      model.calls.update = (model.calls.update ?? 0) + 1;
-      if (!model.groups.has(id)) return reject(`No group with id: ${id}`);
-      Object.assign(model.groups.get(id), props);
-      return resolve({ ...model.groups.get(id) });
-    },
-  };
-
-  const runtime = {
-    getManifest: () => ({ version: "1.0.9-test" }),
-    id: "test-extension-id",
-    lastError: undefined,
-  };
-
-  // 建模过的命名空间仍然允许 background.js 调用我们没写到的方法，那些退回打桩，
-  // 免得测试因为某个无关 API 缺席而炸掉。
-  const withFallback = (obj, path) => new Proxy(obj, {
-    get: (target, k) => (typeof k === "string" && !(k in target) ? stub(`${path}.${k}`, state) : target[k]),
-  });
-
-  const modeled = { tabs: withFallback(tabs, "chrome.tabs"), runtime: withFallback(runtime, "chrome.runtime") };
-  if (withTabGroups) modeled.tabGroups = withFallback(tabGroups, "chrome.tabGroups");
-
-  return new Proxy({}, {
-    get: (_t, k) => {
-      if (typeof k !== "string") return undefined;
-      if (!withTabGroups && k === "tabGroups") return undefined;
-      if (k in modeled) return modeled[k];
-      return stub(`chrome.${k}`, state);
-    },
-  });
-}
-
 async function boot({ withTabGroups = true, failGroupTimes = 0, model } = {}) {
   const browser = model ?? makeModel({ failGroupTimes });
-  const sandbox = {
-    console: { log: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
-    setTimeout, clearTimeout, setInterval, clearInterval,
-    URL, URLSearchParams, TextEncoder, TextDecoder, crypto,
-    AbortController, Blob, fetch: () => Promise.resolve({}),
-    WebSocket: class { close() {} send() {} },
-    btoa: (s) => Buffer.from(s, "binary").toString("base64"),
-    atob: (s) => Buffer.from(s, "base64").toString("binary"),
-    chrome: makeChrome(browser, { withTabGroups }),
-  };
-  sandbox.globalThis = sandbox.self = sandbox;
-  const ctx = vm.createContext(sandbox);
-  vm.runInContext(BG_CODE, ctx, { filename: "background.js" });
-  await new Promise((r) => setTimeout(r, 5));
+  const { ctx } = await bootBackground({ model: browser, withTabGroups });
   return { model: browser, ctx };
 }
 
-const openTab = (ctx, url) => ctx.cmdTabsOpen({ url, wait: false });
+const openTab = (ctx, url, extra = {}) => ctx.cmdTabsOpen({ url, wait: false, ...extra });
 
 /* 1 —— 没有 tabGroups 权限/接口时必须干净降级，且不能连累「打开标签页」 */
 {
@@ -197,7 +45,8 @@ const openTab = (ctx, url) => ctx.cmdTabsOpen({ url, wait: false });
     `${a.groupId} vs ${b.groupId}`);
   check("两个标签页都真的在组里",
     model.tabs.get(a.tabId).groupId === a.groupId && model.tabs.get(b.tabId).groupId === a.groupId);
-  const noGroup = await ctx.cmdTabsOpen({ url: "https://nomark.test", wait: false, group: false });
+
+  const noGroup = await openTab(ctx, "https://nomark.test", { group: false });
   check("group:false 时 open 不归组",
     noGroup.grouped === false && model.tabs.get(noGroup.tabId).groupId === -1 && model.groups.size === 1,
     JSON.stringify(noGroup));

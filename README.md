@@ -249,6 +249,7 @@ Chrome 浏览器
 | B 站搜索 → 统计视频卡片 + 截图 | ✅（1.0.x 时期实机） |
 | 实测台 `npm run verify`：配置解析、三种宿主形状、HTTP 鉴权与升级来源、发布产物行为 | ✅ 2026-10-10，见 [verify/README.md](verify/README.md) |
 | 实测台 `verify_tab_groups`：agent 标签归组的建组 / 复用 / 退避重试 / 缓存失效 / 按窗口拆组 / 无权限降级 | ✅ 2026-10-11，node:vm + 有状态假 `chrome.tabs`/`chrome.tabGroups`，**未在真实 Chrome 里重跑** |
+| 实测台 `verify_extension_e2e`：真桥 + 真扩展代码 + 真 WebSocket 端到端（帧契约、命令可达、错误分类） | ✅ 2026-10-11，只有 `chrome.*` 是假的；视觉与真实 CDP 行为仍需实机确认 |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 
 仓库自 v1.0.4 起不再有单测目录，上面三条浏览器场景是历史实机记录，本版未重跑；本版结论都来自 `verify/` 里可重复执行的实测台。

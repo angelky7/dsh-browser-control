@@ -14,6 +14,9 @@
 - manifest 增加 `tabGroups` 权限（Chrome ≥ 89 的具名权限，不涉及网页内容读取）。**没有**顺手加 `host_permissions`——保持「扩展只在地址栏显示被调试提示、不预抓任意站点」这条边界，见 `docs/CAPABILITIES.md`。
 - `browser_tabs` 工具面：`action` 增加 `group` / `ungroup`，参数增加 `group`（open 时是否归组）与 `windowId`（拆组范围）。
 - `src/errors.ts`：把写操作判据讲明白——归组**不进** `WRITE_COMMANDS`。判据是「重试会不会造成额外损害」而不是「有没有动到浏览器」：重复归组是空操作，所以按重试安全处理；`tabs.open` 重试会多出标签页、`tabs.close` 可能关掉用户正在看的页面，才需要报 `unknown`。
+- 新增 `verify/verify_extension_e2e.mjs`（已串进 `npm run verify`）：**端到端，只差一个真浏览器**。起真实 `BridgeServer`，在 node:vm 里加载真实 `extension/background.js`，用 Node 自带的 `WebSocket` 真的连 `ws://127.0.0.1:9779/ws`——以前 `verify_http.mjs`/`verify_errors.mjs` 用的是手写假 WS 客户端，只能证明「桥认识帧格式」，这条证明的是**扩展里那段真代码**连上之后，HTTP 命令面的 `tabs.open` / `tabs.group` / `tabs.list` / `tabs.ungroup` 真的落到 `COMMANDS` 表、结果原样回来（`grouped/groupId/created` 一个字段都没被桥改写）、扩展抛的错变成 502 + `command_failed` + `effectState`，以及 `hello` 带过来的 `protocol: 1` 被桥认下。归组这类新命令最容易死在「扩展实现了、桥不认识、插件调不到」的中间地带，现在这一段有人守。
+- 假 Chrome 测试台从 `verify_tab_groups.mjs` 抽成共享模块 `verify/ext_harness.mjs`（两个脚本共用同一台内存浏览器），并记两个坑：建模过的命名空间必须再套一层 fallback Proxy，否则 `chrome.storage.onChanged` 这类没建模的成员在加载期就 `undefined` 炸；假 `storage.get` 不能把未配置的键返回 `undefined`，因为扩展是 `cfg = {...DEFAULT_CONFIG, ...stored}`，`{port: undefined}` 会把默认端口洗掉。
+
 - 新增 `verify/verify_tab_groups.mjs`（已串进 `npm run verify`）：`node:vm` 里加载扩展真实的 service worker，配一台**有状态**的假 `chrome.tabs` / `chrome.tabGroups`，23 项断言覆盖建组、复用同组、退避重试（含「只多打一次」和「4 枪封顶」）、脏缓存重建、按标题找回、按窗口拆组、无权限降级，以及「manifest 确实声明了 `tabGroups`」和「没有多要 `host_permissions`」。**未在真实 Chrome 里重跑**——分组的视觉效果（颜色、标题、折叠）仍需实机确认。
 - 文档：README（中英）新增「agent 开的标签长什么样」一节并更新工具表、可见性对比行与「已验证」；`docs/BEHAVIOR.md` 新增「agent 标签页归组」行为契约；`verify/README.md` 补上此前漏记的 `verify_surface` / `verify_errors` / `verify_protocol` 三行，并把已经过期的「16 个工具」改成实际断言内容。
 
