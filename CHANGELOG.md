@@ -1,5 +1,15 @@
 # 更新日志
 
+## Unreleased
+
+- 扩展：agent 新建的标签页现在自动收进**当前窗口**的 `DSH` 蓝色标签分组，用户扫一眼就能分辨哪些页面是机器开的、事后也能一把拆掉。新增 `tabs.group` / `tabs.ungroup` 两个扩展命令，并暴露成 `browser_tabs` 的 `group` / `ungroup` 动作（`ungroup` 可选 `windowId`，只拆本窗口；`open` 传 `group: false` 可跳过归组）。
+- 归组的三个硬约束（都是实测出来的坑）：刚 `tabs.create` 立刻 `tabs.group` 会跟 Chrome 自己的标签簿记打架，所以按 50/150/400ms 退避、**最多 4 枪**封顶；`groupId` 只存内存，service worker 重启或用户手动拆组后按标题 `DSH` 反查重建，绝不往已失效的 id 上塞标签；**归组失败绝不让「打开标签」失败**，只在结果里附 `grouped:false` 与原因。`tabGroups` 接口不可用时整条路径静默降级。
+- manifest 增加 `tabGroups` 权限（Chrome ≥ 89 的具名权限，不涉及网页内容读取）。**没有**顺手加 `host_permissions`——保持「扩展只在地址栏显示被调试提示、不预抓任意站点」这条边界，见 `docs/CAPABILITIES.md`。
+- `browser_tabs` 工具面：`action` 增加 `group` / `ungroup`，参数增加 `group`（open 时是否归组）与 `windowId`（拆组范围）。
+- `src/errors.ts`：把写操作判据讲明白——归组**不进** `WRITE_COMMANDS`。判据是「重试会不会造成额外损害」而不是「有没有动到浏览器」：重复归组是空操作，所以按重试安全处理；`tabs.open` 重试会多出标签页、`tabs.close` 可能关掉用户正在看的页面，才需要报 `unknown`。
+- 新增 `verify/verify_tab_groups.mjs`（已串进 `npm run verify`）：`node:vm` 里加载扩展真实的 service worker，配一台**有状态**的假 `chrome.tabs` / `chrome.tabGroups`，23 项断言覆盖建组、复用同组、退避重试（含「只多打一次」和「4 枪封顶」）、脏缓存重建、按标题找回、按窗口拆组、无权限降级，以及「manifest 确实声明了 `tabGroups`」和「没有多要 `host_permissions`」。**未在真实 Chrome 里重跑**——分组的视觉效果（颜色、标题、折叠）仍需实机确认。
+- 文档：README（中英）新增「agent 开的标签长什么样」一节并更新工具表、可见性对比行与「已验证」；`docs/BEHAVIOR.md` 新增「agent 标签页归组」行为契约；`verify/README.md` 补上此前漏记的 `verify_surface` / `verify_errors` / `verify_protocol` 三行，并把已经过期的「16 个工具」改成实际断言内容。
+
 ## v1.0.9 (2026-10-10)
 
 - 新增 4 个工具，`browser_*` 从 16 个到 **20 个**：`browser_wait`（等元素/等文本/等页面条件，最长 120 秒）、`browser_find`（按选择器查元素，返回数量与视口矩形）、`browser_dialog`（读改原生弹窗应答策略并回最近弹窗记录）、`browser_info`（报告实际连上的浏览器与扩展版本）。四个都是**扩展里早就实现好、但一直没注册成工具**的能力，agent 之前调不到；`browser_wait` 尤其离谱——README 和 `docs/BEHAVIOR.md` 一直在宣传它，代码里根本没有。

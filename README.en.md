@@ -52,7 +52,7 @@ Browsers via MCP (Playwright MCP, Puppeteer MCP, browser-use…) share one trait
 | Browser | The real Chrome you are using | Separate auto-downloaded instance |
 | Logins / Cookies | ✅ Fully inherited, no re-login | ❌ Fresh profile every time |
 | CAPTCHAs / QR login | Rarely hit — your sessions stay logged in | Frequently stuck at login walls |
-| Visibility | Live on your screen, grab the mouse anytime | Headless or separate window |
+| Visibility | Live on your screen, tabs the agent opens land in a `DSH` group, grab the mouse anytime | Headless or separate window |
 | Environment deps | No Node / npx / Python needed | Needs npx or uvx runtime |
 | Setup | Load extension + settings toggle | Edit MCP client JSON config |
 | Disk usage | Reuses existing Chrome, zero extra | Downloads hundreds of MB |
@@ -176,6 +176,14 @@ The config file works on both; see [dsh-config/README.md](dsh-config/README.md).
 
 Visit `http://127.0.0.1:9777/` for connection status.
 
+### What agent tabs look like (automatic DSH group)
+
+Tabs the agent **opens** are collected into a blue `DSH` tab group, one per window, so at a glance you can tell which pages a machine is driving and sweep them away afterwards:
+
+- `browser_tabs` `action: "ungroup"` dissolves the group (pass `windowId` for one window, omit it for all) — it releases the grouping, it does not close the tabs.
+- `browser_tabs` `action: "open"` with `group: false` keeps a new tab ungrouped; `action: "group"` pulls an already-existing loose tab in.
+- Grouping is a nicety, never a prerequisite: on an old Chrome, without the `tabGroups` permission, or when Chrome's own tab bookkeeping wins the race, **opening the tab still succeeds** and the result carries `grouped: false` plus a reason. Grouping never changes page content, so retrying it is safe.
+
 ### Calling the HTTP face from a script
 
 `/api/command` and `/api/cleanup` now require the token — the same value the extension presents on the WebSocket:
@@ -203,7 +211,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
 | `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
 | `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
-| `browser_tabs` | Tab management (list/open/close/activate) |
+| `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; see "What agent tabs look like") |
 | `browser_evaluate` | Run arbitrary JS |
 | `browser_screenshot` | Capture page screenshot |
 | `browser_console_log` | Captured page console entries (v1.0.7+) |
@@ -241,6 +249,7 @@ Chrome browser
 | Bilibili user search → send DM | ✅ |
 | Bilibili search → count video cards + screenshot | ✅ (real browser, 1.0.x era) |
 | `npm run verify` harness: config resolution, three host shapes, HTTP auth and upgrade origin, published-bundle behaviour | ✅ 2026-10-10, see [verify/README.md](verify/README.md) |
+| `verify_tab_groups` harness: group creation / reuse / backoff retry / stale cache / per-window dissolve / graceful degrade | ✅ 2026-10-11, node:vm plus a stateful fake `chrome.tabs`/`chrome.tabGroups` — **not re-run in a real Chrome** |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 
 There have been no unit tests since v1.0.4 removed `tests/`; the three browser rows above are historical runs that were not repeated for this change, while every claim in this release comes from the repeatable harness under `verify/`.

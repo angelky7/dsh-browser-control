@@ -48,3 +48,13 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 ## 死站点检测
 
 导航落到 `chrome-error://` 时，`browser_navigate` 结果携带 `siteUnreachable: {reason}`（dns/unreachable），且 `url` 回报为请求的目标 URL 而非内部协议地址。
+
+## agent 标签页归组
+
+- `browser_tabs open` 新建的标签会自动收进**当前窗口**的 `DSH` 蓝色分组（每窗口一组），给人一眼分辨机器开的和自己开的。
+- 归组结论只是附在结果里（`grouped` / `groupId` / `created` / `reason`），**归组失败绝不会让「打开标签页」失败**；`group: false` 可显式跳过，`browser_tabs group` 能把早就存在的散标签拉进来。
+- 刚 `tabs.create` 就 `tabs.group` 会跟 Chrome 自己的标签簿记打架，所以最多打 4 枪（1 次 + 退避 50/150/400ms 三次），有上限、不无限重试。
+- `groupId` 只缓存在内存。service worker 重启、或用户手动拆了组，就按标题 `DSH` 反查重建——**不会往已经失效的 groupId 上塞标签**（真 Chrome 对这种情况直接报错）。
+- `browser_tabs ungroup`（可选 `windowId`）只解除归属，不关任何标签页。
+- 拿不到 `tabGroups` 权限（Chrome < 89）时整条路径降级为 `{grouped:false, reason}`，其它功能不受影响；manifest 里漏声明该权限也会静默走这条降级，所以 `verify/verify_tab_groups.mjs` 直接断言 manifest 内容。
+- 归组不算「写操作」：重复归组是空操作，错误契约（`src/errors.ts`）把它当重试安全，超时/掉线时报 `not_started` 而不是 `unknown`。

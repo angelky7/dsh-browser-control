@@ -610,12 +610,14 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_tabs',
-		description: 'List tabs, or open/close/activate one. Actions act on real browser windows.',
+		description: 'List tabs, or open/close/activate/group/ungroup one. Actions act on real browser windows.',
 		parameters: {
-			action: { type: 'string', required: true, description: 'One of: list, open, close, activate.' },
+			action: { type: 'string', required: true, description: 'One of: list, open, close, activate, group, ungroup.' },
 			url: { type: 'string', description: 'URL for the open action.' },
-			tabId: { type: 'number', description: 'Target tab for close/activate.' },
+			tabId: { type: 'number', description: 'Target tab for close/activate/group.' },
 			active: { type: 'boolean', description: 'Whether a newly opened tab becomes active; defaults to true.' },
+			group: { type: 'boolean', description: 'For open: put the new tab in the DSH tab group. Defaults to true; pass false to keep it loose.' },
+			windowId: { type: 'number', description: 'For ungroup: only dissolve that window’s DSH group; omit to clear every window.' },
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
@@ -630,14 +632,22 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					if (typeof args.url !== 'string' || args.url.length === 0) throw new Error('open requires url')
 					const params: Record<string, unknown> = { url: args.url }
 					if (args.active !== undefined) params.active = args.active
+					if (args.group !== undefined) params.group = args.group
 					return await controller.execute('tabs.open', params, exec.signal) as Record<string, JsonValue>
 				}
 				case 'close':
 					return await controller.execute('tabs.close', { tabId: requireTabId(args, 'close') }, exec.signal) as Record<string, JsonValue>
 				case 'activate':
 					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal) as Record<string, JsonValue>
+				case 'group':
+					return await controller.execute('tabs.group', { tabId: requireTabId(args, 'group') }, exec.signal) as Record<string, JsonValue>
+				case 'ungroup': {
+					const params: Record<string, unknown> = {}
+					if (typeof args.windowId === 'number') params.windowId = args.windowId
+					return await controller.execute('tabs.ungroup', params, exec.signal) as Record<string, JsonValue>
+				}
 				default:
-					throw new Error(`unknown tabs action: ${String(args.action)} (use list|open|close|activate)`)
+					throw new Error(`unknown tabs action: ${String(args.action)} (use list|open|close|activate|group|ungroup)`)
 			}
 		},
 	}))

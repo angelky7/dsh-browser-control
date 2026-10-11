@@ -37,7 +37,7 @@
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build && publint",
-    "verify": "node verify/verify_config_patch.mjs && node verify/verify_surface.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs"
+    "verify": "node verify/verify_config_patch.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

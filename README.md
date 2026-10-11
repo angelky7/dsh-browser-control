@@ -52,7 +52,7 @@ Chrome 扩展（CDP 驱动）
 | 浏览器 | 你正在用的真实 Chrome | 自动下载的独立实例 |
 | 登录态 / Cookies | ✅ 全部继承，无需重新登录 | ❌ 每次全新 profile |
 | 过验证码 / 扫码登录 | 你的会话已经登录，基本不遇到 | 经常卡在登录墙 |
-| 可见性 | 屏幕上实时可见，随时鼠标接管 | 无头运行或独立窗口 |
+| 可见性 | 屏幕上实时可见，agent 新建的标签自动归进 `DSH` 分组，随时鼠标接管 | 无头运行或独立窗口 |
 | 环境依赖 | 无需 Node / npx / Python | 需要 npx 或 uvx 运行时 |
 | 接入方式 | 加载扩展 + 设置页开关 | 编辑 MCP 客户端 JSON 配置 |
 | 磁盘占用 | 复用现有 Chrome，零新增 | 额外下载数百 MB 浏览器 |
@@ -175,6 +175,14 @@ npm 发布的 bundle 只含宿主侧 `lib/index.js`，没有浏览器端模块�
 
 访问 `http://127.0.0.1:9777/` 查看连接状态。
 
+### agent 开的标签长什么样（自动归进 DSH 分组）
+
+Agent **新建**的标签页会自动收进当前窗口的一个 `DSH` 蓝色标签分组里（每个窗口一组），所以你扫一眼就知道哪些页面是机器开的、哪些是自己开的，事后也能一把清掉：
+
+- `browser_tabs` `action: "ungroup"` 拆掉本窗口的组（带 `windowId` 只拆那一个窗口，不带则所有窗口）——只拆标签归属，不关标签。
+- `browser_tabs` `action: "open"` 加 `group: false` 可以显式让新标签留在组外；`action: "group"` 能把早就存在的散标签拉进来。
+- 归组是锦上添花：Chrome 版本太旧、权限没给、或刚建标签就被用户拖动导致失败时，**开标签本身照常成功**，结果里带 `grouped: false` 和原因。分组动作不改页面内容，重试安全。
+
 ### 用脚本直连 HTTP（curl 等）
 
 `/api/command` 与 `/api/cleanup` 现在要求 Token，用的就是扩展连 WS 时那个值：
@@ -202,7 +210,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_wait` | 等元素出现 / 等文本出现 / 等条件为真（最长 120 秒，v1.0.9+） |
 | `browser_find` | 按 CSS 选择器查元素，返回数量与位置尺寸（只读，v1.0.9+） |
 | `browser_dialog` | 读改原生弹窗应答策略 accept/dismiss/manual，并回最近弹窗记录（v1.0.9+） |
-| `browser_tabs` | 标签页管理（列表/新建/关闭/切换） |
+| `browser_tabs` | 标签页管理（列表/新建/关闭/切换/归组/拆组；见「agent 开的标签长什么样」） |
 | `browser_evaluate` | 执行任意 JS |
 | `browser_screenshot` | 截取页面截图 |
 | `browser_console_log` | 抓取页面 console 日志（v1.0.7+） |
@@ -240,6 +248,7 @@ Chrome 浏览器
 | B 站搜索用户 → 发私信 | ✅（1.0.x 时期实机） |
 | B 站搜索 → 统计视频卡片 + 截图 | ✅（1.0.x 时期实机） |
 | 实测台 `npm run verify`：配置解析、三种宿主形状、HTTP 鉴权与升级来源、发布产物行为 | ✅ 2026-10-10，见 [verify/README.md](verify/README.md) |
+| 实测台 `verify_tab_groups`：agent 标签归组的建组 / 复用 / 退避重试 / 缓存失效 / 按窗口拆组 / 无权限降级 | ✅ 2026-10-11，node:vm + 有状态假 `chrome.tabs`/`chrome.tabGroups`，**未在真实 Chrome 里重跑** |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 
 仓库自 v1.0.4 起不再有单测目录，上面三条浏览器场景是历史实机记录，本版未重跑；本版结论都来自 `verify/` 里可重复执行的实测台。

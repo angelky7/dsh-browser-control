@@ -632,6 +632,103 @@ async function cmdTabsList() {
 	};
 }
 
+/* ------------------------------------------------------ agent tab grouping */
+
+/**
+ * Tabs the agent opens get collected into one labelled, coloured group per
+ * window, so a human can see at a glance which tabs a machine is driving and
+ * sweep them away afterwards. Grouping straight after `tabs.create` races
+ * Chrome's own tab bookkeeping, hence the short backoff.
+ */
+const AGENT_GROUP_TITLE = 'DSH';
+const AGENT_GROUP_COLOR = 'blue';
+const GROUP_RETRY_DELAYS_MS = [50, 150, 400];
+
+/** windowId -> groupId, rebuilt from the title after a service-worker restart. */
+const agentGroupsByWindow = new Map();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function tabGroupsAvailable() {
+	return typeof chrome.tabGroups?.update === 'function' && typeof chrome.tabs?.group === 'function';
+}
+
+async function findAgentGroup(windowId) {
+	const cached = agentGroupsByWindow.get(windowId);
+	if (cached !== undefined) {
+		// A cached id goes stale when the user ungroups it or closes its last tab.
+		const live = await chrome.tabGroups.get(cached).catch(() => null);
+		if (live !== null) return cached;
+		agentGroupsByWindow.delete(windowId);
+	}
+	const titled = await chrome.tabGroups.query({ title: AGENT_GROUP_TITLE, windowId }).catch(() => []);
+	const found = titled[0]?.id;
+	if (found !== undefined) agentGroupsByWindow.set(windowId, found);
+	return found;
+}
+
+/** Put one tab in the window's agent group, creating the group if needed. */
+async function addToAgentGroup(tabId) {
+	if (!tabGroupsAvailable()) {
+		return { grouped: false, reason: 'tabGroups API 不可用（需 Chrome ≥ 89 且已授予 tabGroups 权限）' };
+	}
+	let lastError = 'unknown';
+	for (let attempt = 0; attempt <= GROUP_RETRY_DELAYS_MS.length; attempt += 1) {
+		const tab = await chrome.tabs.get(tabId).catch(() => null);
+		if (tab === null || tab.windowId === undefined) return { grouped: false, reason: '标签页已不存在' };
+		try {
+			const existing = await findAgentGroup(tab.windowId);
+			if (existing !== undefined) {
+				await chrome.tabs.group({ tabIds: [tabId], groupId: existing });
+				return { grouped: true, groupId: existing, created: false };
+			}
+			const groupId = await chrome.tabs.group({ tabIds: [tabId], createProperties: { windowId: tab.windowId } });
+			await chrome.tabGroups.update(groupId, { title: AGENT_GROUP_TITLE, color: AGENT_GROUP_COLOR });
+			agentGroupsByWindow.set(tab.windowId, groupId);
+			return { grouped: true, groupId, created: true };
+		} catch (error) {
+			lastError = error?.message ?? String(error);
+			agentGroupsByWindow.delete(tab.windowId);
+			const wait = GROUP_RETRY_DELAYS_MS[attempt];
+			if (wait === undefined) break;
+			await sleep(wait);
+		}
+	}
+	return { grouped: false, reason: lastError };
+}
+
+/** Release every agent group (one window, or all) back to plain tabs. */
+async function dissolveAgentGroups(windowId) {
+	if (!tabGroupsAvailable()) return { ungrouped: 0, groups: 0, reason: 'tabGroups API 不可用' };
+	const wanted = windowId === undefined
+		? { title: AGENT_GROUP_TITLE }
+		: { title: AGENT_GROUP_TITLE, windowId: Number(windowId) };
+	const groups = await chrome.tabGroups.query(wanted).catch(() => []);
+	let ungrouped = 0;
+	for (const group of groups) {
+		const tabs = await chrome.tabs.query({ groupId: group.id }).catch(() => []);
+		const ids = tabs.map((t) => t.id).filter((id) => id !== undefined);
+		if (ids.length === 0) continue;
+		try {
+			await chrome.tabs.ungroup(ids);
+			ungrouped += ids.length;
+		} catch { /* 用户可能已经手动拆开了 */ }
+	}
+	agentGroupsByWindow.clear();
+	return { ungrouped, groups: groups.length };
+}
+
+async function cmdTabGroup(params) {
+	if (params?.tabId === undefined) throw new Error('params.tabId is required');
+	const result = await addToAgentGroup(Number(params.tabId));
+	if (result.grouped !== true) throw new Error(`group failed: ${result.reason}`);
+	return { tabId: Number(params.tabId), ...result };
+}
+
+async function cmdTabUngroup(params) {
+	return dissolveAgentGroups(params?.windowId);
+}
+
 async function cmdTabsOpen(params) {
 	if (!params.url) throw new Error('params.url is required');
 	const created = await chrome.tabs.create({
@@ -640,7 +737,9 @@ async function cmdTabsOpen(params) {
 	});
 	if (params.wait !== false) await waitTabComplete(created.id, Number(params.timeoutMs) || 15_000);
 	const fresh = await chrome.tabs.get(created.id).catch(() => null);
-	return { tabId: created.id, url: fresh?.url, title: fresh?.title };
+	// 归组失败不该让「打开标签」这件事失败，只把结果带回去。
+	const group = params.group === false ? { grouped: false, reason: 'group:false' } : await addToAgentGroup(created.id);
+	return { tabId: created.id, url: fresh?.url, title: fresh?.title, ...group };
 }
 
 async function cmdTabsClose(params) {
@@ -1156,6 +1255,7 @@ async function cmdSnapshot(params) {
 const COMMANDS = {
 	ping: cmdPing, 'browser.info': cmdBrowserInfo,
 	'tabs.list': cmdTabsList, 'tabs.open': cmdTabsOpen, 'tabs.close': cmdTabsClose, 'tabs.activate': cmdTabsActivate,
+	'tabs.group': cmdTabGroup, 'tabs.ungroup': cmdTabUngroup,
 	nav: cmdNav, eval: cmdEval, content: cmdContent, find: cmdFind,
 	click: cmdClick, input: cmdInput, press: cmdPress, scroll: cmdScroll,
 	snapshot: cmdSnapshot, screenshot: cmdScreenshot,

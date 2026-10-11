@@ -34,7 +34,14 @@ export type EffectState =
 	/** 已确认执行完成（用于成功路径的显式标注，目前只在结果里出现）。 */
 	| 'committed';
 
-/** 会改变页面或浏览器状态的扩展命令；其余按只读处理。 */
+/**
+ * 会改变页面或不可逆地改变浏览器状态的扩展命令；其余按只读处理。
+ *
+ * 判据是「重试会不会造成额外损害」，不是「有没有动到浏览器」。所以标签分组
+ * （`tabs.group` / `tabs.ungroup`）不在这里：把已经在组里的标签再归一次是空操作，
+ * 拆组失败后再拆一次也不会多拆坏东西，重试安全；而 `tabs.open` 重试会多出标签页、
+ * `tabs.close` 重试可能关掉用户正在看的页面，必须报 unknown。
+ */
 const WRITE_COMMANDS = new Set<string>([
 	'nav', 'click', 'input', 'press', 'scroll', 'eval', 'emulate',
 	'tabs.open', 'tabs.close', 'tabs.activate', 'dialog',
