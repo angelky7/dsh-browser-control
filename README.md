@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.0.9.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.9/DSH-Browser-Control-v1.0.9.zip) | Chrome 扩展（解压后加载；标准 zip 头，资源管理器可直接展开） |
-| [dsh-browser-control-plugin-v1.0.9.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.9/dsh-browser-control-plugin-v1.0.9.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.0.10.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.10/DSH-Browser-Control-v1.0.10.zip) | Chrome 扩展（解压后加载；标准 zip 头，资源管理器可直接展开） |
+| [dsh-browser-control-plugin-v1.0.10.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.10/dsh-browser-control-plugin-v1.0.10.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -96,7 +96,7 @@ npm install @caob23/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.9"
+dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.10"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
