@@ -23,11 +23,17 @@ import path from 'node:path'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-invariants'
 import type {} from '@deepseek-ai/dsh-settings'
 import { BridgeServer, cleanupArtifacts } from './server.ts'
 import { classify } from './errors.ts'
+
+/**
+ * Tool results are plain JSON. Declared locally rather than imported: dsh-tools
+ * 0.1 re-exported this type while 0.2 moved it into a transitive package the
+ * plugin must not name, so importing it would pin us to one host generation.
+ */
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /**
  * Namespace handle as returned by `sctx.settings.register` on dsh-settings up to

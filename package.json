@@ -37,7 +37,7 @@
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build && publint",
-    "verify": "node verify/verify_config_patch.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs"
+    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -66,19 +66,19 @@
     "websocket"
   ],
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0"
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "~3.18.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-invariants": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@types/node": "^22.20.0",
     "publint": "^0.3.21",
     "tsdown": "^0.22.2",

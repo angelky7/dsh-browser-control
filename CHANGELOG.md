@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 修复 #13（安装失败报告，文件侧根因）：`package.json` 里的宿主 peer 范围 `">=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0"` **实际只匹配 0.1.0-rc.2 … 0.1.0-rc.8 这 5 个包**。semver 对预发布版有条硬规则：带 `-rc`/`-alpha` 的版本，只有当范围里存在**同 `[major,minor,patch]` 元组**且也带预发布后缀的比较符时才匹配；上面那条范围的两个比较符各自只覆盖 0.1.0 与 0.3.0 元组，所以 0.1.1-rc.1 / 0.1.7-rc.2 / **0.2.0-rc.2（报告者那台宿主的版本）** 全部落在范围外。实测凭据：`npm view "@deepseek-ai/dsh-settings@>=0.1.0-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0" version` 只吐 0.1.0-rc.*，换成 `*` 干脆一个都不吐（这一族没有任何稳定版，`latest` dist-tag 停在 `0.0.1-rc.1`）。后果：仓库自己的 `pnpm-lock.yaml` 把 `dsh-settings`/`dsh-invariants` 钉在 **0.1.0-rc.8**，历次 `npm run typecheck` 校验的都是半年前的 API；而 pnpm 默认 `auto-install-peers=true`，干净目录里装发布包时会真拉一整棵 0.1.0 时代的依赖树（实测 19 个包，含 `dsh-agent@0.1.0-*`、`dsh-llm@0.1.0-*`）。
+- 依赖声明改为跟随宿主约定（对齐官方插件 `@deepseek-ai/dsh-persona` / `dsh-skill` / `dsh-tool-fs` 的写法）：宿主注入的包一律 peer 且**逐个精确钉版**（`@deepseek-ai/dsh-tools`/`-settings`/`-invariants` = `0.2.0-rc.2`，`@deepseek-ai/cordis` = `~4.0.4`），纯工具库 `@deepseek-ai/schemastery` 放回 `dependencies: ~3.18.4`。钉版的代价是宿主换代时要手动改这三行（旧宿主不会装不上，只会收到一条 peer 警告——实测 pnpm 11 加 `--strict-peer-dependencies` 也是 exit 0），换来的是「装进来的就是宿主那一份」：干净目录实测安装结果从 0.1.0-rc.8 世代的 19 个包变成 0.2.0-rc.2 世代的 47 个包，与宿主同族。
+- 兼容性不变：运行时仍然靠特性探测支持 dsh 0.1.x（`settings.register` 有没有、`configure` 在不在），peer 钉版只是安装期声明，不是运行期开关。见 `docs/BEHAVIOR.md` 与 v1.0.8 的 #8 条目。
+- 新增 `verify/verify_peers.mjs`（已串进 `npm run verify`）：断言①每条依赖范围的每个选择支都是单一比较符（禁掉 `>=x-rc <y` 那类复合写法）②预发布支必须精确钉版③宿主包只能是 peer、不得同时出现在 `dependencies`④本地解析到的版本确实满足声明⑤`lib/` 产物里每个裸 import 都有声明（产物运行时实际只 import `@deepseek-ai/schemastery` 与 `@deepseek-ai/dsh-tools`）⑥`schemastery` 用 `~`。向 `package.json` 注入三种历史错误形态实测会被抓出 5 项 FAIL。
+- 修 `src/index.ts` 的 `JsonValue`：它原来从 `@deepseek-ai/dsh-tools` 导入，而 0.2 已把这个类型挪到传递依赖 `@deepseek-ai/dsh-util-values` 里、不再从 `dsh-tools` 导出——**只有把 devDependencies 修到真实宿主版本之后，`tsc` 才第一次报出这个错**（`TS2614: Module '"@deepseek-ai/dsh-tools"' has no exported member 'JsonValue'`）。改成本地声明该类型，避免把插件绑死在某一代宿主上。
+
 - 扩展：agent 新建的标签页现在自动收进**当前窗口**的 `DSH` 蓝色标签分组，用户扫一眼就能分辨哪些页面是机器开的、事后也能一把拆掉。新增 `tabs.group` / `tabs.ungroup` 两个扩展命令，并暴露成 `browser_tabs` 的 `group` / `ungroup` 动作（`ungroup` 可选 `windowId`，只拆本窗口；`open` 传 `group: false` 可跳过归组）。
 - 归组的三个硬约束（都是实测出来的坑）：刚 `tabs.create` 立刻 `tabs.group` 会跟 Chrome 自己的标签簿记打架，所以按 50/150/400ms 退避、**最多 4 枪**封顶；`groupId` 只存内存，service worker 重启或用户手动拆组后按标题 `DSH` 反查重建，绝不往已失效的 id 上塞标签；**归组失败绝不让「打开标签」失败**，只在结果里附 `grouped:false` 与原因。`tabGroups` 接口不可用时整条路径静默降级。
 - manifest 增加 `tabGroups` 权限（Chrome ≥ 89 的具名权限，不涉及网页内容读取）。**没有**顺手加 `host_permissions`——保持「扩展只在地址栏显示被调试提示、不预抓任意站点」这条边界，见 `docs/CAPABILITIES.md`。
