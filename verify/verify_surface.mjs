@@ -66,5 +66,15 @@ const mentioned = new Set([...behavior.matchAll(/\`(browser_[a-z_]+)\`/g)].map((
 const badMention = [...mentioned].filter((t) => !srcTools.has(t));
 check("docs/BEHAVIOR.md 没有指向不存在的工具", badMention.length === 0, badMention.length ? badMention.join(", ") : `提到 ${mentioned.size} 个`);
 
+// 7) llms.txt：工具名要存在，写的工具数要和源码一致（这里已经错过一次：写着 16，实际 20）
+const llms = await readFile("llms.txt", "utf8");
+const llmsTools = new Set([...llms.matchAll(/\`(browser_[a-z_]+)\`/g)].map((m) => m[1]));
+const llmsBad = [...llmsTools].filter((t) => !srcTools.has(t));
+check("llms.txt 没有指向不存在的工具", llmsBad.length === 0, llmsBad.length ? llmsBad.join(", ") : `提到 ${llmsTools.size} 个`);
+const claimed = [...llms.matchAll(/(\d+)\s*个\s?\`?browser_\*`?/g)].map((m) => Number(m[1]));
+const countWrong = claimed.filter((c) => c !== srcTools.size);
+check("llms.txt 写的工具数量与源码一致", claimed.length === 0 ? true : countWrong.length === 0,
+  claimed.length ? `写的是 ${claimed.join("/")}，实际 ${srcTools.size}` : "没写数量");
+
 console.log(`\n结论：${fails === 0 ? "三层一致" : fails + " 项不一致"}`);
 process.exit(fails === 0 ? 0 : 1);

@@ -5,6 +5,7 @@
 // **扩展里那段真代码**连上桥之后，HTTP 命令面下发的命令会不会走到 `COMMANDS` 表、
 // 结果能不能原样回来。归组这种新命令最容易死在「扩展实现了、桥不认识、插件调不到」
 // 的中间地带，这里一次对齐。
+import { readFile } from "node:fs/promises";
 import { BridgeServer } from "../src/server.ts";
 import { bootBackground, makeModel } from "./ext_harness.mjs";
 
@@ -41,6 +42,11 @@ check("扩展真的连上了桥（WS 握手 + Token + hello）", await waitConne
 check("hello 帧带过来的协议版本被桥认下",
   server.status.extensionProtocol === 1 && server.status.protocolCompatible === true,
   `extension=${server.status.extensionProtocol} compatible=${server.status.protocolCompatible}`);
+
+// 扩展上报的版本号就是从 manifest.json 读的，不是测试台里写死的字符串
+const manifestVersion = JSON.parse(await readFile(new URL("../extension/manifest.json", import.meta.url), "utf8")).version;
+check("扩展上报的版本与 manifest.json 一致", server.status.hello?.version === manifestVersion,
+  `hello=${server.status.hello?.version} manifest=${manifestVersion}`);
 
 const call = async (command, params = {}, timeoutMs = 4000) => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/command`, {

@@ -15,7 +15,9 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 
 const BG_PATH = new URL("../extension/background.js", import.meta.url);
+const MANIFEST_PATH = new URL("../extension/manifest.json", import.meta.url);
 let bgCode;
+let realManifest;
 
 /** @returns 一台内存里的假浏览器。 */
 export function makeModel({ failGroupTimes = 0 } = {}) {
@@ -51,8 +53,9 @@ function stub(path, state) {
  * @param model 假浏览器
  * @param options.withTabGroups 关掉即模拟「Chrome 太旧或权限没给」
  * @param options.storage chrome.storage.local.get 的返回值（扩展的端口/Token 就从这里来）
+ * @param options.manifest 喂给 chrome.runtime.getManifest() 的内容（扩展会把它报给桥）
  */
-export function makeChrome(model, { withTabGroups = true, storage = {} } = {}) {
+export function makeChrome(model, { withTabGroups = true, storage = {}, manifest = { version: "0.0.0-harness" } } = {}) {
   const state = { lastError: undefined };
   const resolve = (v) => Promise.resolve(v);
   const reject = (m) => Promise.reject(new Error(m));
@@ -131,7 +134,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {} } = {}) {
   };
 
   const runtime = {
-    getManifest: () => ({ version: "1.0.9-test", permissions: ["debugger", "tabs", "tabGroups", "storage", "alarms"] }),
+    getManifest: () => manifest,
     id: "test-extension-id",
     lastError: undefined,
   };
@@ -166,7 +169,6 @@ export function makeChrome(model, { withTabGroups = true, storage = {} } = {}) {
       return stub(`chrome.${k}`, state);
     },
   });
-  void navigator;
   return chrome;
 }
 
@@ -177,6 +179,9 @@ export function makeChrome(model, { withTabGroups = true, storage = {} } = {}) {
  */
 export async function bootBackground({ model, withTabGroups = true, storage = {}, realWebSocket = false, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
   bgCode ??= await readFile(BG_PATH, "utf8");
+  // 扩展在加载期就读 getManifest().version 并把它报给桥，所以喂真的 manifest.json，
+  // 免得一发布版本号就和一个写死在测试台里的字符串悄悄分家
+  realManifest ??= JSON.parse(await readFile(MANIFEST_PATH, "utf8"));
   const browser = model ?? makeModel();
   const sandbox = {
     console: { log: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -186,7 +191,7 @@ export async function bootBackground({ model, withTabGroups = true, storage = {}
     fetch: () => Promise.resolve({}),
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
-    chrome: makeChrome(browser, { withTabGroups, storage }),
+    chrome: makeChrome(browser, { withTabGroups, storage, manifest: realManifest }),
   };
   if (realWebSocket) sandbox.WebSocket = globalThis.WebSocket;
   sandbox.globalThis = sandbox.self = sandbox;

@@ -31,7 +31,7 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 
 ## 关键文件
 
-- `src/index.ts` - 16 个 `browser_*` 工具注册 + settings 接线的版本兼容分支
+- `src/index.ts` - 20 个 `browser_*` 工具注册 + settings 接线的版本兼容分支
 - `src/server.ts` - WebSocket 服务 + HTTP 面（鉴权、来源校验、状态页）
 - `src/ws.ts` - RFC 6455 帧编解码
 - `extension/background.js` - CDP 命令分发 + 持久 debugger 附着
