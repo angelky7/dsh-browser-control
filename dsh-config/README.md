@@ -2,6 +2,9 @@
 
 安装方式见 [README](../README.md)。本文只说明插件的配置项含义，供需要自定义默认值的用户参考。
 
+## 安装提示
+官方源与镜像可能不一致：安装若报 `ERR_PNPM_NO_MATCHING_VERSION`，一般是**镜像还没同步**（`dsh plugin add` 会把依赖钉成确切版本号，而 pnpm 用的是你配置的源，国内默认常常是 `registry.npmmirror.com`），不是包出了问题。三条解法见 [README 的安装一节](../README.md#方式-a从-npm-安装推荐)。
+
 ## cordis.patch.yml 字段
 
 插件包根目录的 `cordis.patch.yml` 声明默认配置：

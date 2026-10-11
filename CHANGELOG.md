@@ -1,5 +1,11 @@
 # 更新日志
 
+## Unreleased
+
+- 发布流程纠正（中英 `CONTRIBUTING.md`）：检查表顺序改成 **先 `npm publish` → 确认镜像也同步到该版本、`dist-tags.latest` 跟上 → 再打 tag / 建 Release / 宣布**。v1.0.10 就是按老顺序先把 Release 发出去了，结果维护者自己在本机 `dsh plugin add` 立刻撞到 `ERR_PNPM_NO_MATCHING_VERSION`——宿主把依赖钉成确切版本号，而 pnpm 用的是用户配置的源（这台机器是 `registry.npmmirror.com`，当时官方源已有 1.0.10、镜像 `latest` 还停在 1.0.8）。
+- 文档新增一类「看着像包坏了」的安装失败：README（中英）安装节 + `dsh-config/README.md` 都写清镜像滞后的判断方法与三条解法（这一次显式 `--registry=https://registry.npmjs.org/`；改用 Release 里的离线包 `add file:<解压目录>`；等镜像同步后重试原命令）。
+- issue #13 的机制定位（仍未定案）：本机等价复现出的失败路径「目录/宿主钉版本 → 用户源还没这个版本 → `ERR_PNPM_NO_MATCHING_VERSION`」比之前怀疑的 peer 范围更能解释报告者的现象——而且 hub 的失败分类表里没有这个错误码的分支，会一路落到兜底标签给插件仓库提 issue。已在 #13 里向报告者说明并给出可试的绕法。
+
 ## v1.0.10 (2026-10-11)
 
 - 修复 #13（插件市场装机失败）里**我们这一侧能负责的部分**。同一条 peer 范围有两个读法完全不同的消费者，v1.0.8 只满足了其中一个：

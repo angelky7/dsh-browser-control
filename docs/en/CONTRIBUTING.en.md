@@ -31,12 +31,12 @@ Build it with Python `zipfile` or `tar`, and make sure the artifact **starts wit
 ## Releasing
 
 1. Sync versions: `package.json`, and `extension/manifest.json` whenever extension behaviour changed
-2. Turn the `Unreleased` block of `CHANGELOG.md` into a real version heading
-3. Tag, create the Release, keep the asset naming: `DSH-Browser-Control-vX.Y.Z.zip` (extension), `dsh-browser-control-plugin-vX.Y.Z.zip` (plugin)
-4. **The offline plugin zip must contain `cordis.patch.yml`** — `package.json`'s `dsh.bundle.patch` points at it, and the v1.0.7 asset omitted it, so installing from that zip mounted nothing. The extension zip must carry every file under `extension/`, `icons/` included
-5. Update the download links in README.md and README.en.md, then run the link audit above
-6. **Put checksums in the release body, not in `.sha256` sidecar assets**: list file name / byte size / SHA-256 (MD5 too when useful) in the body, then download each asset back anonymously and re-check the first 4 bytes, `unzip -t` and the entry separators
-7. `npm publish` (`files` excludes `verify/` and `extension/`; confirm `lib/` is current first). On the maintainer machine `~/.npmrc` defaults to the npmmirror read-only mirror, which cannot publish — `publishConfig.registry` now pins the official registry, do not rely on the CLI default
+2. Turn the `Unreleased` block of `CHANGELOG.md` into a real version heading, and retarget the download links and `#vX.Y.Z` references in README.md / README.en.md
+3. **`npm publish` first, tag and Release afterwards.** For 1.0.10 the Release went out before anyone checked the registry mirror, and users simply could not install it. On the maintainer machine `~/.npmrc` defaults to the npmmirror read-only mirror, which cannot publish — `publishConfig.registry` pins the official registry, so do not rely on the CLI default. `files` excludes `verify/` and `extension/`; confirm `lib/` is current first
+4. **Wait for the mirror to catch up before announcing anything**: `dsh plugin add` pins the dependency to an **exact version**, and pnpm resolves it from the *user's* registry (for most Chinese users that is `registry.npmmirror.com`). If the mirror has not synced, the install dies with `ERR_PNPM_NO_MATCHING_VERSION`. Check both documents — `curl https://registry.npmjs.org/@caob23%2F<pkg>` and `curl https://registry.npmmirror.com/@caob23%2F<pkg>` — and only say "install X" once the version is there *and* `dist-tags.latest` moved
+5. Tag, create the Release, keep the asset naming: `DSH-Browser-Control-vX.Y.Z.zip` (extension), `dsh-browser-control-plugin-vX.Y.Z.zip` (plugin)
+6. **The offline plugin zip must contain `cordis.patch.yml`** — `package.json`'s `dsh.bundle.patch` points at it, and the v1.0.7 asset omitted it, so installing from that zip mounted nothing. The extension zip must carry every file under `extension/`, `icons/` included
+7. **Put checksums in the release body, not in `.sha256` sidecar assets**: list file name / byte size / SHA-256 (MD5 too when useful), then download each asset back anonymously and re-check the first 4 bytes, `unzip -t` and the entry separators; finish with `verify_release_links.mjs` so no document points at a missing asset
 
 ## Commit conventions
 

@@ -31,12 +31,12 @@ node verify/verify_release_links.mjs /tmp/releases.json
 ## 发布
 
 1. 同步版本号：`package.json` 与 `extension/manifest.json`（改了扩展行为时）
-2. `CHANGELOG.md` 的 `Unreleased` 段落落成正式版本标题
-3. 打 tag、建 Release，资产沿用现有命名：`DSH-Browser-Control-vX.Y.Z.zip`（扩展）、`dsh-browser-control-plugin-vX.Y.Z.zip`（插件）
-4. **插件离线包里必须有 `cordis.patch.yml`**——`package.json` 的 `dsh.bundle.patch` 指向它，v1.0.7 那份资产漏了这个文件，离线安装就等于没挂载；扩展包必须含 `extension/` 下全部文件（含 `icons/`）
-5. README / README.en 的下载链接改成新名字，然后跑上面那条链接实测
-6. **校验和写在 Release 正文里，不要上传 `.sha256` 附件**：正文列 文件名 / 字节数 / SHA-256（必要时加 MD5），上传后匿名下载回来核对头 4 字节、`unzip -t` 与条目分隔符
-7. `npm publish`（`files` 白名单不含 `verify/` 和 `extension/`，发包前确认 `lib/` 已是最新）。这台机器 `~/.npmrc` 的默认源是 npmmirror 镜像，**不能发布**；包里的 `publishConfig.registry` 已写死官方源，别再依赖命令行默认值
+2. `CHANGELOG.md` 的 `Unreleased` 段落落成正式版本标题；README / README.en 的下载链接与 `#vX.Y.Z` 引用改成新版本名
+3. **先 `npm publish`，后打 tag / 建 Release**（v1.0.10 就是先把 Release 发出去了，结果用户装不到）。这台机器 `~/.npmrc` 的默认源是 npmmirror 镜像，**不能发布**；包里的 `publishConfig.registry` 已写死官方源，别再依赖命令行默认值。`files` 白名单不含 `verify/` 和 `extension/`，发包前确认 `lib/` 已是最新
+4. **发布后要等镜像同步再宣布**：`dsh plugin add` 会把依赖**钉成确切版本号**，而宿主用的是用户自己的 registry（国内多半是 `registry.npmmirror.com`）。镜像没跟上时 pnpm 直接 `ERR_PNPM_NO_MATCHING_VERSION`，安装失败。核对两条：`curl https://registry.npmjs.org/@caob23%2F<pkg>` 与 `curl https://registry.npmmirror.com/@caob23%2F<pkg>`，**两边都要看到该版本、且 `dist-tags.latest` 也跟上**，再说「装 XX 版」
+5. 打 tag、建 Release，资产沿用现有命名：`DSH-Browser-Control-vX.Y.Z.zip`（扩展）、`dsh-browser-control-plugin-vX.Y.Z.zip`（插件）
+6. **插件离线包里必须有 `cordis.patch.yml`**——`package.json` 的 `dsh.bundle.patch` 指向它，v1.0.7 那份资产漏了这个文件，离线安装就等于没挂载；扩展包必须含 `extension/` 下全部文件（含 `icons/`）
+7. **校验和写在 Release 正文里，不要上传 `.sha256` 附件**：正文列 文件名 / 字节数 / SHA-256（必要时加 MD5），上传后匿名下载回来核对头 4 字节、`unzip -t` 与条目分隔符；最后跑 `verify_release_links.mjs` 确认文档链接不是死链
 
 ## 写宿主适配时会踩的坑
 

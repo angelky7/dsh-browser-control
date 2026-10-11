@@ -92,6 +92,12 @@ If you manage the profile's node_modules yourself, plain npm works there too:
 npm install @caob23/dsh-browser-control
 ```
 
+> **A version published minutes ago may not install yet, and that is not a broken package.** `dsh plugin add` pins the dependency to an **exact version**, while pnpm resolves it from **your configured registry** — for many users that is `registry.npmmirror.com`, which syncs from the official registry with a delay (measured: the official registry had 1.0.10 published while the mirror's `latest` still said 1.0.8). If you hit `ERR_PNPM_NO_MATCHING_VERSION ... while fetching it from https://registry.npmmirror.com/`, pick one:
+>
+> 1. Use the official registry for this install: `dsh plugin --profile web add @caob23/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
+> 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then `dsh plugin --profile web add file:<the unzipped directory>`
+> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
+
 ### Option B: install from GitHub or a local directory
 
 ```bash

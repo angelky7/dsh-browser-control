@@ -92,6 +92,12 @@ dsh plugin --profile web add @caob23/dsh-browser-control
 npm install @caob23/dsh-browser-control
 ```
 
+> **刚发布的新版本可能一时装不上，那不是插件坏了。** `dsh plugin add` 会把依赖钉成**确切版本号**，而 pnpm 用的是**你自己配置的源**——国内默认常常是 `registry.npmmirror.com`，它同步官方源有延迟（实测 1.0.10 在官方源已发布时，镜像的 `latest` 还停在 1.0.8）。撞上 `ERR_PNPM_NO_MATCHING_VERSION ... while fetching it from https://registry.npmmirror.com/` 时有三条路：
+>
+> 1. 这一次显式走官方源：`dsh plugin --profile web add @caob23/dsh-browser-control@<版本> --registry=https://registry.npmjs.org/`
+> 2. 用 Release 里的离线包 `dsh-browser-control-plugin-v<版本>.zip`，解压后 `dsh plugin --profile web add file:<解压目录>`
+> 3. 等镜像同步后重试原命令：`curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control`，看到该版本、且 `dist-tags.latest` 也跟上即可
+
 ### 方式 B：从 GitHub 或本地目录安装
 
 ```bash
