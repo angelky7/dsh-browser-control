@@ -117,5 +117,9 @@ console.log(`   产物运行时真正 import 的宿主包：${[...runtime].join(
 const schemaRange = deps["@deepseek-ai/schemastery"] ?? "";
 check("schemastery 用 ~（跟宿主 ~3.18.x 同族），不是会跨 minor 的裸范围", /^~\d+\.\d+\.\d+$/.test(schemaRange), schemaRange);
 
+// ---- 7) 不声明 engines：Node 版本由宿主决定，写死了反而多一条硬失败路径 ----
+// （npm 上官方 dsh 插件一个都没写 engines；而 pnpm/npm 在 engine-strict 下会因它直接拒绝安装）
+check("package.json 不写 engines", pkg.engines === undefined, pkg.engines === undefined ? "" : JSON.stringify(pkg.engines));
+
 console.log(`\n结论：${fails === 0 ? "依赖声明符合宿主约定" : fails + " 项不符合"}`);
 process.exit(fails ? 1 : 0);

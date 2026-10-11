@@ -45,6 +45,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 - cordis 的 `ctx.effect(execute, label)`，`execute` 的**返回值**才是 teardown 函数，所以注册 disposer 写成 `ctx.effect(() => dispose, 'label')`。
 - 桥接的 Token 是唯一的实际边界，回环绑定不是。任何放宽 HTTP 面的改动都要同时考虑 `Origin` 与 `Host`（WebSocket 握手不受 CORS 约束）。
 - **`@deepseek-ai/*` 这一族没有稳定版**（`latest` dist-tag 停在 `0.0.1-rc.1`，真版本在 `next`/`alpha`），而 semver 对预发布版有条硬规则：`0.2.0-rc.2` 只有当范围里存在**同 `[major,minor,patch]` 元组**且也带预发布的比较符时才匹配。所以 `">=0.1.0-rc.1 <0.3.0-0"` 这类"看着宽松"的写法实际谁也匹配不到（v1.0.8 就这么写过，锁文件因此把宿主 API 钉在 0.1.0-rc.8 上，typecheck 校的是半年前的类型）。**写法只认三种**：精确钉版 `0.2.0-rc.2`、稳定版 `~4.0.4` / `^3.18.4`、或它们的 `||` 并列；`verify/verify_peers.mjs` 会拦其他形态。
+- **不要加 `engines.node`。** 官方 dsh 插件一个都没写，Node 版本是宿主的事；而 `engine-strict` 下这一条会让安装直接失败，是插件侧自找的硬开关。
 - 宿主注入的包（cordis / dsh-tools / dsh-settings / dsh-invariants）**只能是 peer**，且跟官方插件一样按宿主世代逐个精确钉版；宿主换代时要手动改这几行（旧宿主不会装不上，pnpm 只给一条 peer 警告）。纯工具库 `@deepseek-ai/schemastery` 反过来必须是 `dependencies`。判据是「装出第二份会不会坏事」——宿主包的实例必须与宿主同源，重复一份会让服务注入/工具注册失效。
 
 ## 提交规范
