@@ -416,11 +416,18 @@ function trimNetworkMap(tabMap) {
 	for (let i = 0; i < overflow; i++) tabMap.delete(keys.next().value);
 }
 
-function detachTab(tabId) {
+/** Drop every per-tab attachment artifact WITHOUT issuing a chrome.debugger
+ *  call — safe to run from inside onDetach, where detaching again would be
+ *  redundant. Deleting an unknown tabId is a no-op. */
+function clearAttachment(tabId) {
 	attachedTabs.delete(tabId);
 	consoleLog.delete(tabId);
 	networkLog.delete(tabId);
 	tabBufferGenerations.delete(tabId);
+}
+
+function detachTab(tabId) {
+	clearAttachment(tabId);
 	chrome.debugger.detach({ tabId }, () => void chrome.runtime.lastError);
 }
 
@@ -430,33 +437,86 @@ function detachAll() {
 
 /* Clean up when a tab is closed (detaches automatically, but remove from set). */
 chrome.tabs.onRemoved.addListener((tabId) => {
-	if (attachedTabs.has(tabId)) attachedTabs.delete(tabId);
-	consoleLog.delete(tabId);
-	networkLog.delete(tabId);
-	tabBufferGenerations.delete(tabId);
+	clearAttachment(tabId);
 });
 
-/* Clean up when DevTools steals a tab (detach event fires). */
-chrome.debugger.onDetach.addListener((_source, reason) => {
-	if (reason === 'target_closed' || reason === 'canceled_by_user') {
-		// attachedTabs cleanup is handled by chrome.tabs.onRemoved
-	}
+/* Invalidate the attachment cache whenever the debugger detaches, for ANY
+ * reason. The cache is the only thing standing between an unexpected detach
+ * (DevTools opened on the tab, a chrome-extension:// page, a navigation race)
+ * and a clean re-attach: ensureAttached() returns early on a cache hit, so a
+ * stale entry makes every later command fail with "Debugger is not attached"
+ * forever. tabs.onRemoved also calls clearAttachment, so tab closures are
+ * covered twice — harmless, the operation is idempotent. */
+chrome.debugger.onDetach.addListener((source) => {
+	const tabId = source?.tabId;
+	if (tabId === undefined) return;
+	clearAttachment(tabId);
 });
+
+/* Chrome reports a lost CDP session with one of these wordings. The cache can
+ * still say "attached" when the detach event was missed (service-worker
+ * restart, a race with DevTools), so dbgSend treats them as a cache-invalidating
+ * signal and lets withCDP transparently re-attach once.
+ *
+ * "Cannot access a chrome-extension:// URL" is deliberately NOT in this list.
+ * It belongs to the ATTACH path, not the send path: the observed form on a real
+ * machine is "debugger attach failed: Cannot access a chrome-extension:// URL of
+ * different extension", raised by chrome.debugger.attach() for a sibling
+ * extension's page. chrome.debugger.sendCommand() has not been seen to produce
+ * it, and a restricted target refuses attach permanently rather than
+ * transiently, so treating it as a lost session would only buy one doomed
+ * re-attach before the same error surfaced anyway. */
+const DETACHED_RE = /not attached|Detached while handling|Inspected target navigated or closed/i;
 
 function dbgSend(tabId, method, params) {
 	return new Promise((resolve, reject) => {
 		chrome.debugger.sendCommand({ tabId }, method, params ?? {}, (res) => {
 			const err = chrome.runtime.lastError;
-			if (err) reject(new Error(`${method} failed: ${err.message}`));
-			else resolve(res);
+			if (!err) { resolve(res); return; }
+			if (DETACHED_RE.test(err.message)) {
+				// The cached entry is lying; drop it so the retry re-attaches.
+				clearAttachment(tabId);
+				const stale = new Error(`${method} failed: ${err.message}`);
+				stale.code = 'cdp_detached';
+				reject(stale);
+				return;
+			}
+			reject(new Error(`${method} failed: ${err.message}`));
 		});
 	});
 }
 
-/** Persistent CDP: attaches (if not already) and holds. */
+/** Persistent CDP: attaches (if not already) and holds. A command whose session
+ *  was lost mid-flight re-attaches ONCE and replays — turning the old "detached
+ *  means this tab is dead forever" behavior into a single transparent retry.
+ *  A second failure propagates to the caller.
+ *
+ *  The replay is deliberately narrow: it happens ONLY when the first CDP call of
+ *  the closure is the one that failed. Every later call means side effects have
+ *  already landed on the page, so re-running the closure would fire them twice.
+ *  That is not hypothetical — measured against a stubbed chrome.* on this repo,
+ *  cmdClick's closure is evaluate(geometry) -> mouseMoved -> mousePressed ->
+ *  mouseReleased, and replaying it after a detach on mouseReleased dispatched 6
+ *  mouse events instead of 3, i.e. a second click reaching the page. cmdInput's
+ *  mode:'type' is worse: each character is its own insertText, so a replay
+ *  re-types part of the string. Single-shot read commands (browser_read,
+ *  browser_snapshot) are idempotent and unaffected either way.
+ *
+ *  When the failure is NOT the first call the error is re-thrown untouched, and
+ *  the caller re-issues the whole command. Semantically that is a NEW command,
+ *  not a replay, which is the correct thing to ask of whoever wanted it. */
 async function withCDP(tabId, fn) {
+	let sends = 0;
+	const call = (method, params) => { sends++; return dbgSend(tabId, method, params); };
 	await ensureAttached(tabId);
-	return fn((method, params) => dbgSend(tabId, method, params));
+	const started = sends;
+	try {
+		return await fn(call);
+	} catch (error) {
+		if (error?.code !== 'cdp_detached' || sends > started + 1) throw error;
+		await ensureAttached(tabId);
+		return fn(call);
+	}
 }
 
 /* ------------------------------------------------------- command handlers */
