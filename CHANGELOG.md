@@ -1,6 +1,6 @@
 # 更新日志
 
-## Unreleased
+## v1.0.11 (2026-10-12)
 
 - **合并 PR #10（long-arm-ape）：模型可见内容不再被定长切片砍掉。** `render()` 的返回值就是模型看到的全部内容（宿主注释：`ToolResult.content` = “final model-facing content”，而完整 `value` “deliberately omitted from durable events”），此前 `JSON.stringify(value).slice(0, 300/400)` 交给模型的是一段**在 token 中间断掉、语法都不完整的 JSON**，而且没有任何提示。现在统一走 `clampRendered`（上限 4000，超了明确说「还剩 N 字符被截，缩小查询再看」）。
   还欠一步（我在评审里提了，不阻塞合并）：截断信号目前只在文案里，应该再给一个机器可读字段（如 `renderedTruncated` / `renderedOmittedChars`），让 agent 能程序化决定要不要换个更窄的查询 —— 这本来就是我们待办清单里「结果截断要显式回报」那条。
