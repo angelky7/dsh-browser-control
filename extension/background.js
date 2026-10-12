@@ -262,7 +262,14 @@ async function resolveTab(tabId) {
  * and report the outcome — `false` means the budget ran out while the new
  * document was still not in place.
  */
-function waitForNavigationComplete(tabId, timeoutMs) {
+/** 比较目的地与真正落到的地址：忽略 hash 片段与末尾斜杠这类同文档差异。 */
+function landsAt(tabUrl, expectedUrl) {
+	if (typeof expectedUrl !== 'string' || expectedUrl.length === 0) return true;
+	const norm = (u) => String(u ?? '').replace(/#.*$/, '').replace(/\/$/, '');
+	return norm(tabUrl) === norm(expectedUrl);
+}
+
+function waitForNavigationComplete(tabId, timeoutMs, expectedUrl) {
 	const started = Date.now();
 	return new Promise((resolve) => {
 		let sawLoading = false;
@@ -272,10 +279,13 @@ function waitForNavigationComplete(tabId, timeoutMs) {
 				if (tab.status === 'loading') sawLoading = true;
 				else if (tab.status === 'complete') {
 					if (sawLoading) return resolve(true);
-					// No loading phase observed: either the previous document is
-					// still sitting in its complete state (the race above), or the
-					// new page was genuinely too fast to ever show one.
-					if (Date.now() - started > 1200) return resolve(true);
+					// No loading phase observed at all. Two very different things look
+					// like this: the new document committed so fast we never polled a
+					// loading state, and a navigation that never happened (a link that
+					// turned into a download, a target Chrome refuses, a same-URL
+					// no-op). The URL separates them — if the tab is not where we asked
+					// it to be, nothing arrived and the caller must not say otherwise.
+					if (Date.now() - started > 1200) return resolve(landsAt(tab.url, expectedUrl));
 				}
 			}
 			if (Date.now() - started >= timeoutMs) return resolve(false);
@@ -841,7 +851,7 @@ async function cmdTabsOpen(params) {
 	// about:blank and reports `complete` immediately, so a waiter armed
 	// afterwards can conclude "already settled" while the requested URL has not
 	// even started.
-	const settled = params.wait === false ? true : await waitForNavigationComplete(created.id, timeoutMs);
+	const settled = params.wait === false ? true : await waitForNavigationComplete(created.id, timeoutMs, params.url);
 	const fresh = await chrome.tabs.get(created.id).catch(() => null);
 // A pending navigation is not visible in `url` (a tab that has not committed
 	// anything yet reports an empty url); `pendingUrl` is where it is heading.
@@ -876,7 +886,7 @@ async function cmdNav(params) {
 	const timeoutMs = Number(params.timeoutMs) || 15_000;
 	// Arm the waiter BEFORE triggering the navigation — see
 	// waitForNavigationComplete for why the order decides the answer.
-	const settling = params.wait === false ? Promise.resolve(true) : waitForNavigationComplete(tab.id, timeoutMs);
+	const settling = params.wait === false ? Promise.resolve(true) : waitForNavigationComplete(tab.id, timeoutMs, params.url);
 	await chrome.tabs.update(tab.id, { url: params.url });
 	const settled = await settling;
 	const fresh = await chrome.tabs.get(tab.id).catch(() => null);

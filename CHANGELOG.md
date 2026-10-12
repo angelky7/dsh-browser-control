@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **合并 PR #12（long-arm-ape）：导航没到位不再报成功。** 三个实测确认的缺陷一起修掉：① waiter 挂在 `tabs.update` 之后 → 旧文档还停在 `status:'complete'` 就被当成新文档完成（本机复现：0ms 返回、`url` 是旧页面）；② `location.href` 探针无界等待（导航未 commit 时 CDP 不答话）→ 实测挂死 >8s，而命令自己的预算只有 15s，现在两个探针都有预算；③ `browser_navigate` 的 `output.schema` 是封闭的却没声明 `siteUnreachable`，而扩展发的是对象 `{reason}` —— 拿宿主自己的 `validateJsonSchemaValue` 实测得到 `"value.siteUnreachable" is not a declared property (additionalProperties: false)`，也就是**已发布的 1.0.10 里，导航到不可达站点时模型收到的是一条输出校验错误，而不是「站点不可达」**。
+- 补掉 #12 留的最后一个口子：它「1.2 秒内没看到 `loading` 就认 `complete`」，而「导航压根没发生」（链接变成下载、目标被 Chrome 拒载）也长这样——实测合并前那版等满 1243ms 仍把旧文档 URL 当成功返回。现在宽限期后比对**落到的 URL vs 要去的那个**（忽略 hash 片段与末尾斜杠），不等就报 `loadPending`；同时两个不误报的方向都保住了：导航到已经开着的同一个地址仍算成功，真重定向因能看到 `loading` 走不到这个分支。新增 `verify/verify_nav_landing.mjs`（10 项）钉住这四条。
+- **合并 PR #7（BeiWay1145）：DevTools 抢走 CDP 会话后能重连了。** `onDetach` 无条件失效缓存 + `clearAttachment`，重放限定「闭包第一次 send 就失败」。合并前对当前 main 复测：会话被抢走后 attach `1 → 2` 并成功（我们这版此后每条命令都失败）、一次 click 仍然只派发 2 个 `Input.dispatchMouseEvent`（不重复点击）、永久失败 2 次封顶。合并时把 `verify_cdp_retry.mjs` 的 `FIXED_ON_MAIN` 翻成 `true`，S1 从此要求「必须重连」。
+- 合并流程记录：他们的分支带着旧 `lib/` 和我们已删的 `engines`，冲突按「保留我们的 + 追加他们的」解决，`lib/` 一律 `npm run build` 重新生成；`verify_nav_report.mjs` 从 9779 挪到 9781（9779 已被扩展端到端台占用）。
+
 - 新增 `browser_snapshot` 的 **AX 语义模式**（`docs/CAPABILITIES.md` 排第一的那项，零新增权限）：`mode:"ax"` 走 Chrome 的 `Accessibility.getFullAXTree`，元素的名字与角色由浏览器算（aria-label / `<label>` / `alt` / 可见文本的合成结果），比让 agent 猜 CSS 选择器抗改版。**ref 契约一点没变**：AX 节点经 `DOM.resolveNode` + `Runtime.callFunctionOn` 找到真实元素后，写的还是同一个 `data-dsh-ref`，所以 `browser_click` / `browser_type` 的 `ref` 用法完全照旧，DOM 模式也仍是默认。
 - AX 模式的四条硬规则（都有实测台兜着）：只收「可操作角色」白名单，`GenericContainer`/`StaticText`/`InlineTextBox` 这些噪音角色一律滤掉（否则文字多的页面会把 `limit` 吃在文本节点上）；隐形元素不占 ref 号也不写属性；AX 报了 `backendDOMNodeId` 而 DOM 里已无该节点时计入 `ax.unresolved` 并跳过；取树**之前**先清掉上一轮的 `data-dsh-ref`，旧 ref 不会指向现在屏幕上的另一个元素。
 - 降级不硬撑：AX 域拿不到（老 Chrome / 无障碍未就绪 / 页面拒绝）时自动回落 DOM 模式，结果里带 `mode:"dom"` 与 `axFallback:"<原因>"`，整条命令不失败，agent 也知道这次的名字不是来自 AX。
