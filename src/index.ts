@@ -207,6 +207,19 @@ function clampText(value: string, maxChars: number): { content: string; truncate
 }
 
 /**
+ * Cap one rendered payload and *say* it was cut. The previous fixed slices
+ * (300 / 400 chars) cut JSON mid-token, so the model received malformed JSON
+ * with no sign that anything was missing. Click/type/press/scroll results are
+ * well under this cap, so they now arrive complete; bigger payloads are marked.
+ */
+const MAX_RENDERED_CHARS = 4_000
+function clampRendered(text: string): string {
+	return text.length <= MAX_RENDERED_CHARS
+		? text
+		: `${text.slice(0, MAX_RENDERED_CHARS)}… (+${text.length - MAX_RENDERED_CHARS} chars truncated — narrow the query to see the rest)`
+}
+
+/**
  * Resolve the element target a click/type tool received.
  * @param args - validated tool arguments carrying at most one targeting field.
  * @returns the CSS selector to send on the wire, refs translated to their attribute form.
@@ -507,7 +520,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 300) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Click ${args.ref ?? args.selector ?? ''}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -530,7 +543,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 300) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Type into ${args.ref ?? args.selector ?? 'element'}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -553,7 +566,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 300) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Press ${args.key}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -573,7 +586,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 300) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Scroll browser page', kind: 'other' as const }),
 		async execute(args, exec) {
@@ -658,7 +671,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		parameters: {},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 400) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Browser identity', kind: 'other' as const }),
 		async execute(_args, exec) {
@@ -679,7 +692,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 400) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Browser tabs: ${args.action}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -726,7 +739,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					json: { type: 'string', required: true },
 				},
 			},
-			render: (_args, value) => [{ type: 'text', text: value.json.slice(0, 300) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(value.json) }],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Evaluate in page', kind: 'other' as const }),
 		async execute(args, exec) {
