@@ -34,6 +34,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 2. `CHANGELOG.md` 的 `Unreleased` 段落落成正式版本标题；README / README.en 的下载链接与 `#vX.Y.Z` 引用改成新版本名
 3. **先 `npm publish`，后打 tag / 建 Release**（v1.0.10 就是先把 Release 发出去了，结果用户装不到）。这台机器 `~/.npmrc` 的默认源是 npmmirror 镜像，**不能发布**；包里的 `publishConfig.registry` 已写死官方源，别再依赖命令行默认值。`files` 白名单不含 `verify/` 和 `extension/`，发包前确认 `lib/` 已是最新
 4. **发布后要等镜像同步再宣布**：`dsh plugin add` 会把依赖**钉成确切版本号**，而宿主用的是用户自己的 registry（国内多半是 `registry.npmmirror.com`）。镜像没跟上时 pnpm 直接 `ERR_PNPM_NO_MATCHING_VERSION`，安装失败。核对两条：`curl https://registry.npmjs.org/@caob23%2F<pkg>` 与 `curl https://registry.npmmirror.com/@caob23%2F<pkg>`，**两边都要看到该版本、且 `dist-tags.latest` 也跟上**，再说「装 XX 版」
+4b. **还有一个 24 小时的「包龄」闸门会造成同类抱怨。** dsh 的 profile 自带 `minimumReleaseAge: 1440`（实测在 `node_modules/.pnpm-workspace-state-v1.json` 里），发布未满 24 小时的版本被拦时报 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`，报文里带 `was published at …, within the minimumReleaseAge cutoff (…)`。**判据**：`NO_MATCHING_VERSION` = 你配置的源里没这个版本（镜像滞后）；`NO_MATURE_MATCHING_VERSION` = 有，只是太新，只能等满 cutoff。宣布「装 XX 版」之前把这两条都排掉，否则刚发完就会收到装不上的 issue。
 5. 打 tag、建 Release，资产沿用现有命名：`DSH-Browser-Control-vX.Y.Z.zip`（扩展）、`dsh-browser-control-plugin-vX.Y.Z.zip`（插件）
 6. **插件离线包里必须有 `cordis.patch.yml`**——`package.json` 的 `dsh.bundle.patch` 指向它，v1.0.7 那份资产漏了这个文件，离线安装就等于没挂载；扩展包必须含 `extension/` 下全部文件（含 `icons/`）
 7. **校验和写在 Release 正文里，不要上传 `.sha256` 附件**：正文列 文件名 / 字节数 / SHA-256（必要时加 MD5），上传后匿名下载回来核对头 4 字节、`unzip -t` 与条目分隔符；最后跑 `verify_release_links.mjs` 确认文档链接不是死链

@@ -97,6 +97,8 @@ npm install @caob23/dsh-browser-control
 > 1. Use the official registry for this install: `dsh plugin --profile web add @caob23/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
 > 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then `dsh plugin --profile web add file:<the unzipped directory>`
 > 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
+>
+> **A second failure looks similar but has the opposite cause — do not touch your registry for it.** dsh profiles ship a 24-hour package-age supply-chain gate (`minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)` — the version **does** exist, it is just too new. Waiting past the cutoff is the only fix. Discriminator: `NO_MATCHING_VERSION` = your registry does not have that version; `NO_MATURE_MATCHING_VERSION` = it has it, but the version is younger than 24h.
 
 ### Option B: install from GitHub or a local directory
 
