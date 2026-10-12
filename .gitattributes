@@ -1,0 +1,32 @@
+# 换行策略：仓库内一律 LF，二进制不转换。
+#
+# 为什么必须有这份文件：本仓库把构建产物 lib/ 一起提交，CI 里有一道
+# 「重新构建后 lib/ 必须与提交一致」的门（v1.0.7 那次 npm 包只有 11/16 个工具的教训）。
+# 如果 checkout 出来的换行随平台变（Windows 上 core.autocrlf=true 会把 LF 变 CRLF），
+# tsc/tsdown 重新生成的就是另一种换行，这道门在 Windows runner 上会**必然假红**，
+# 而在本地又被 --no-verify 之类绕开——正是我们最不想要的那种不确定性。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.gif binary
+*.zip binary
+*.tgz binary
+*.woff binary
+*.woff2 binary
+
+# 这些是文本，显式声明免得被上面的 binary 规则或启发式误判
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.sh text eol=lf

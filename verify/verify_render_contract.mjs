@@ -336,7 +336,8 @@ for (const [name, command, args, payload, expect] of GROUND_TRUTH) {
   check("browser_cleanup：模型看到清掉了几个文件", /Cleaned \d+ screenshot/.test(out.text) && /scratch file/.test(out.text), out.text);
 }
 
-await rm(SHOTS, { recursive: true, force: true });
+// Windows 上刚写进 shotsDir 的文件句柄可能还没释放，清理失败不该让整台子变红
+try { await rm(SHOTS, { recursive: true, force: true }); } catch { /* 系统临时目录，留着无害 */ }
 
 for (const disposer of disposers) {
   try { await disposer[0](); } catch { /*  teardown 不参与断言 */ }

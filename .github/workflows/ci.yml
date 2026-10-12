@@ -82,3 +82,49 @@ jobs:
             exit 1
           fi
           node verify/verify_release_links.mjs /tmp/releases.json
+
+  windows:
+    # 这个插件的实际宿主平台是 Windows（用户和开发者都在 Windows 上跑 dsh），
+    # 但 CI 以前只有 ubuntu：换行符、path.join/resolve、临时目录、回环绑定这些差异
+    # 一个都拦不住。这里不重复跑发布资产相关步骤，只问一个问题：
+    # 「同样的源码在 Windows 上构建出来的产物，311 项实测台是不是真的过得去」。
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm run typecheck
+
+      - name: 重新构建 lib/
+        run: pnpm exec tsc -p tsconfig.json && pnpm exec tsdown
+
+      # 与 ubuntu 同一道门：Windows 上换行不一致的话，产物 diff 会在这里暴露
+      # （.gitattributes 已经把仓库锁成 LF，这条就是它的回归测试）。
+      - name: 构建产物必须与源码同步
+        run: |
+          git add -A lib
+          if ! git diff --cached --quiet; then
+            echo "::error::lib/ 在 Windows 上与源码重新构建的结果不一致——先看换行符，再看构建步骤"
+            git diff --cached --stat
+            exit 1
+          fi
+
+      - name: 包结构检查
+        run: pnpm exec publint
+
+      - name: 实测台
+        run: pnpm run verify
