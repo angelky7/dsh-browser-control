@@ -16,7 +16,13 @@
 import { bootBackground } from "./ext_harness.mjs";
 
 const CANDIDATE = process.argv[2];
-const EXPECT_FIXED = process.env.CDP_RETRY_FIXED === "1";
+/**
+ * 会话恢复在 main 上修好了没有？合并带这个修复的 PR 时把这里改成 true。
+ * S1 的断言方向跟着它走：改回 true 之后，「抢完会话还不重连」就会红。
+ * （用常量而不是环境变量，是因为 npm 脚本在 Windows 上默认走 cmd，`X=1 node …` 那种写法不成立。）
+ */
+const FIXED_ON_MAIN = false;
+const EXPECT_FIXED = process.env.CDP_RETRY_FIXED ? process.env.CDP_RETRY_FIXED === "1" : FIXED_ON_MAIN;
 
 let fails = 0;
 const check = (name, ok, detail = "") => {

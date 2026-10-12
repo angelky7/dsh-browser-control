@@ -53,13 +53,24 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
     },
     /** 页面本身的样子（title / url），以及「真实 DOM 节点」集合。 */
     page: { title: "Fake page", url: "https://fake.test/" },
+    /**
+     * 导航剧本：`'stale'` = 请求的文档永远不提交（标签还停在旧页面上），
+     * `'load'` = 走一遍 loading→complete，`'instant'` = 直接完成。
+     * `createNav` 管新建标签：`'blip'` 模拟真 Chrome 的「出生在 about:blank 且已是
+     * complete，随后才开始加载」。
+     */
+    nav: "load",
+    createNav: "load",
+    loadDelayMs: 240,
+    slowStartMs: 400,
+    updatedListeners: [],
     axNodes: [],
     elements: new Map(),
     byBackend: new Map(),
     nextObjectId: 1,
     addTab(windowId, url) {
       const id = this.nextTabId++;
-      this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false });
+      this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false, status: "complete", pendingUrl: "" });
       return id;
     },
     /**
@@ -172,6 +183,28 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
   const reject = (m) => Promise.reject(new Error(m));
   const listener = () => ({ addListener: () => {}, removeListener: () => {} });
 
+  const fireUpdated = (m, tab, info) => {
+    for (const fn of m.updatedListeners) { try { fn(tab.id, info, { ...tab }); } catch { /* 监听器炸了不该影响假浏览器 */ } }
+  };
+  const beginLoad = (m, id, url) => {
+    const tab = m.tabs.get(id);
+    if (tab === undefined) return;
+    tab.status = "loading";
+    tab.pendingUrl = url ?? "";
+    fireUpdated(m, tab, { status: "loading" });
+    setTimeout(() => commitLoad(m, id, url), m.loadDelayMs);
+  };
+  const commitLoad = (m, id, url) => {
+    const tab = m.tabs.get(id);
+    if (tab === undefined) return;
+    tab.url = url ?? tab.url;
+    tab.pendingUrl = "";
+    tab.status = "complete";
+    m.page.url = tab.url;
+    m.page.title = `Loaded: ${tab.url}`;
+    fireUpdated(m, tab, { status: "complete" });
+  };
+
   const dropEmptyGroups = () => {
     for (const [gid, group] of model.groups) {
       if (![...model.tabs.values()].some((t) => t.groupId === gid)) model.groups.delete(gid);
@@ -180,15 +213,56 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
 
   const tabs = {
     onRemoved: listener(),
-    onUpdated: listener(),
+    onUpdated: { addListener: (fn) => { model.updatedListeners.push(fn); }, removeListener: (fn) => {
+      const at = model.updatedListeners.indexOf(fn);
+      if (at >= 0) model.updatedListeners.splice(at, 1);
+    } },
     onActivated: listener(),
     onCreated: listener(),
     onMoved: listener(),
     create: ({ url, active = true, windowId }) => {
       model.calls.create++;
       const id = model.addTab(windowId ?? 1, url ?? "");
-      model.tabs.get(id).active = active;
-      return resolve({ ...model.tabs.get(id) });
+      const tab = model.tabs.get(id);
+      tab.active = active;
+      // 默认按真 Chrome：新建的标签先进 loading。'blip' 专门造那个坑——
+      // 它出生在 about:blank 并且立刻就是 complete，requested URL 还没开始。
+      if (model.createNav === "blip") {
+        tab.url = "about:blank"; tab.status = "complete"; tab.pendingUrl = url ?? "";
+        setTimeout(() => beginLoad(model, id, url), 30);
+      } else if (model.createNav === "instant") {
+        commitLoad(model, id, url);
+      } else {
+        tab.status = "loading"; tab.pendingUrl = url ?? "";
+        fireUpdated(model, tab, { status: "loading" });
+        setTimeout(() => commitLoad(model, id, url), model.loadDelayMs);
+      }
+      return resolve({ ...tab });
+    },
+    update: (id, props = {}) => {
+      const tab = model.tabs.get(Number(id));
+      if (tab === undefined) return reject(`No tab with id: ${id}`);
+      if (props.url !== undefined) {
+        if (model.nav === "stale") {
+          // 请求的文档始终不提交：URL 不变、状态仍是 complete —— 就是「导航没到位」
+        } else if (model.nav === "instant") {
+          commitLoad(model, tab.id, props.url);
+        } else if (model.nav === "slowstart") {
+          // 真 Chrome 会有的样子：先让旧文档保持 complete 一小会儿，才开始加载
+          tab.pendingUrl = props.url;
+          setTimeout(() => {
+            tab.status = "loading";
+            fireUpdated(model, tab, { status: "loading" });
+            setTimeout(() => commitLoad(model, tab.id, props.url), model.loadDelayMs);
+          }, model.slowStartMs ?? 400);
+        } else {
+          tab.status = "loading"; tab.pendingUrl = props.url;
+          fireUpdated(model, tab, { status: "loading" });
+          setTimeout(() => commitLoad(model, tab.id, props.url), model.loadDelayMs);
+        }
+      }
+      if (props.active !== undefined) tab.active = props.active;
+      return resolve({ ...tab });
     },
     get: (id) => (model.tabs.has(id) ? resolve({ ...model.tabs.get(id) }) : reject(`No tab with id: ${id}`)),
     query: (info = {}) => {
