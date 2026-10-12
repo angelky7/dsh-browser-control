@@ -1,8 +1,8 @@
 # 更新日志
 
-## v1.0.12（未发布）
+## v1.0.12 (2026-10-12)
 
-这一批只动 `src/`+`lib/`（插件侧），**`extension/` 一个字没改** —— 已经装好的扩展不用重装。
+这一批只动 `src/`+`lib/`（插件侧），**`extension/` 的代码一个字没改**（`manifest.json` 只有版本戳跟着走）—— 已经装好的扩展不用重装也能配合新插件，协议仍是 `protocol: 1`。
 
 - **修掉一个自 v1.0.0 就存在的功能缺陷：数据型工具的 render 把数据本身丢掉了。** 宿主的规则是「模型可见内容 = `output.render(args, value)` 的返回值」（`@deepseek-ai/dsh-tools` `lib/index.js:3548-3551`），`value` 是 execution-local、"deliberately omitted from durable events"（`lib/types/index.d.ts:415`），`presentationMeta` 只喂 UI。而这几条工具的 render 一直只交出一句统计：
   - `browser_read` → `Title (url) — 4321 chars`：页面正文一个字符都没给过模型；
