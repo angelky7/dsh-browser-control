@@ -247,15 +247,56 @@ async function resolveTab(tabId) {
 	throw new Error('no tab available');
 }
 
-function waitTabComplete(tabId, timeoutMs) {
+/**
+ * Wait until the navigation that is about to start has actually settled, and
+ * say whether it did.
+ *
+ * Two mistakes this avoids, both of which let `nav` / `tabs.open` report a
+ * settled page that was not there:
+ *   - arming the listener AFTER `tabs.update` / `tabs.create` races the
+ *     document swap: the tab still answers `status:'complete'` for the PREVIOUS
+ *     document (a brand-new tab answers `complete` for about:blank), so a single
+ *     `chrome.tabs.get` resolves the wait instantly against the old page;
+ *   - a timeout that resolves silently is indistinguishable from success.
+ * So: poll, insist on having seen the new document load (`status:'loading'`),
+ * and report the outcome — `false` means the budget ran out while the new
+ * document was still not in place.
+ */
+function waitForNavigationComplete(tabId, timeoutMs) {
+	const started = Date.now();
 	return new Promise((resolve) => {
-		let done = false;
-		const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); };
-		const listener = (id, info) => { if (id === tabId && info.status === 'complete') finish(); };
-		chrome.tabs.onUpdated.addListener(listener);
-		chrome.tabs.get(tabId).then((tab) => { if (tab.status === 'complete') finish(); }).catch(finish);
-		setTimeout(finish, timeoutMs);
+		let sawLoading = false;
+		const tick = async () => {
+			const tab = await chrome.tabs.get(tabId).catch(() => null);
+			if (tab) {
+				if (tab.status === 'loading') sawLoading = true;
+				else if (tab.status === 'complete') {
+					if (sawLoading) return resolve(true);
+					// No loading phase observed: either the previous document is
+					// still sitting in its complete state (the race above), or the
+					// new page was genuinely too fast to ever show one.
+					if (Date.now() - started > 1200) return resolve(true);
+				}
+			}
+			if (Date.now() - started >= timeoutMs) return resolve(false);
+			setTimeout(tick, 120);
+		};
+		void tick();
 	});
+}
+
+/**
+ * Await `promise`, but never longer than `ms`; resolve `fallback` on timeout or
+ * rejection. CDP does not answer `Runtime.evaluate` while a navigation is stuck
+ * before commit, so the post-navigation probes must not be able to outlive the
+ * caller's budget (measured: an unbounded probe left `nav` unanswered for >40 s
+ * while its own wait budget was 15 s).
+ */
+function withBudget(promise, ms, fallback) {
+	return Promise.race([
+		promise.catch(() => fallback),
+		new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+	]);
 }
 
 /** Bring the tab and its window forward so real input can land, WITHOUT
@@ -795,11 +836,26 @@ async function cmdTabsOpen(params) {
 		url: params.url,
 		active: params.active !== undefined ? Boolean(params.active) : true,
 	});
-	if (params.wait !== false) await waitTabComplete(created.id, Number(params.timeoutMs) || 15_000);
+	const timeoutMs = Number(params.timeoutMs) || 15_000;
+	// Arm the waiter before the tab starts loading: a created tab is born on
+	// about:blank and reports `complete` immediately, so a waiter armed
+	// afterwards can conclude "already settled" while the requested URL has not
+	// even started.
+	const settled = params.wait === false ? true : await waitForNavigationComplete(created.id, timeoutMs);
 	const fresh = await chrome.tabs.get(created.id).catch(() => null);
+// A pending navigation is not visible in `url` (a tab that has not committed
+	// anything yet reports an empty url); `pendingUrl` is where it is heading.
+	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh.url ? fresh.pendingUrl : undefined;
 	// 归组失败不该让「打开标签」这件事失败，只把结果带回去。
 	const group = params.group === false ? { grouped: false, reason: 'group:false' } : await addToAgentGroup(created.id);
-	return { tabId: created.id, url: fresh?.url, title: fresh?.title, ...group };
+	return {
+		tabId: created.id,
+		url: fresh?.url,
+		title: fresh?.title,
+		...(pendingUrl === undefined ? {} : { pendingUrl }),
+		...(settled === true ? {} : { loadPending: true }),
+		...group,
+	};
 }
 
 async function cmdTabsClose(params) {
@@ -817,27 +873,27 @@ async function cmdTabsActivate(params) {
 async function cmdNav(params) {
 	if (!params.url) throw new Error('params.url is required');
 	const tab = await resolveTab(params.tabId);
+	const timeoutMs = Number(params.timeoutMs) || 15_000;
+	// Arm the waiter BEFORE triggering the navigation — see
+	// waitForNavigationComplete for why the order decides the answer.
+	const settling = params.wait === false ? Promise.resolve(true) : waitForNavigationComplete(tab.id, timeoutMs);
 	await chrome.tabs.update(tab.id, { url: params.url });
-	if (params.wait !== false) await waitTabComplete(tab.id, Number(params.timeoutMs) || 15_000);
+	const settled = await settling;
 	const fresh = await chrome.tabs.get(tab.id).catch(() => null);
 	// Chrome lands dead navigations on an internal error page, but tabs.get()
 	// keeps reporting the ORIGINAL url — only in-page location.href reveals
-	// chrome-error://. Probe it so callers can react structurally.
-	let landedUrl = '';
-	try {
-		landedUrl = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
-			expression: 'location.href', awaitPromise: false, returnByValue: true, userGesture: true,
-		}).then((r) => String(r.result?.value ?? '')));
-	} catch { /* no debugger possible (e.g. chrome:// pages) — fall through */ }
+	// chrome-error://. Probe it so callers can react structurally. Both probes
+	// are budgeted: CDP stays silent while a navigation is stuck before commit,
+	// and an unbounded await there outlives the command's own timeout.
+	const landedUrl = await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
+		expression: 'location.href', awaitPromise: false, returnByValue: true, userGesture: true,
+	}).then((r) => String(r.result?.value ?? ''))), 2000, '');
 	let siteUnreachable;
 	if (/^chrome-error:/.test(landedUrl)) {
-		let errText = '';
-		try {
-			errText = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
-				expression: 'document.body ? document.body.innerText.slice(0, 4000) : ""',
-				awaitPromise: false, returnByValue: true, userGesture: true,
-			}).then((r) => String(r.result?.value ?? '')));
-		} catch { /* classification falls back below */ }
+		const errText = await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
+			expression: 'document.body ? document.body.innerText.slice(0, 4000) : ""',
+			awaitPromise: false, returnByValue: true, userGesture: true,
+		}).then((r) => String(r.result?.value ?? ''))), 2000, '');
 		// Error-page copy is localized (zh-CN shows 无法找到 … 的 DNS 地址,
 		// en-US shows ERR_NAME_NOT_RESOLVED); match either plus any bare DNS
 		// mention such as DNS_PROBE_STARTED.
@@ -845,11 +901,19 @@ async function cmdNav(params) {
 			|| /ERR_NAME_NOT_RESOLVED|dns/i.test(fresh?.title ?? '');
 		siteUnreachable = { reason: dns ? 'dns' : 'unreachable' };
 	}
+	// While a navigation is pending, `url` is still the OLD document (or empty for
+	// a tab that has not committed anything yet) and the destination only exists
+	// in `pendingUrl` — report it so "still going to X" is visible.
+	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
 	return {
 		tabId: tab.id,
 		url: siteUnreachable ? params.url : (fresh?.url ?? params.url),
 		title: siteUnreachable ? undefined : fresh?.title,
+		...(pendingUrl === undefined ? {} : { pendingUrl }),
 		...(siteUnreachable ? { siteUnreachable } : {}),
+		// A timed-out wait must never read as "the page is there": loadPending
+		// says the new document was still not in place when the budget ran out.
+		...(siteUnreachable === undefined && settled !== true ? { loadPending: true } : {}),
 	};
 }
 

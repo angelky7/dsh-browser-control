@@ -325,11 +325,28 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					tabId: { type: 'number', required: true },
 					url: { type: 'string' },
 					title: { type: 'string' },
+					pendingUrl: { type: 'string' },
+					loadPending: { type: 'boolean' },
+					siteUnreachable: { type: 'boolean' },
 				},
 			},
 			render: (_args, value) => {
 				const label = [value.title, value.url].filter(part => typeof part === 'string' && part.length > 0).join(' — ')
-				return [{ type: 'text', text: `Tab ${value.tabId} now shows ${label.length > 0 ? label : '(untitled)'}` }]
+				const shows = label.length > 0 ? label : '(untitled)'
+				// Nothing was navigated to: say that instead of "now shows <the URL you asked for>".
+				if (value.siteUnreachable === true) {
+					return [{ type: 'text', text: `Tab ${value.tabId} could not load ${String(value.url ?? '')} — the browser landed on its own error page (DNS failure or no connection), so browser_read/browser_snapshot return that error page, not the site.` }]
+				}
+				// The wait budget ran out before the new document settled: the tab may still
+				// be showing the previous page, so do not call it loaded.
+				if (value.loadPending === true) {
+					const to = typeof value.pendingUrl === 'string' && value.pendingUrl.length > 0 ? value.pendingUrl : 'the requested URL'
+					return [{ type: 'text', text: `Tab ${value.tabId} is still loading ${to} — the load had not settled when the wait budget ran out, so the tab may still be showing ${shows}. Re-check with browser_read before acting on it (or raise timeoutMs).` }]
+				}
+				if (typeof value.pendingUrl === 'string' && value.pendingUrl.length > 0) {
+					return [{ type: 'text', text: `Tab ${value.tabId} shows ${shows} and is navigating to ${value.pendingUrl}` }]
+				}
+				return [{ type: 'text', text: `Tab ${value.tabId} now shows ${shows}` }]
 			},
 		},
 		isConcurrencySafe: () => false,
@@ -337,7 +354,28 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { url: args.url }
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('nav', params, exec.signal) as { tabId: number; title?: string; url?: string }
+			const raw = await controller.execute('nav', params, exec.signal) as {
+				tabId: number
+				title?: string
+				url?: string
+				pendingUrl?: string
+				loadPending?: boolean
+				/** `true`, or `{ reason: 'dns' | 'unreachable' }` as the extension actually sends it. */
+				siteUnreachable?: boolean | { reason?: string }
+			}
+			// The declared schema is closed, so the fields describing a navigation that did
+			// not arrive have to be carried over on purpose. The old shape check
+			// (`siteUnreachable === true`) also missed the object the extension really
+			// sends, so an unreachable target came back as a plain success.
+			const out: { tabId: number; url?: string; title?: string; pendingUrl?: string; loadPending?: boolean; siteUnreachable?: boolean } = { tabId: raw.tabId }
+			if (typeof raw.url === 'string') out.url = raw.url
+			if (typeof raw.title === 'string') out.title = raw.title
+			if (typeof raw.pendingUrl === 'string') out.pendingUrl = raw.pendingUrl
+			if (raw.loadPending === true) out.loadPending = true
+			const unreachable = raw.siteUnreachable === true
+				|| (typeof raw.siteUnreachable === 'object' && raw.siteUnreachable !== null)
+			if (unreachable) out.siteUnreachable = true
+			return out
 		},
 	}))
 
