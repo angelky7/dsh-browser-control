@@ -191,6 +191,7 @@ Tabs the agent **opens** are collected into a blue `DSH` tab group, one per wind
 - `browser_tabs` `action: "ungroup"` dissolves the group (pass `windowId` for one window, omit it for all) — it releases the grouping, it does not close the tabs.
 - `browser_tabs` `action: "open"` with `group: false` keeps a new tab ungrouped; `action: "group"` pulls an already-existing loose tab in.
 - Grouping is a nicety, never a prerequisite: on an old Chrome, without the `tabGroups` permission, or when Chrome's own tab bookkeeping wins the race, **opening the tab still succeeds** and the result carries `grouped: false` plus a reason. Grouping never changes page content, so retrying it is safe.
+- `browser_tabs` `action: "close"` takes one tab (`tabId`) or a batch (`tabIds`), and a batch goes out as **one command**. The result accounts for every id — `closed` / `alreadyGone` (already gone = idempotent success, safe to retry) / `failed` (with the error) — so a partial failure is never swallowed, and single and batch share one shape.
 
 ### Calling the HTTP face from a script
 

@@ -190,6 +190,7 @@ Agent **新建**的标签页会自动收进当前窗口的一个 `DSH` 蓝色标
 - `browser_tabs` `action: "ungroup"` 拆掉本窗口的组（带 `windowId` 只拆那一个窗口，不带则所有窗口）——只拆标签归属，不关标签。
 - `browser_tabs` `action: "open"` 加 `group: false` 可以显式让新标签留在组外；`action: "group"` 能把早就存在的散标签拉进来。
 - 归组是锦上添花：Chrome 版本太旧、权限没给、或刚建标签就被用户拖动导致失败时，**开标签本身照常成功**，结果里带 `grouped: false` 和原因。分组动作不改页面内容，重试安全。
+- `browser_tabs` `action: "close"` 一次可以关一个（`tabId`）或一批（`tabIds`）；一批在链路上只发**一条命令**。结果把每个 id 的去向都写出来：`closed` / `alreadyGone`（早就没了＝幂等成功，重试安全）/ `failed`（带原因）——部分失败不会被吞掉，单数与批量同一个形状。
 
 ### 用脚本直连 HTTP（curl 等）
 

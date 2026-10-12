@@ -27,8 +27,19 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
     groups: new Map(),
     nextTabId: 100,
     nextGroupId: 500,
-    calls: { group: 0, ungroup: 0, create: 0 },
+    calls: { group: 0, ungroup: 0, create: 0, remove: 0 },
     failGroupTimes,
+    /** 每次 `chrome.tabs.remove` 实际收到的参数（数组形态）——用来断言「一批 = 一次调用」。 */
+    removeCalls: [],
+    /** >0 时 `chrome.tabs.remove` 拒绝，用来演「调用失败但副作用可能已经发生」。 */
+    failRemoveTimes: 0,
+    removeError: null,
+    /**
+     * >0 时：先把前 N 个 id 真的关掉，再让整次 `remove` 拒绝 —— 真实竞态（用户在那
+     * 一瞬间自己关掉了其中一个标签，Chrome 于是拒绝了整批）。专治「失败就当什么都没
+     * 发生」的实现。
+     */
+    removeRejectButClose: 0,
     /**
      * 假 CDP 会话。`attached` 是 **Chrome 侧**的事实，扩展里的 `attachedTabs`
      * 是它的缓存——两者故意分开，才能测出「缓存说了谎」这类缺陷。
@@ -299,6 +310,29 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
         model.tabs.get(id).groupId = -1;
       }
       dropEmptyGroups();
+      return resolve();
+    },
+    /**
+     * 真 Chrome 的语义：`remove` 接受**数组**，且任何一个 id 不存在就整次调用拒绝。
+     * 后者正是 `tabs.closeMany` 必须先自查存在性的原因——不然「一个已经关掉的标签」
+     * 会把同批里还能关的标签一起拖死。
+     */
+    remove: (ids) => {
+      model.calls.remove++;
+      const list = (Array.isArray(ids) ? ids : [ids]).map(Number);
+      model.removeCalls.push(list);
+      if (model.removeRejectButClose > 0) {
+        const taken = list.slice(0, model.removeRejectButClose);
+        for (const id of taken) model.tabs.delete(id);
+        model.removeRejectButClose = 0;
+        return reject(model.removeError ?? `Tabs cannot be removed: ${taken.join(", ")}`);
+      }
+      if (model.failRemoveTimes > 0) {
+        model.failRemoveTimes--;
+        return reject(model.removeError ?? `Tabs cannot be removed: ${list.join(", ")}`);
+      }
+      for (const id of list) if (!model.tabs.has(id)) return reject(`No tab with id: ${id}`);
+      for (const id of list) model.tabs.delete(id);
       return resolve();
     },
   };
