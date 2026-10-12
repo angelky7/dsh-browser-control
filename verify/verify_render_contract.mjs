@@ -372,6 +372,31 @@ for (const [name, command, args, payload, expect] of GROUND_TRUTH) {
     reset.violations.length === 0 && reset.text.includes("reset to default"), reset.text);
 }
 
+// 10) 版本错位的诚实性（本机真实 Chrome 实测逼出来的用例）：
+//     扩展 1.0.10 收到 mode:"ax" 时不报错、也不带 mode/axFallback，直接回一份 DOM 结果。
+//     插件必须自己发现「请求的模式 ≠ 回报的模式」并写进 axFallback，否则模型会把
+//     标签名当成可访问名。
+{
+  const legacyShape = { tabId: 3, title: "T", url: "https://p.example/", total: 2, limitedTo: 2, items: [{ ref: "e1", tag: "a", name: "首页", href: "/x" }] };
+  const skewed = await runTool("browser_snapshot", { mode: "ax" }, legacyShape, "snapshot");
+  check("旧扩展静默降级：axFallback 被插件自己补上",
+    typeof skewed.value.axFallback === "string" && /v1\.0\.11/.test(skewed.value.axFallback),
+    String(skewed.value.axFallback));
+  check("旧扩展静默降级：这句话进得了模型",
+    skewed.text.includes("mode ax fell back to dom") && skewed.text.includes("tag names, not accessible names"),
+    skewed.text.split("\n")[1]);
+
+  const modern = await runTool("browser_snapshot", { mode: "ax" },
+    { ...legacyShape, mode: "ax", ax: { nodes: 40, candidates: 2, unresolved: 0, invisible: 1 }, items: [{ ref: "e1", tag: "a", role: "link", name: "首页" }] }, "snapshot");
+  check("新扩展真的走了 AX：不许凭空报降级",
+    modern.value.axFallback === undefined && modern.text.includes("(mode ax)"), modern.text.split("\n")[0]);
+
+  const genuine = await runTool("browser_snapshot", { mode: "ax" },
+    { ...legacyShape, mode: "dom", axFallback: "no a11y tree" }, "snapshot");
+  check("扩展自己报了降级原因时以它为准",
+    genuine.value.axFallback === "no a11y tree", String(genuine.value.axFallback));
+}
+
 // browser_cleanup 是唯一不经过扩展的工具：它读本地 shotsDir，所以单独跑（也用临时目录）。
 {
   const out = await runTool("browser_cleanup", {}, {}, null);

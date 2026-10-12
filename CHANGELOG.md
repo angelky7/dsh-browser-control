@@ -1,5 +1,17 @@
 # 更新日志
 
+## 未发布
+
+**第一次把真实宿主和真实浏览器接进验证链。** 用本机已安装的 dsh（`@deepseek-ai/dsh` 全家 `0.2.0-rc.2`，从 `app.asar` 里读出来的）在**隔离 `DSH_HOME`** 里创建 profile、装上 1.0.14、让 `--dump-config` 组装，再让真实 Chrome 扩展连上桥，把只读工具跑在真实代码路径上：
+
+- 组装结果：`- id: browser-bridge / name: '@caob23/dsh-browser-control' / config: {enabled: true, port: 9777, token: dsh-local}` —— issue #4 那条「装上即监听」第一次在真宿主里被证实，而不是靠假上下文推断。
+- 顺手回答了一条含糊的 profile 配置：只写 `- id: browser-bridge` + `disabled: true`（不带 `name`）**就足以关掉本插件**，宿主的合并是按 `id` 认的。这一点以前只能猜，现在用 `--patch` 在隔离 profile 里实测过。
+- 真实 Chrome 153 + 扩展 1.0.10 下 9 条只读工具全过（`browser_read` 交出 1341 字符真实正文、`browser_snapshot` 交出 14 条带 ref 的清单、输出 schema 零违规）。**这也证明 1.0.12 那两个修复在真实链路上确实生效**——以前只有假扩展的证据。
+
+**真实链路立刻挖出一个假台子永远发现不了的缺陷：旧扩展静默忽略 `mode:"ax"`。** 扩展 1.0.10（早于 1.0.11 的 AX 快照）收到 `mode:"ax"` 时不报错、回一份 DOM 结果，且**既不带 `mode` 也不带 `axFallback`**，模型于是以为拿到的是可访问名，其实那是标签名。修法是插件侧比对「请求的模式 vs 回报的模式」，不一致就自己写 `axFallback`（写明「以下是标签名，AX 需要扩展 v1.0.11+」）——**扩展不用升级也立刻受益**。同时补了三种形状的断言：静默降级 / 真走了 AX 不许凭空报降级 / 扩展自带降级原因时以它为准。
+
+`npm run verify` 327 → **331 项断言，exit 0**。
+
 ## v1.0.14 (2026-10-12)
 
 - **`browser_emulate` 只要不覆盖 UA 就必然失败（v1.0.7 起）。** 扩展在无覆盖时回的是**显式** `userAgent: null`（`extension/background.js:719` `userAgent: userAgent || null`，而 `desktop` 预设的 UA 就是空串），我们这边 `output.schema` 声明的是 `userAgent: {type:'string'}`。宿主 `checkValue` 只对 `undefined` 放行、**对 null 下钻判类型**，于是 `device:"desktop"` 与任何「只给宽高、不给 UA」的调用都抛 `ToolOutputError`。用宿主校验器直接实测：旧行为 `["\"value.userAgent\" must be a string"]`，归一化后 `[]`。改法是插件侧把 null 与空串一并剥掉（**扩展不用改**），UA 真的被覆盖时则把 `UA="…"` 写进给模型的那句话（以前 UA 只待在进不了模型的 `value` 里）。

@@ -59,6 +59,7 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - 隐形元素（`getBoundingClientRect()` 宽高都是 0）**不占 ref 号也不写属性**；AX 树报了 `backendDOMNodeId` 但 DOM 里已经没有该节点时计入 `ax.unresolved` 并跳过。两种情况都在 `ax` 计数里分开回报。
 - AX 快照**先清掉上一轮的 `data-dsh-ref` 再取树**：旧 ref 绝不能指向现在屏幕上的另一个元素。
 - AX 域拿不到（老 Chrome、无障碍未就绪、页面拒绝）时自动降级回 DOM 模式，结果带 `mode:"dom"` 与 `axFallback:"<原因>"`，**不让整条命令失败**；agent 据此知道这次的名字来自 DOM 而不是 AX。
+- **扩展比插件旧（扩展 < 1.0.11 根本没有 AX）也要说出来。** 本机真实实测：扩展 1.0.10 收到 `mode:"ax"` 时既不报错也不带 `mode`/`axFallback`，原样回一份 DOM 结果（两次请求的响应完全一样）。以前模型只看到 `(mode dom)`，读不出「我要的 ax 被旧扩展静默降级了」，会把标签名当成可访问名。现在插件自己比对**请求的模式 vs 回报的模式**（`mode==='ax'` 或带 `ax` 计数才算真走了 AX），不一致就补一句 `axFallback`，写明「下面的名字是标签名，不是可访问名；AX 需要扩展 v1.0.11+」。改在插件侧，**老扩展不用升级也能立刻受益**。
 - 代价：AX 模式每条保留元素多两次 CDP 往返（`DOM.resolveNode` + `Runtime.callFunctionOn`），本地链路可接受，`limit`（默认 120，上限 200）是硬闸。
 
 ## agent 标签页归组

@@ -572,14 +572,27 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				url?: string
 				mode?: string
 				axFallback?: string
+				ax?: unknown
 				items?: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
 			}
+			// 版本错位必须说出来：v1.0.10 及更早的扩展没有 AX 快照（1.0.11 才加的），
+			// 它会照单收下 mode:"ax" 然后回一份 DOM 结果，既不带 mode 也不带 axFallback
+			// （本机实测：扩展 1.0.10，两次请求的响应完全一样）。那时模型只看到「(mode dom)」，
+			// 读不出「我要的 ax 被旧扩展静默降级了」，会把标签名当成可访问名。
+			// 按「请求的模式 vs 回报的模式」比对，不一致就自己写 axFallback——扩展不用改，老扩展立刻受益。
+			const requestedAx = args.mode === 'ax'
+			const gotAx = raw.mode === 'ax' || raw.ax !== undefined
+			const axFallback = typeof raw.axFallback === 'string' && raw.axFallback.length > 0
+				? raw.axFallback
+				: (requestedAx && !gotAx
+					? 'this extension ignored mode:"ax" and returned CSS-DOM matches (AX mode needs DSH Browser Control extension v1.0.11 or newer) — the names below are tag names, not accessible names'
+					: undefined)
 			return {
 				tabId: raw.tabId,
 				title: raw.title ?? '',
 				url: raw.url ?? '',
 				...(raw.mode === undefined ? {} : { mode: raw.mode }),
-				...(raw.axFallback === undefined ? {} : { axFallback: raw.axFallback }),
+				...(axFallback === undefined ? {} : { axFallback }),
 				items: (raw.items ?? []).map(item => ({
 					ref: item.ref,
 					tag: item.tag,
