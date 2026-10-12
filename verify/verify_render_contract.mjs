@@ -316,8 +316,19 @@ const GROUND_TRUTH = [
   ["browser_pdf", "pdf", {},
     { tabId: 3, base64: PDF_B64 }, ["PDF written to", ".pdf"]],
   ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
-    { tabId: 3, width: 412, height: 915, deviceScaleFactor: 3, isMobile: true, hasTouch: true }, ["412", "915", "mobile=true"]],
+    { tabId: 3, width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7)" }, ["412", "915", "mobile=true", "UA="]],
 ];
+
+// 封闭 schema 的工具里，任何 null 都会打穿调用：宿主 checkValue 只对 undefined 放行
+// （`!Object.hasOwn(value,key) || value[key] === void 0` 才 continue），null 会下钻判类型。
+// 所以这 11 条的 value 里出现 null 就是必然失败，而不是「字段没填」。
+const CLOSED_SCHEMA = new Set([
+  "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
+  "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
+  "browser_pdf", "browser_emulate",
+]);
+const hasNull = (v) => v === null
+  || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));
 
 for (const [name, command, args, payload, expect] of GROUND_TRUTH) {
   const out = await runTool(name, args, payload, command);
@@ -327,6 +338,38 @@ for (const [name, command, args, payload, expect] of GROUND_TRUTH) {
     expect.filter(part => !out.text.includes(part)).join(",") || `len=${out.text.length}`);
   check(`${name}：render 至少交出一段非空文本`,
     out.text.trim().length > 0 && out.def.output.render(args, out.value).length > 0, JSON.stringify(out.text.slice(0, 40)));
+  if (CLOSED_SCHEMA.has(name)) {
+    check(`${name}：封闭 schema 的 value 里没有 null（null 会被宿主判成类型违规）`,
+      !hasNull(out.value), JSON.stringify(out.value).slice(0, 120));
+  }
+}
+
+// 9) browser_emulate 的 null 分支：扩展在无覆盖时回的是显式 `userAgent: null`
+//    （extension/background.js:719 `userAgent: userAgent || null`），而 desktop 预设的
+//    userAgent 就是空串 —— 于是 `device:"desktop"` 与任何自定义宽高的调用都会抛
+//    ToolOutputError。审计表以前用 mobile-pixel-7（预设里带 UA 字符串）所以没碰到这条分支。
+{
+  const bare = { tabId: 3, width: 1280, height: 800, deviceScaleFactor: 1, isMobile: false, hasTouch: false, userAgent: null };
+  const desktop = await runTool("browser_emulate", { device: "desktop" }, bare, "emulate");
+  check("browser_emulate：desktop 预设（扩展回 userAgent:null）过 schema",
+    desktop.violations.length === 0, desktop.violations.join(" | "));
+  check("browser_emulate：null 覆盖被归一化掉，不进 value",
+    !("userAgent" in desktop.value) && !hasNull(desktop.value), JSON.stringify(desktop.value));
+  check("browser_emulate：模型看到生效的视口尺寸", desktop.text.includes("1280×800"), desktop.text);
+
+  const custom = await runTool("browser_emulate", { width: 900, height: 600 },
+    { tabId: 3, width: 900, height: 600, deviceScaleFactor: 1, isMobile: false, hasTouch: false, userAgent: null }, "emulate");
+  check("browser_emulate：自定义宽高（同样回 userAgent:null）过 schema",
+    custom.violations.length === 0, custom.violations.join(" | "));
+
+  const withUa = await runTool("browser_emulate", { device: "mobile-iphone-13" },
+    { tabId: 3, width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)" }, "emulate");
+  check("browser_emulate：真的覆盖了 UA 时把 UA 说给模型",
+    withUa.violations.length === 0 && withUa.text.includes('UA="Mozilla/5.0 (iPhone'), withUa.text);
+
+  const reset = await runTool("browser_emulate", { device: "reset" }, { tabId: 3, reset: true }, "emulate");
+  check("browser_emulate：reset 形状过 schema 且文案说明清掉了覆盖",
+    reset.violations.length === 0 && reset.text.includes("reset to default"), reset.text);
 }
 
 // browser_cleanup 是唯一不经过扩展的工具：它读本地 shotsDir，所以单独跑（也用临时目录）。

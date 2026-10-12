@@ -1,5 +1,11 @@
 # 更新日志
 
+## 未发布
+
+- **`browser_emulate` 只要不覆盖 UA 就必然失败（v1.0.7 起）。** 扩展在无覆盖时回的是**显式** `userAgent: null`（`extension/background.js:719` `userAgent: userAgent || null`，而 `desktop` 预设的 UA 就是空串），我们这边 `output.schema` 声明的是 `userAgent: {type:'string'}`。宿主 `checkValue` 只对 `undefined` 放行、**对 null 下钻判类型**，于是 `device:"desktop"` 与任何「只给宽高、不给 UA」的调用都抛 `ToolOutputError`。用宿主校验器直接实测：旧行为 `["\"value.userAgent\" must be a string"]`，归一化后 `[]`。改法是插件侧把 null 与空串一并剥掉（**扩展不用改**），UA 真的被覆盖时则把 `UA="…"` 写进给模型的那句话（以前 UA 只待在进不了模型的 `value` 里）。
+- 审计台补了这类缺陷的**通用护栏**：封闭 schema 的 11 条工具，其 `value` 里出现任何 null 直接判失败（`hasNull` 递归检查），另加 `desktop` 预设 / 自定义宽高 / 带 UA / `reset` 四种形状各一条。`verify_render_contract.mjs` 110 → 126 项，`npm run verify` 311 → **327 项，exit 0**。
+- **CI 加了 `windows-latest` 一道门**（这个插件的实际宿主平台是 Windows，以前 CI 只有 ubuntu）：安装 → 类型检查 → 重新构建 → 「产物必须与源码同步」→ publint → 327 项实测台，首跑十步全 success。配套补了 `.gitattributes` 把仓库锁成 LF——不换行的话那道同步门在 Windows runner 上必然假红（本机 `core.autocrlf=true` 长期刷的「LF will be replaced by CRLF」是同一个根因；加完 `git status` 只有一个新文件，说明索引里本来就是 LF）。
+
 ## v1.0.13 (2026-10-12)
 
 - **错误契约补上最后一环：`effectState` 与 `hint` 现在写进 `message` 本身。** 宿主把异常渲染成模型可见内容时只取一句 `Error: ${message}`（`@deepseek-ai/dsh-tools` `lib/index.js:3616-3623`），`code` / `effectState` / `hint` 只进 `error.info` 与 HTTP 面——也就是说 v1.0.9 设计「不许盲目重试」这个信号时，接收方（模型）其实一个字都没收到，只能凭 `Error: browser command timed out after 800ms: click` 猜该不该重试。现在失败文案长这样：

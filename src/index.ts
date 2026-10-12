@@ -1151,9 +1151,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			},
 			render: (_args, value) => {
 				if (value.reset) return [{ type: 'text', text: `Tab ${value.tabId}: emulation reset to default` }]
+				// 覆盖生效的是哪个 UA 必须写出来：模型只看这句，看不见 value 里的字段。
+				const ua = value.userAgent === undefined ? '' : ` UA="${flattenOneLine(value.userAgent, 80)}"`
 				return [{
 					type: 'text',
-					text: `Tab ${value.tabId}: ${value.width || '?'}×${value.height || '?'} DPR=${value.deviceScaleFactor ?? '?'} mobile=${value.isMobile ?? false} touch=${value.hasTouch ?? false}`,
+					text: `Tab ${value.tabId}: ${value.width || '?'}×${value.height || '?'} DPR=${value.deviceScaleFactor ?? '?'} mobile=${value.isMobile ?? false} touch=${value.hasTouch ?? false}${ua}`,
 				}]
 			},
 		},
@@ -1168,7 +1170,29 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.isMobile === 'boolean') params.isMobile = args.isMobile
 			if (typeof args.hasTouch === 'boolean') params.hasTouch = args.hasTouch
 			if (typeof args.userAgent === 'string') params.userAgent = args.userAgent
-			return await controller.execute('emulate', params, exec.signal) as { tabId: number; reset?: boolean; width?: number; height?: number; deviceScaleFactor?: number; isMobile?: boolean; hasTouch?: boolean; userAgent?: string }
+			const raw = await controller.execute('emulate', params, exec.signal) as {
+				tabId: number
+				reset?: boolean | null
+				width?: number | null
+				height?: number | null
+				deviceScaleFactor?: number | null
+				isMobile?: boolean | null
+				hasTouch?: boolean | null
+				userAgent?: string | null
+			}
+			// 扩展在无覆盖时回的是显式 `userAgent: null`（background.js:719），而宿主的
+			// 校验器对 null **会下钻判类型**（只跳过 undefined）。原样透传时
+			// `device:"desktop"` 或自定义宽高的每次调用都会抛 ToolOutputError。
+			return {
+				tabId: raw.tabId,
+				...(raw.reset === true ? { reset: true } : {}),
+				...(typeof raw.width === 'number' ? { width: raw.width } : {}),
+				...(typeof raw.height === 'number' ? { height: raw.height } : {}),
+				...(typeof raw.deviceScaleFactor === 'number' ? { deviceScaleFactor: raw.deviceScaleFactor } : {}),
+				...(typeof raw.isMobile === 'boolean' ? { isMobile: raw.isMobile } : {}),
+				...(typeof raw.hasTouch === 'boolean' ? { hasTouch: raw.hasTouch } : {}),
+				...(typeof raw.userAgent === 'string' && raw.userAgent.length > 0 ? { userAgent: raw.userAgent } : {}),
+			}
 		},
 	}))
 }
