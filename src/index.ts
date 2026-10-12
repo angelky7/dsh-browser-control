@@ -388,10 +388,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_snapshot',
-		description: 'Inventory the page\'s interactive elements with stable refs; pass a ref to browser_click/browser_type afterwards.',
+		description: 'Inventory the page\'s interactive elements with stable refs; pass a ref to browser_click/browser_type afterwards. mode:"ax" numbers them by Chrome\'s accessibility tree (role + accessible name), which survives a DOM redesign; the default mode matches CSS selectors.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			limit: { type: 'number', description: 'Max elements returned; defaults to 120, capped at 200.' },
+			mode: { type: 'string', description: '"ax" for the accessibility tree, "dom" (default) for the selector list. "ax" falls back to "dom" with axFallback set if the page gives no a11y tree.' },
 		},
 		output: {
 			schema: {
@@ -401,6 +402,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					tabId: { type: 'number', required: true },
 					title: { type: 'string', required: true },
 					url: { type: 'string', required: true },
+					mode: { type: 'string' },
+					axFallback: { type: 'string' },
 					items: {
 						type: 'array',
 						required: true,
@@ -410,6 +413,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 							properties: {
 								ref: { type: 'string', required: true },
 								tag: { type: 'string', required: true },
+								role: { type: 'string' },
 								name: { type: 'string' },
 								href: { type: 'string' },
 							},
@@ -419,24 +423,34 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			},
 			render: (_args, value) => [{
 				type: 'text',
-				text: `${value.items.length} interactive elements on ${value.title}; click or fill them by ref.`,
+				text: `${value.items.length} interactive elements on ${value.title}`
+					+ ` (mode ${value.mode ?? 'dom'}); click or fill them by ref.`,
 			}],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Snapshot browser page', kind: 'other' as const }),
 		async execute(args, exec) {
 			const limit = Math.min(200, Math.max(1, args.limit ?? 120))
-			const raw = await controller.execute(
-				'snapshot',
-				args.tabId === undefined ? { limit } : { limit, tabId: args.tabId },
-				exec.signal,
-			) as { tabId: number; title?: string; url?: string; items?: Array<{ ref: string; tag: string; name?: string; href?: string }> }
+			const params: Record<string, unknown> = { limit }
+			if (typeof args.tabId === 'number') params.tabId = args.tabId
+			if (typeof args.mode === 'string') params.mode = args.mode
+			const raw = await controller.execute('snapshot', params, exec.signal) as {
+				tabId: number
+				title?: string
+				url?: string
+				mode?: string
+				axFallback?: string
+				items?: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
+			}
 			return {
 				tabId: raw.tabId,
 				title: raw.title ?? '',
 				url: raw.url ?? '',
+				...(raw.mode === undefined ? {} : { mode: raw.mode }),
+				...(raw.axFallback === undefined ? {} : { axFallback: raw.axFallback }),
 				items: (raw.items ?? []).map(item => ({
 					ref: item.ref,
 					tag: item.tag,
+					...(item.role === undefined ? {} : { role: item.role }),
 					...(item.name === undefined ? {} : { name: item.name }),
 					...(item.href === undefined ? {} : { href: item.href }),
 				})),

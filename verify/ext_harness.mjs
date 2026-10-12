@@ -18,6 +18,7 @@ const BG_PATH = new URL("../extension/background.js", import.meta.url);
 const MANIFEST_PATH = new URL("../extension/manifest.json", import.meta.url);
 let bgCode;
 let realManifest;
+let pageVm;
 
 /** @returns 一台内存里的假浏览器。 */
 export function makeModel({ failGroupTimes = 0 } = {}) {
@@ -41,11 +42,54 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
       failPlan: null,
       attachPlan: null,
       listeners: { onEvent: [], onDetach: [] },
+      /**
+       * 每个 CDP 方法返回什么。值可以是现成的对象，也可以是 `(params) => 对象`——
+       * 需要按参数演的时候（`DOM.resolveNode` 按 backendNodeId 找节点）用函数。
+       * 没登记的走下面 `cdpResult` 里的默认语义。
+       */
+      results: {},
+      /** 调用顺序记录，用来断言「先清了旧 ref 再取 AX 树」这类顺序要求。 */
+      log: [],
     },
+    /** 页面本身的样子（title / url），以及「真实 DOM 节点」集合。 */
+    page: { title: "Fake page", url: "https://fake.test/" },
+    axNodes: [],
+    elements: new Map(),
+    byBackend: new Map(),
+    nextObjectId: 1,
     addTab(windowId, url) {
       const id = this.nextTabId++;
       this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false });
       return id;
+    },
+    /**
+     * 造一个「页面上的真实元素」，供 AX 快照通过 backendDOMNodeId 找到它。
+     * 元素带 getBoundingClientRect / setAttribute，所以扩展那段在页面里跑的
+     * 函数是**真的被执行**，而不是我们替它假定结果。
+     */
+    addPageNode({ backendNodeId, tagName = "BUTTON", rect = { x: 10, y: 20, width: 100, height: 30 }, type, value, href } = {}) {
+      const objectId = `obj-${this.nextObjectId++}`;
+      // 真 getBoundingClientRect() 同时有 x/y/width/height 和 left/top/right/bottom，
+      // 页面里的函数读哪种都得给全，否则测试会假装通过
+      const full = {
+        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height,
+      };
+      const el = {
+        objectId,
+        tagName,
+        type,
+        value,
+        href,
+        attributes: {},
+        rect: full,
+        getBoundingClientRect() { return this.rect; },
+        setAttribute(name, v) { this.attributes[name] = String(v); },
+        removeAttribute(name) { delete this.attributes[name]; },
+      };
+      this.elements.set(objectId, el);
+      if (backendNodeId !== undefined) this.byBackend.set(backendNodeId, objectId);
+      return el;
     },
     /** 模拟 Chrome 单方面丢掉会话（DevTools 抢占 / 导航竞态），并广播 onDetach。 */
     fireDetach(tabId, reason = "target_closed") {
@@ -53,6 +97,54 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
       for (const fn of this.dbg.listeners.onDetach) fn({ tabId, targetType: "page" }, reason);
     },
   };
+}
+
+/**
+ * 把一次 CDP 调用演成真的结果。默认语义按 Chrome 的样子来：
+ * `Runtime.evaluate` 回 `{result:{value}}`、`DOM.resolveNode` 按 backendNodeId
+ * 找 objectId、`Runtime.callFunctionOn` **实际执行**扩展传进来的那段页面函数。
+ * 测试可以用 `model.dbg.results[method]` 覆盖任意一个。
+ */
+function cdpResult(model, method, params) {
+  const custom = model.dbg.results[method];
+  if (typeof custom === "function") return custom(params, model);
+  if (custom !== undefined) return custom;
+  switch (method) {
+    case "Runtime.evaluate": {
+      const expression = String(params?.expression ?? "");
+      if (expression.includes("document.title")) return { result: { value: model.page.title } };
+      if (expression.includes("location.href")) return { result: { value: model.page.url } };
+      return { result: { value: null } };
+    }
+    case "DOM.resolveNode": {
+      const objectId = model.byBackend.get(params?.backendNodeId);
+      return objectId ? { object: { objectId } } : {};
+    }
+    case "Runtime.callFunctionOn":
+      return runPageFunction(model, params);
+    case "Accessibility.getFullAXTree":
+      return { nodes: model.axNodes };
+    case "Page.enable": case "Runtime.enable": case "Network.enable":
+    case "DOM.enable": case "Accessibility.enable":
+      return {};
+    default:
+      return { result: { value: null } };
+  }
+}
+
+/** 在另一个 vm 里执行页面函数，`this` 绑到假元素上——所以副作用是真的发生的。 */
+function runPageFunction(model, params) {
+  const el = model.elements.get(params?.objectId);
+  if (el === undefined) return { exceptionDetails: { text: "No node with given id found" } };
+  pageVm ??= vm.createContext({ Math, String, Number, Object, Array, JSON, Boolean, isNaN, parseInt, parseFloat });
+  try {
+    const factory = vm.runInContext(`(${params.functionDeclaration})`, pageVm, { filename: "page-fn.js" });
+    const args = (params.arguments ?? []).map((a) => (a && "value" in a ? a.value : a?.objectId));
+    const value = Reflect.apply(factory, el, args);
+    return { result: { value: value === undefined ? null : value } };
+  } catch (error) {
+    return { exceptionDetails: { text: String(error?.message ?? error) } };
+  }
 }
 
 function stub(path, state) {
@@ -180,13 +272,15 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
       const tabId = Number(target?.tabId);
       const nth = (dbg.sends[method] || 0) + 1;
       dbg.sends[method] = nth;
+      dbg.log.push({ method, nth, params });
       let message;
       if (!dbg.attached.has(tabId)) message = `Debugger is not attached to the tab with id: ${tabId}.`;
       else if (typeof dbg.failPlan === "function") message = dbg.failPlan(method, nth, tabId);
       state.lastError = message ? { message } : undefined;
-      const result = { result: { value: null } };
-      if (done) { done(message ? undefined : result); return undefined; }
-      return message ? Promise.reject(new Error(message)) : Promise.resolve(result);
+      // 失败时 CDP 不回结果，扩展就是靠 lastError 判的
+      const value = message ? undefined : cdpResult(model, method, params);
+      if (done) { done(message ? undefined : value); return undefined; }
+      return message ? Promise.reject(new Error(message)) : Promise.resolve(value);
     },
     onEvent: { addListener: (fn) => { dbg.listeners.onEvent.push(fn); } },
     onDetach: { addListener: (fn) => { dbg.listeners.onDetach.push(fn); } },

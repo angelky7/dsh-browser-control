@@ -1210,45 +1210,170 @@ const CONTEXT_DESTROYED_RE = /Execution context was destroyed|Cannot find defaul
 const SNAPSHOT_SELECTOR = 'a[href], button, input, select, textarea, [role="button"], [role="link"], '
 	+ '[role="tab"], [role="checkbox"], [role="radio"], [contenteditable="true"], [onclick]';
 
+/** DOM mode: stamp `data-dsh-ref` on everything matching the selector list. */
+async function snapshotViaDom(send, tab, limit) {
+	const payload = await send('Runtime.evaluate', {
+		expression: `(() => {
+			const ATTR = 'data-dsh-ref';
+			document.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
+			const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})];
+			const items = [];
+			let n = 0;
+			for (const el of nodes) {
+				if (items.length >= ${limit}) break;
+				const r = el.getBoundingClientRect();
+				if (r.width === 0 && r.height === 0) continue;
+				const ref = 'e' + (++n);
+				el.setAttribute(ATTR, ref);
+				const isField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+				items.push({
+					ref, tag: el.tagName.toLowerCase(),
+					type: el.getAttribute('type') || undefined,
+					role: el.getAttribute('role') || undefined,
+					name: (el.getAttribute('aria-label') || el.getAttribute('placeholder')
+						|| (el.textContent || '').trim().replace(/\\s+/g, ' ')).slice(0, 80) || undefined,
+					value: isField || el instanceof HTMLSelectElement ? String(el.value ?? '').slice(0, 60) : undefined,
+					href: el.hasAttribute('href') ? el.href : undefined,
+					rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+				});
+			}
+			return { tabId: ${tab.id}, title: document.title, url: location.href, total: nodes.length, items };
+		})()`,
+		awaitPromise: false, returnByValue: true, userGesture: true,
+	}).then((res) => {
+		if (res.exceptionDetails) throw new Error(res.exceptionDetails.text);
+		return res.result.value;
+	});
+	payload.limitedTo = limit;
+	return payload;
+}
+
+/* --------------------------------------------------- snapshot: a11y (AX) mode */
+
+/**
+ * Roles an agent can actually act on. Chrome computes these (including the
+ * accessible name, which is what makes this survive a DOM redesign), so the list
+ * is deliberately an allow-list: internal nodes like `GenericContainer`,
+ * `StaticText` and `InlineTextBox` would otherwise dominate the tree and eat the
+ * whole `limit` budget on a text-heavy page.
+ */
+const AX_ACTIONABLE_ROLES = new Set([
+	'button', 'link', 'textbox', 'searchbox', 'combobox', 'listbox', 'menuitem',
+	'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'checkbox', 'switch',
+	'slider', 'spinbutton', 'tab', 'treeitem', 'gridcell', 'columnheader', 'rowheader',
+]);
+
+/**
+ * Runs in the page: returns null for anything invisible (so no ref is consumed
+ * and no attribute is left behind), otherwise stamps the ref and reports back
+ * what the DOM node actually is. One round trip per kept element.
+ */
+const AX_STAMP_FN = 'function(ref){'
+	+ 'var r = this.getBoundingClientRect();'
+	+ 'if (r.width === 0 && r.height === 0) return null;'
+	+ 'this.setAttribute("data-dsh-ref", ref);'
+	+ 'return {'
+	+ ' tag: this.tagName.toLowerCase(),'
+	+ ' type: (this.type ? String(this.type) : undefined),'
+	+ ' href: (this.href ? String(this.href) : undefined),'
+	+ ' value: (this.value === undefined || this.value === null) ? undefined : String(this.value).slice(0, 60),'
+	+ ' rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }'
+	+ '};'
+	+ '}';
+
+/**
+ * AX mode: read Chrome's accessibility tree, then stamp the **same**
+ * `data-dsh-ref` attribute onto the real DOM node behind each interesting a11y
+ * node. That keeps the ref contract intact — `browser_click` / `browser_type`
+ * still resolve `[data-dsh-ref="e7"]` — while the agent gets `role` + accessible
+ * `name` instead of a guessed selector.
+ */
+async function snapshotViaAx(send, tab, limit) {
+	await send('DOM.enable').catch(() => {});
+	await send('Accessibility.enable').catch(() => {});
+	// Clear refs from a previous snapshot first: a stale attribute would otherwise
+	// let an old ref click whatever is on screen now.
+	await send('Runtime.evaluate', {
+		expression: 'document.querySelectorAll("[data-dsh-ref]").forEach((el) => el.removeAttribute("data-dsh-ref")); void 0;',
+		returnByValue: true,
+	}).catch(() => {});
+	const tree = await send('Accessibility.getFullAXTree');
+	const nodes = (tree && tree.nodes) || [];
+	if (!Array.isArray(nodes)) throw new Error('Accessibility.getFullAXTree 没有返回 nodes');
+	const candidates = nodes.filter((node) => node
+		&& node.ignored !== true
+		&& node.backendDOMNodeId !== undefined
+		&& AX_ACTIONABLE_ROLES.has(String(node.role && node.role.value || '').toLowerCase()));
+	const items = [];
+	const skipped = { unresolved: 0, invisible: 0 };
+	for (const node of candidates) {
+		if (items.length >= limit) break;
+		const ref = 'e' + (items.length + 1);
+		let resolved = null;
+		try {
+			resolved = await send('DOM.resolveNode', { backendNodeId: node.backendDOMNodeId });
+		} catch {
+			resolved = null;
+		}
+		const objectId = resolved && resolved.object && resolved.object.objectId;
+		if (!objectId) { skipped.unresolved += 1; continue; }
+		let call = null;
+		try {
+			call = await send('Runtime.callFunctionOn', {
+				objectId, functionDeclaration: AX_STAMP_FN, arguments: [{ value: ref }], returnByValue: true,
+			});
+		} catch {
+			skipped.unresolved += 1;
+			continue;
+		}
+		const geo = call && call.result ? call.result.value : null;
+		if (call && call.exceptionDetails) { skipped.unresolved += 1; continue; }
+		// null means invisible: the stamp function refused to write the attribute,
+		// so this ref number is simply reused by the next candidate.
+		if (!geo) { skipped.invisible += 1; continue; }
+		items.push({
+			ref,
+			tag: geo.tag,
+			role: String(node.role && node.role.value || '').toLowerCase() || undefined,
+			name: String(node.name && node.name.value || '').replace(/\s+/g, ' ').slice(0, 80) || undefined,
+			type: geo.type,
+			href: geo.href,
+			value: geo.value,
+			rect: geo.rect,
+		});
+	}
+	return {
+		tabId: tab.id,
+		mode: 'ax',
+		title: await send('Runtime.evaluate', { expression: 'document.title', returnByValue: true })
+			.then((r) => r.result && r.result.value).catch(() => undefined),
+		url: await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
+			.then((r) => r.result && r.result.value).catch(() => undefined),
+		total: candidates.length,
+		ax: { nodes: nodes.length, candidates: candidates.length, ...skipped },
+		items,
+		limitedTo: limit,
+	};
+}
+
 async function cmdSnapshot(params) {
 	const tab = await resolveTab(params.tabId);
 	const limit = Math.min(200, Math.max(1, Number(params.limit) || 120));
+	const wantAx = String(params.mode ?? params.source ?? 'dom').toLowerCase() === 'ax';
 	return withCDP(tab.id, async (send) => {
 		await send('Runtime.enable').catch(() => {});
-		const payload = await send('Runtime.evaluate', {
-			expression: `(() => {
-				const ATTR = 'data-dsh-ref';
-				document.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
-				const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})];
-				const items = [];
-				let n = 0;
-				for (const el of nodes) {
-					if (items.length >= ${limit}) break;
-					const r = el.getBoundingClientRect();
-					if (r.width === 0 && r.height === 0) continue;
-					const ref = 'e' + (++n);
-					el.setAttribute(ATTR, ref);
-					const isField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
-					items.push({
-						ref, tag: el.tagName.toLowerCase(),
-						type: el.getAttribute('type') || undefined,
-						role: el.getAttribute('role') || undefined,
-						name: (el.getAttribute('aria-label') || el.getAttribute('placeholder')
-							|| (el.textContent || '').trim().replace(/\\s+/g, ' ')).slice(0, 80) || undefined,
-						value: isField || el instanceof HTMLSelectElement ? String(el.value ?? '').slice(0, 60) : undefined,
-						href: el.hasAttribute('href') ? el.href : undefined,
-						rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-					});
-				}
-				return { tabId: ${tab.id}, title: document.title, url: location.href, total: nodes.length, items };
-			})()`,
-			awaitPromise: false, returnByValue: true, userGesture: true,
-		}).then((res) => {
-			if (res.exceptionDetails) throw new Error(res.exceptionDetails.text);
-			return res.result.value;
-		});
-		payload.limitedTo = limit;
-		return payload;
+		if (!wantAx) return snapshotViaDom(send, tab, limit);
+		try {
+			return await snapshotViaAx(send, tab, limit);
+		} catch (error) {
+			// A page (or an older Chrome) that will not give us an accessibility
+			// tree must still produce a usable snapshot: fall back to the DOM
+			// selectors and say out loud that we did.
+			const payload = await snapshotViaDom(send, tab, limit);
+			payload.mode = 'dom';
+			payload.axFallback = String((error && error.message) || error);
+			return payload;
+		}
 	});
 }
 

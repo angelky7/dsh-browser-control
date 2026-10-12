@@ -208,7 +208,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 |---|---|
 | `browser_navigate` | 导航到 URL |
 | `browser_read` | 读取页面文本/HTML |
-| `browser_snapshot` | 页面快照 → ref 交互树 |
+| `browser_snapshot` | 页面快照 → ref 交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名） |
 | `browser_click` | 点击元素（by ref / selector） |
 | `browser_type` | 在输入框填入文本 |
 | `browser_press` | 模拟键盘按键 |

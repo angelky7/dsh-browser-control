@@ -49,6 +49,17 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 
 导航落到 `chrome-error://` 时，`browser_navigate` 结果携带 `siteUnreachable: {reason}`（dns/unreachable），且 `url` 回报为请求的目标 URL 而非内部协议地址。
 
+## 快照的两种模式
+
+- 默认 `mode:"dom"`：按固定选择器列表（`a[href]` / `button` / `input` / `[role=…]` / `[contenteditable]` / `[onclick]`）扫可交互元素。
+- `mode:"ax"`：用 Chrome 的 `Accessibility.getFullAXTree`。`role` 和 `name` 是**浏览器自己算出来的可访问名**（aria-label、`<label>`、`alt`、可见文本的合成结果），比让 agent 猜 CSS 选择器抗改版。
+- **两种模式的 ref 契约完全一样**：都往真实 DOM 元素上写 `data-dsh-ref`，所以 `browser_click` / `browser_type` 传 ref 的写法不变。
+- 只收「可操作角色」白名单（button / link / textbox / searchbox / combobox / listbox / menuitem* / option / radio / checkbox / switch / slider / spinbutton / tab / treeitem / gridcell / columnheader / rowheader）。噪音角色 `GenericContainer` / `StaticText` / `InlineTextBox` 一律滤掉——否则文字多的页面会把 `limit` 全吃在文本节点上。
+- 隐形元素（`getBoundingClientRect()` 宽高都是 0）**不占 ref 号也不写属性**；AX 树报了 `backendDOMNodeId` 但 DOM 里已经没有该节点时计入 `ax.unresolved` 并跳过。两种情况都在 `ax` 计数里分开回报。
+- AX 快照**先清掉上一轮的 `data-dsh-ref` 再取树**：旧 ref 绝不能指向现在屏幕上的另一个元素。
+- AX 域拿不到（老 Chrome、无障碍未就绪、页面拒绝）时自动降级回 DOM 模式，结果带 `mode:"dom"` 与 `axFallback:"<原因>"`，**不让整条命令失败**；agent 据此知道这次的名字来自 DOM 而不是 AX。
+- 代价：AX 模式每条保留元素多两次 CDP 往返（`DOM.resolveNode` + `Runtime.callFunctionOn`），本地链路可接受，`limit`（默认 120，上限 200）是硬闸。
+
 ## agent 标签页归组
 
 - `browser_tabs open` 新建的标签会自动收进**当前窗口**的 `DSH` 蓝色分组（每窗口一组），给人一眼分辨机器开的和自己开的。

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- 新增 `browser_snapshot` 的 **AX 语义模式**（`docs/CAPABILITIES.md` 排第一的那项，零新增权限）：`mode:"ax"` 走 Chrome 的 `Accessibility.getFullAXTree`，元素的名字与角色由浏览器算（aria-label / `<label>` / `alt` / 可见文本的合成结果），比让 agent 猜 CSS 选择器抗改版。**ref 契约一点没变**：AX 节点经 `DOM.resolveNode` + `Runtime.callFunctionOn` 找到真实元素后，写的还是同一个 `data-dsh-ref`，所以 `browser_click` / `browser_type` 的 `ref` 用法完全照旧，DOM 模式也仍是默认。
+- AX 模式的四条硬规则（都有实测台兜着）：只收「可操作角色」白名单，`GenericContainer`/`StaticText`/`InlineTextBox` 这些噪音角色一律滤掉（否则文字多的页面会把 `limit` 吃在文本节点上）；隐形元素不占 ref 号也不写属性；AX 报了 `backendDOMNodeId` 而 DOM 里已无该节点时计入 `ax.unresolved` 并跳过；取树**之前**先清掉上一轮的 `data-dsh-ref`，旧 ref 不会指向现在屏幕上的另一个元素。
+- 降级不硬撑：AX 域拿不到（老 Chrome / 无障碍未就绪 / 页面拒绝）时自动回落 DOM 模式，结果里带 `mode:"dom"` 与 `axFallback:"<原因>"`，整条命令不失败，agent 也知道这次的名字不是来自 AX。
+- 输出面：`browser_snapshot` 的结果项新增 `role`，顶层新增 `mode` / `axFallback`（都是可选字段，老调用方不受影响）。
+- 新增 `verify/verify_snapshot_ax.mjs`（18 项，已串进 `npm run verify`，现在共 **169 项断言 exit 0**）：扩展传进页面里执行的那段 stamping 函数是真的被 `node:vm` 跑一遍（`this` 绑到假元素），所以能断言「`data-dsh-ref` 确实写到了元素上」而不是只信返回值。
+- 测试台顺手补了两处会致假绿的坑：假 `getBoundingClientRect()` 必须同时给 `x/y/width/height` 和 `left/top/right/bottom`（页面函数读 `left/top`，缺了会得到 `NaN`，第一版就把尺寸悄悄测成了 `null`）；AX 节点与「真实存在的 DOM 元素」必须能分开设，否则构造不出「AX 报了节点但 DOM 已经没有了」这条真实路径。
+- `verify/ext_harness.mjs` 的假 debugger 升级成会**演 CDP 结果**：`Runtime.evaluate` 按表达式回 title/url、`DOM.resolveNode` 按 `backendNodeId` 找 objectId、`Runtime.callFunctionOn` 执行页面函数、`Accessibility.getFullAXTree` 回登记的树，`model.dbg.results[method]` 可逐个覆盖，`model.dbg.log` 记录调用顺序（用来断言「先清 ref 再取树」）。
+
+
 - 新增 `verify/verify_cdp_retry.mjs`（已串进 `npm run verify`）：把 PR #7 的两个面都变成护栏——**核心修复该做的事**（会话被 Chrome 抢走后要能恢复）和**它第一版犯的错**（重放整个闭包导致 `Input.dispatchMouseEvent` 从 2 次变 3 次、`mode:'type'` 重复输入）。跑法是真的加载 `extension/background.js`，配一台**有状态的假 `chrome.debugger`**：它自己维护 `attached` 集合，所以「扩展缓存还说附着着、Chrome 早就收回了」会如实表现为 `Debugger is not attached to the tab with id: N.`。六个场景 S1~S6，其中 S3 断言重试有界（≤2 次）、S4 断言非会话类错误一次都不许多打。
   - **同一条命令可以换代码跑**：`node verify/verify_cdp_retry.mjs <相对路径>` + `CDP_RETRY_FIXED=1`。实测两份文件都能全绿且**能区分**：仓库当前版 S1 =「失败：Debugger is not attached…attach 次数 1（不重连）」，把 PR #7 三方合并到当前 main 的预览文件（`git merge-file`，零冲突）则是「成功｜attach 次数 2」，S3 从 1 次尝试变 2 次仍然有界，S2 两边都只派发 2 个鼠标事件。合并 PR #7 时把 `CDP_RETRY_FIXED=1` 一起改进调用，S1 的断言方向随之翻正——不留永远绿的空断言。
   - 顺带修掉一个会让整类测试**假绿**的坑：`ext_harness.mjs` 里假 `chrome.runtime.lastError` 原来是静态 `undefined` 属性，而扩展全靠读它来判失败——所有错误都被吞掉，S2/S3/S4 当时全过但什么都没测到。改成 getter 之后才暴露出真实行为。
