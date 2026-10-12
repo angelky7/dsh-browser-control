@@ -208,15 +208,18 @@ function clampText(value: string, maxChars: number): { content: string; truncate
 
 /**
  * Cap one rendered payload and *say* it was cut. The previous fixed slices
- * (300 / 400 chars) cut JSON mid-token, so the model received malformed JSON
- * with no sign that anything was missing. Click/type/press/scroll results are
- * well under this cap, so they now arrive complete; bigger payloads are marked.
+ * (200 / 300 / 400 / 600 / 1200 chars) cut JSON mid-token, so the model received
+ * malformed JSON with no sign that anything was missing. Click/type/press/scroll
+ * results are well under this cap, so they now arrive complete; bigger payloads
+ * are cut at a character boundary and marked twice: once for a human reading the
+ * card, once as a stable `[renderedTruncated …]` token an agent can parse to
+ * decide whether to re-issue a narrower query.
  */
 const MAX_RENDERED_CHARS = 4_000
-function clampRendered(text: string): string {
-	return text.length <= MAX_RENDERED_CHARS
-		? text
-		: `${text.slice(0, MAX_RENDERED_CHARS)}… (+${text.length - MAX_RENDERED_CHARS} chars truncated — narrow the query to see the rest)`
+function clampRendered(text: string, maxChars = MAX_RENDERED_CHARS): string {
+	if (text.length <= maxChars) return text
+	const omitted = text.length - maxChars
+	return `${text.slice(0, maxChars)}\n… [renderedTruncated omittedChars=${omitted} limitChars=${maxChars}] narrow the query and call again to see the rest`
 }
 
 /**
@@ -611,7 +614,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 200) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Wait for ${args.selector ?? args.text ?? 'page condition'}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -636,7 +639,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 1200) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: `Find ${args.selector}`, kind: 'other' as const }),
 		async execute(args, exec) {
@@ -655,7 +658,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
-			render: (_args, value) => [{ type: 'text', text: JSON.stringify(value).slice(0, 600) }],
+			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: args => ({ card: 'generic', title: args.policy ? `Dialog policy → ${args.policy}` : 'Read dialog policy', kind: 'other' as const }),
 		async execute(args, exec) {
