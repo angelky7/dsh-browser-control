@@ -87,7 +87,9 @@ interface ResolvedConfig {
 }
 
 const SNAPSHOT_REF_SELECTOR_PATTERN = /^e\d+$/
-const READ_CONTENT_MAX_CHARS = 120_000
+/** One `browser_read` window, in characters of page text. Longer pages are paged
+ *  with `offset`, so no single call can put a whole site into the transcript. */
+const READ_WINDOW_MAX_CHARS = 20_000
 
 /**
  * Owns zero or one live {@link BridgeServer} and restarts it whenever the
@@ -199,13 +201,6 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
 
-/** Cap long page reads and mark the cut, so token cost stays bounded. */
-function clampText(value: string, maxChars: number): { content: string; truncated: boolean } {
-	return value.length <= maxChars
-		? { content: value, truncated: false }
-		: { content: value.slice(0, maxChars), truncated: true }
-}
-
 /**
  * Cap one rendered payload and *say* it was cut. The previous fixed slices
  * (200 / 300 / 400 / 600 / 1200 chars) cut JSON mid-token, so the model received
@@ -220,6 +215,15 @@ function clampRendered(text: string, maxChars = MAX_RENDERED_CHARS): string {
 	if (text.length <= maxChars) return text
 	const omitted = text.length - maxChars
 	return `${text.slice(0, maxChars)}\n… [renderedTruncated omittedChars=${omitted} limitChars=${maxChars}] narrow the query and call again to see the rest`
+}
+
+/** Model-facing budget for one snapshot listing; `limit` narrows the listing. */
+const SNAPSHOT_RENDER_MAX_CHARS = 8_000
+
+/** Collapse one page-supplied field to a single line inside a rendered listing. */
+function flattenOneLine(value: string, maxChars: number): string {
+	const flat = value.replace(/\s+/g, ' ').trim()
+	return flat.length <= maxChars ? flat : `${flat.slice(0, maxChars)}…`
 }
 
 /**
@@ -321,9 +325,13 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			+ 'Browser Control extension; they act on the active tab unless a tabId is passed. '
 			+ 'Prefer browser_snapshot first on unfamiliar pages: it numbers interactive elements, '
 			+ 'and browser_click/browser_type accept the returned ref instead of guessing CSS selectors. '
-			+ 'browser_read extracts page text, browser_screenshot saves a PNG/JPEG and returns its file '
+			+ 'browser_read extracts page text in a window (offset/limit) and reports how much text is '
+			+ 'left, browser_screenshot saves a PNG/JPEG and returns its file '
 			+ 'path (view it with an image tool). Calls fail with actionable copy while the bridge is '
-			+ 'disabled or no browser is connected.',
+			+ 'disabled or no browser is connected. When a result is cut to bound token cost it is '
+			+ 'marked "[renderedTruncated omittedChars=N limitChars=L]" — re-issue a narrower query '
+			+ '(smaller limit, a pattern filter, or browser_read\'s offset) instead of assuming the '
+			+ 'page is shorter than it is.',
 	})
 
 	ctx.tools.register(defineTool({
@@ -397,10 +405,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_read',
-		description: 'Read the current page: title, URL, ready state, and body text (or full HTML).',
+		description: 'Read the current page: title, URL and the page text itself (or full HTML) in a window you control with offset/limit. The returned text is what you see — no separate fetch step is needed.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			mode: { type: 'string', description: '"text" (default) for visible text, "html" for the whole document.' },
+			offset: { type: 'number', description: `Character index the window starts at; default 0. Use the "call again with offset=" value the previous result reported.` },
+			limit: { type: 'number', description: `Characters to return; default and cap ${READ_WINDOW_MAX_CHARS}.` },
 		},
 		output: {
 			schema: {
@@ -413,29 +423,38 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					url: { type: 'string', required: true },
 					content: { type: 'string', required: true },
 					truncated: { type: 'boolean', required: true },
+					offset: { type: 'number', required: true },
+					totalChars: { type: 'number', required: true },
 				},
 			},
-			render: (_args, value) => [{
-				type: 'text',
-				text: `${value.title} (${value.url}) — ${value.content.length} chars${value.truncated ? ', truncated' : ''}`,
-			}],
+			render: (_args, value) => {
+				const end = value.offset + value.content.length
+				const head = `${value.title} (${value.url}) — ${value.mode} chars ${value.offset}-${end} of ${value.totalChars}`
+					+ (value.truncated ? `; call again with offset=${end} to continue` : '')
+				return [{ type: 'text', text: `${head}\n\n${value.content}` }]
+			},
 		},
 		presentCall: () => ({ card: 'generic', title: 'Read browser page', kind: 'other' as const }),
 		async execute(args, exec) {
 			const mode = args.mode === 'html' ? 'html' : 'text'
+			const offset = Math.max(0, Math.floor(Number(args.offset ?? 0)) || 0)
+			const limit = Math.min(READ_WINDOW_MAX_CHARS, Math.max(1, Math.floor(Number(args.limit ?? READ_WINDOW_MAX_CHARS)) || READ_WINDOW_MAX_CHARS))
 			const raw = await controller.execute(
 				'content',
 				args.tabId === undefined ? { mode } : { mode, tabId: args.tabId },
 				exec.signal,
 			) as { tabId: number; title?: string; url?: string; content?: string }
-			const clamped = clampText(raw.content ?? '', READ_CONTENT_MAX_CHARS)
+			const full = raw.content ?? ''
+			const content = full.slice(offset, offset + limit)
 			return {
 				tabId: raw.tabId,
 				mode,
 				title: raw.title ?? '',
 				url: raw.url ?? '',
-				content: clamped.content,
-				truncated: clamped.truncated,
+				content,
+				truncated: offset + content.length < full.length,
+				offset,
+				totalChars: full.length,
 			}
 		},
 	}))
@@ -475,11 +494,17 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					},
 				},
 			},
-			render: (_args, value) => [{
-				type: 'text',
-				text: `${value.items.length} interactive elements on ${value.title}`
-					+ ` (mode ${value.mode ?? 'dom'}); click or fill them by ref.`,
-			}],
+			render: (_args, value) => {
+				const head = `${value.items.length} interactive elements on ${value.title}`
+					+ ` (mode ${value.mode ?? 'dom'}); click or fill them by ref:`
+					+ (value.axFallback === undefined ? '' : `\n(mode ax fell back to dom: ${value.axFallback})`)
+				const lines = value.items.map(item => {
+					const name = item.name === undefined ? '' : ` "${flattenOneLine(item.name, 80)}"`
+					const href = item.href === undefined ? '' : ` -> ${flattenOneLine(item.href, 100)}`
+					return `[${item.ref}] ${item.role ?? item.tag}${name}${href}`
+				})
+				return [{ type: 'text', text: clampRendered([head, ...lines].join('\n'), SNAPSHOT_RENDER_MAX_CHARS) }]
+			},
 		},
 		presentCall: () => ({ card: 'generic', title: 'Snapshot browser page', kind: 'other' as const }),
 		async execute(args, exec) {

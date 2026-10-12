@@ -133,6 +133,73 @@ for (const [name, command, args, payload] of EXTENSION_SHAPES) {
     out.violations.length === 0, out.violations.join(" | "));
 }
 
+// 5) browser_read：正文本身要进模型可见文本。
+//    修之前 render 只交出一句「Title (url) — 4321 chars」，正文留在 value 里，
+//    而 value 不进模型 —— 也就是「读页面」这个工具从来没把页面交给过模型。
+{
+  const marker = "HEAD-MARKER";
+  const tailMarker = "TAIL-MARKER";
+  const page = `${marker} ${"a".repeat(25_000)} ${tailMarker}`;
+  const payload = { tabId: 3, title: "Example Page", url: "https://p.example/", content: page };
+
+  const first = await runTool("browser_read", {}, payload, "content");
+  check("browser_read：真实载荷过输出 schema", first.violations.length === 0, first.violations.join(" | "));
+  check("browser_read：模型看到的文本里有页面正文", first.text.includes(marker), first.text.slice(0, 120));
+  check("browser_read：窗口默认 20000 字符", first.value.content.length === 20_000, `len=${first.value.content.length}`);
+  check("browser_read：totalChars 报的是整页长度", first.value.totalChars === page.length, `${first.value.totalChars} vs ${page.length}`);
+  check("browser_read：还有下文时明确给出下一个 offset",
+    first.text.includes(`call again with offset=${20_000}`) && first.value.truncated === true,
+    first.text.slice(0, 160));
+  check("browser_read：单次可见文本有上界（不会把整站灌进上下文）",
+    first.text.length <= 20_000 + 200, `len=${first.text.length}`);
+
+  const second = await runTool("browser_read", { offset: 20_000 }, payload, "content");
+  check("browser_read：offset 翻页能拿到尾段", second.text.includes(tailMarker) && second.value.truncated === false,
+    second.text.slice(0, 120));
+  check("browser_read：读完最后一窗不再喊 continue", !second.text.includes("call again"), second.text.slice(0, 120));
+
+  const small = await runTool("browser_read", {}, { tabId: 3, title: "S", url: "https://s.example/", content: "short body" }, "content");
+  check("browser_read：短页面原样给全文", small.text.includes("short body") && small.value.truncated === false, small.text);
+  check("browser_read：空正文也不谎报长度",
+    (await runTool("browser_read", {}, { tabId: 3, title: "", url: "", content: "" }, "content")).value.totalChars === 0);
+}
+
+// 6) browser_snapshot：ref 列表要进模型可见文本。
+//    修之前只有一句「N interactive elements …; click or fill them by ref.」，
+//    ref 一个都没给出去 —— 而系统提示词让模型「先快照、再按 ref 点击」。
+{
+  const items = Array.from({ length: 200 }, (_unused, i) => ({
+    ref: `e${i}`,
+    tag: i % 3 === 0 ? "a" : "button",
+    role: i % 3 === 0 ? "link" : "button",
+    name: `Option ${i}  with\nwhitespace`,
+    ...(i % 3 === 0 ? { href: `https://p.example/page/${i}` } : {}),
+  }));
+  const payload = { tabId: 3, title: "Example Page", url: "https://p.example/", mode: "ax", items };
+  const out = await runTool("browser_snapshot", {}, payload, "snapshot");
+  check("browser_snapshot：真实载荷过输出 schema", out.violations.length === 0, out.violations.join(" | "));
+  check("browser_snapshot：模型看到的文本里有 ref", out.text.includes("[e0]") && out.text.includes("[e7]"), out.text.slice(0, 200));
+  check("browser_snapshot：每条带 role 与可读名字", /e13\] button "Option 13 with whitespace"/.test(out.text), out.text.split("\n")[14]);
+  check("browser_snapshot：条目里的换行被压成一行", !out.text.includes("Option 1  with\nwhitespace"));
+  check("browser_snapshot：链接把 href 也带出来", out.text.includes("-> https://p.example/page/0"), out.text.split("\n")[1]);
+  const tag = out.text.match(TRUNCATION_TAG);
+  check("browser_snapshot：200 条超预算时带机器可读截断标记", Boolean(tag), out.text.slice(-90));
+  check("browser_snapshot：正文恰好在 8000 字符预算处切断",
+    tag ? out.text.indexOf("\n… [renderedTruncated") === 8000 && Number(tag[2]) === 8000 : false,
+    tag ? `cutAt=${out.text.indexOf("\n… [renderedTruncated")} limit=${tag[2]}` : "no tag");
+  check("browser_snapshot：被截掉的确实是尾部而不是头部",
+    out.text.includes("[e0]") && !out.text.includes("[e199]") && Number(tag?.[1] ?? 0) > 0,
+    `omitted=${tag?.[1]}`);
+
+  const few = await runTool("browser_snapshot", {}, { tabId: 3, title: "T", url: "u", items: [{ ref: "e1", tag: "button", name: "OK" }] }, "snapshot");
+  check("browser_snapshot：小快照不带截断标记", !few.text.includes("renderedTruncated"), few.text);
+  check("browser_snapshot：dom 模式仍按 tag 列", few.text.includes("[e1] button \"OK\""), few.text);
+
+  const fell = await runTool("browser_snapshot", { mode: "ax" },
+    { tabId: 3, title: "T", url: "u", mode: "dom", axFallback: "no a11y tree", items: [{ ref: "e1", tag: "a", href: "/x" }] }, "snapshot");
+  check("browser_snapshot：ax 回退时把原因说给模型", fell.text.includes("no a11y tree") && fell.text.includes("[e1] a -> /x"), fell.text);
+}
+
 for (const disposer of disposers) {
   try { await disposer[0](); } catch { /*  teardown 不参与断言 */ }
 }
