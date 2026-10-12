@@ -8,6 +8,9 @@
 // 这个台子把每条工具的真实返回值同时喂给宿主自己的校验器和它的 render，逐条问：
 // schema 过不过、模型可见文本里有没有那份数据、被截断时信号是不是机器可读的。
 // 用法: node verify/verify_render_contract.mjs
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Config, apply } from "../lib/index.js";
 
 const { validateJsonSchemaValue } = await import("@deepseek-ai/dsh-tools");
@@ -23,7 +26,9 @@ const TOKEN = "render-contract-test";
 const tools = [];
 const disposers = [];
 
-const config = Config({ enabled: true, port: PORT, token: TOKEN });
+// 截图 / PDF / cleanup 三条会真写文件，所以把 shotsDir 指到临时目录，别脏了仓库
+const SHOTS = await mkdtemp(path.join(tmpdir(), "dsh-render-contract-"));
+const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);
@@ -264,6 +269,74 @@ for (const [name, command, args, payload] of EXTENSION_SHAPES) {
     !JSON.stringify(out.value).includes("session=secret") && !JSON.stringify(out.value).includes("k=v"),
     JSON.stringify(out.value.requests[0]));
 }
+
+// 8) 全 20 条工具的地面真相审计：扩展真实载荷 → 宿主校验器 → 模型可见文本。
+//    上面几段是逐条深挖，这一段是**广度**：一条都不许漏，因为漏掉的那条就是下一个
+//    「活了 12 个版本没人发现」。每行都断言两件事：value 过得了自己的 schema，
+//    而且这次调用真正要的数据出现在模型看到的文本里（`expect` 是必须命中的片段）。
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const PDF_B64 = "JVBERi0xLjQKJcOkw7zDtsOfCg==";
+
+const GROUND_TRUTH = [
+  // [工具, 扩展命令, 参数, 扩展真实回传, 模型必须看到的片段]
+  ["browser_navigate", "nav", { url: "https://p.example/" },
+    { tabId: 7, url: "https://p.example/", title: "Example" }, ["Tab 7 now shows", "Example", "https://p.example/"]],
+  ["browser_read", "content", {},
+    { tabId: 3, title: "T", url: "https://p.example/", content: "READ-GT-BODY" }, ["READ-GT-BODY"]],
+  ["browser_snapshot", "snapshot", {},
+    { tabId: 3, title: "T", url: "https://p.example/", items: [{ ref: "e41", tag: "button", name: "SUBMIT-GT" }] }, ["[e41]", "SUBMIT-GT"]],
+  ["browser_click", "click", { selector: "#pay" },
+    { tabId: 3, clicked: true, x: 128, y: 640 }, ["clicked", "128"]],
+  ["browser_type", "input", { selector: "#q", value: "abc" },
+    { tabId: 3, filled: true, value: "abc" }, ["filled", "abc"]],
+  ["browser_press", "press", { key: "Enter" },
+    { tabId: 3, key: "Enter", pressed: true }, ["Enter", "pressed"]],
+  ["browser_scroll", "scroll", { y: 300 },
+    { tabId: 3, x: 0, y: 300, scrollY: 300 }, ["scrollY"]],
+  ["browser_wait", "wait", { text: "已加载" },
+    { tabId: 3, matched: true, waitedMs: 120 }, ["matched", "120"]],
+  ["browser_find", "find", { selector: "a" },
+    { tabId: 3, count: 2, items: [{ tag: "a", text: "FIND-GT", rect: { x: 1, y: 2, w: 3, h: 4 } }] }, ["FIND-GT", "count"]],
+  ["browser_dialog", "dialog", {},
+    { policy: "accept", recent: [{ type: "alert", message: "DIALOG-GT", answeredAs: "accept" }] }, ["DIALOG-GT", "accept"]],
+  ["browser_info", "browser.info", {},
+    { connected: true, browser: { name: "Chrome", version: "140.0.7339.133" }, tabs: 4, protocol: 1, version: "1.0.12" }, ["Chrome", "connected"]],
+  ["browser_tabs", "tabs.list", { action: "list" },
+    { tabs: [{ id: 12, url: "https://tabs.example/page", title: "TAB-GT", active: true }] }, ["TAB-GT", "https://tabs.example/page"]],
+  ["browser_evaluate", "eval", { expression: "document.title" },
+    { tabId: 3, value: "EVAL-GT" }, ["EVAL-GT"]],
+  ["browser_screenshot", "screenshot", {},
+    { tabId: 3, format: "png", base64: PNG_B64, tabTitle: "SHOT-GT", tabUrl: "https://p.example/" }, ["Saved", ".png", "bytes"]],
+  ["browser_console_log", "console.log", {},
+    { tabId: 3, count: 1, total: 1, entries: [{ tabId: 3, level: "error", text: "LOG-GT", t: 1_760_000_000_000 }] }, ["LOG-GT"]],
+  ["browser_network_log", "network.log", {},
+    { tabId: 3, count: 1, total: 1, requests: [{ method: "GET", url: "https://net.example/gt", status: 201, wallTime: 1_760_000_000 }] }, ["https://net.example/gt", "201"]],
+  ["browser_network_clear", "network.clear", {},
+    { tabId: 3, cleared: true }, ["cleared"]],
+  ["browser_pdf", "pdf", {},
+    { tabId: 3, base64: PDF_B64 }, ["PDF written to", ".pdf"]],
+  ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
+    { tabId: 3, width: 412, height: 915, deviceScaleFactor: 3, isMobile: true, hasTouch: true }, ["412", "915", "mobile=true"]],
+];
+
+for (const [name, command, args, payload, expect] of GROUND_TRUTH) {
+  const out = await runTool(name, args, payload, command);
+  check(`${name}：扩展真实载荷过自己的输出 schema`, out.violations.length === 0, out.violations.join(" | "));
+  check(`${name}：模型可见文本里有这次调用要的数据`,
+    expect.every(part => out.text.includes(part)),
+    expect.filter(part => !out.text.includes(part)).join(",") || `len=${out.text.length}`);
+  check(`${name}：render 至少交出一段非空文本`,
+    out.text.trim().length > 0 && out.def.output.render(args, out.value).length > 0, JSON.stringify(out.text.slice(0, 40)));
+}
+
+// browser_cleanup 是唯一不经过扩展的工具：它读本地 shotsDir，所以单独跑（也用临时目录）。
+{
+  const out = await runTool("browser_cleanup", {}, {}, null);
+  check("browser_cleanup：返回值过自己的输出 schema", out.violations.length === 0, out.violations.join(" | "));
+  check("browser_cleanup：模型看到清掉了几个文件", /Cleaned \d+ screenshot/.test(out.text) && /scratch file/.test(out.text), out.text);
+}
+
+await rm(SHOTS, { recursive: true, force: true });
 
 for (const disposer of disposers) {
   try { await disposer[0](); } catch { /*  teardown 不参与断言 */ }

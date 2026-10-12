@@ -1,5 +1,10 @@
 # 更新日志
 
+## 未发布
+
+- `verify/verify_render_contract.mjs` 从 9 条工具扩到**全部 20 条**：新增一张「扩展真实载荷 → 宿主 `validateJsonSchemaValue` → 模型可见文本必须含指定片段」的地面真相表（截图 / PDF / `browser_cleanup` 走临时 `shotsDir`，不污染仓库）。**这一轮没有再挖出新缺陷**——剩下 11 条本来就合格；价值在于这条线从「抽查 9 条」变成「一条都漏不掉」：以后谁再写一句摘要式 render、或封闭 schema 少声明一个字段，CI 当场红，而不是等 12 个版本。
+- `npm run verify` 从 242 项涨到 **301 项断言，exit 0**。纯测试改动，产物 `lib/` 未变，不需要重发版。
+
 ## v1.0.12 (2026-10-12)
 
 这一批只动 `src/`+`lib/`（插件侧），**`extension/` 的代码一个字没改**（`manifest.json` 只有版本戳跟着走）—— 已经装好的扩展不用重装也能配合新插件，协议仍是 `protocol: 1`。
