@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **合并 PR #10（long-arm-ape）：模型可见内容不再被定长切片砍掉。** `render()` 的返回值就是模型看到的全部内容（宿主注释：`ToolResult.content` = “final model-facing content”，而完整 `value` “deliberately omitted from durable events”），此前 `JSON.stringify(value).slice(0, 300/400)` 交给模型的是一段**在 token 中间断掉、语法都不完整的 JSON**，而且没有任何提示。现在统一走 `clampRendered`（上限 4000，超了明确说「还剩 N 字符被截，缩小查询再看」）。
+  还欠一步（我在评审里提了，不阻塞合并）：截断信号目前只在文案里，应该再给一个机器可读字段（如 `renderedTruncated` / `renderedOmittedChars`），让 agent 能程序化决定要不要换个更窄的查询 —— 这本来就是我们待办清单里「结果截断要显式回报」那条。
 - **合并 PR #12（long-arm-ape）：导航没到位不再报成功。** 三个实测确认的缺陷一起修掉：① waiter 挂在 `tabs.update` 之后 → 旧文档还停在 `status:'complete'` 就被当成新文档完成（本机复现：0ms 返回、`url` 是旧页面）；② `location.href` 探针无界等待（导航未 commit 时 CDP 不答话）→ 实测挂死 >8s，而命令自己的预算只有 15s，现在两个探针都有预算；③ `browser_navigate` 的 `output.schema` 是封闭的却没声明 `siteUnreachable`，而扩展发的是对象 `{reason}` —— 拿宿主自己的 `validateJsonSchemaValue` 实测得到 `"value.siteUnreachable" is not a declared property (additionalProperties: false)`，也就是**已发布的 1.0.10 里，导航到不可达站点时模型收到的是一条输出校验错误，而不是「站点不可达」**。
 - 补掉 #12 留的最后一个口子：它「1.2 秒内没看到 `loading` 就认 `complete`」，而「导航压根没发生」（链接变成下载、目标被 Chrome 拒载）也长这样——实测合并前那版等满 1243ms 仍把旧文档 URL 当成功返回。现在宽限期后比对**落到的 URL vs 要去的那个**（忽略 hash 片段与末尾斜杠），不等就报 `loadPending`；同时两个不误报的方向都保住了：导航到已经开着的同一个地址仍算成功，真重定向因能看到 `loading` 走不到这个分支。新增 `verify/verify_nav_landing.mjs`（10 项）钉住这四条。
 - **合并 PR #7（BeiWay1145）：DevTools 抢走 CDP 会话后能重连了。** `onDetach` 无条件失效缓存 + `clearAttachment`，重放限定「闭包第一次 send 就失败」。合并前对当前 main 复测：会话被抢走后 attach `1 → 2` 并成功（我们这版此后每条命令都失败）、一次 click 仍然只派发 2 个 `Input.dispatchMouseEvent`（不重复点击）、永久失败 2 次封顶。合并时把 `verify_cdp_retry.mjs` 的 `FIXED_ON_MAIN` 翻成 `true`，S1 从此要求「必须重连」。
