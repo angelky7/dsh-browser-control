@@ -200,6 +200,71 @@ for (const [name, command, args, payload] of EXTENSION_SHAPES) {
   check("browser_snapshot：ax 回退时把原因说给模型", fell.text.includes("no a11y tree") && fell.text.includes("[e1] a -> /x"), fell.text);
 }
 
+// 7) 两条日志工具：以前只要有条目就整条调用失败。
+//    items 声明成 {type:'object', additionalProperties:false, properties:{}}，
+//    宿主 checkValue（dt2 lib/index.js:468-470）对 additionalProperties:false 逐键判违规，
+//    properties 为空 = 任何键都违规；实测 valueSchemaSpecToJsonSchema 编译后原样保留。
+{
+  const payload = {
+    tabId: 3, count: 2, total: 140,
+    entries: [
+      { tabId: 3, level: "error", text: "boom: cannot read xyz", t: 1_760_000_000_000, location: "app.js:42" },
+      { tabId: 3, level: "warn", text: "deprecated API\nused here", t: 1_760_000_003_000 },
+    ],
+  };
+  const out = await runTool("browser_console_log", {}, payload, "console.log");
+  check("browser_console_log：真实扩展载荷过输出 schema", out.violations.length === 0, out.violations.join(" | "));
+  check("browser_console_log：模型看到条目正文", out.text.includes("boom: cannot read xyz"), out.text.slice(0, 200));
+  check("browser_console_log：条目带级别、位置与 UTC 时间",
+    /1\. \[08:53:20\] error @app\.js:42 — boom: cannot read xyz/.test(out.text), out.text.split("\n")[1]);
+  check("browser_console_log：条目里的换行被压成一行", out.text.includes("deprecated API used here"), out.text.split("\n")[2]);
+  check("browser_console_log：只给了一部分时说清给了多少",
+    out.text.includes("2 of 140") && out.text.includes("showing the newest 2"), out.text.split("\n")[0]);
+  check("browser_console_log：value 里的条目归一化成声明的字段",
+    JSON.stringify(Object.keys(out.value.entries[0]).sort()) === JSON.stringify(["level", "location", "text", "time"]),
+    JSON.stringify(out.value.entries[0]));
+
+  const flood = {
+    tabId: 3, count: 300, total: 300,
+    entries: Array.from({ length: 300 }, (_u, i) => ({ tabId: 3, level: "log", text: `row ${i} ${"z".repeat(60)}`, t: 1_760_000_000_000 + i * 1000 })),
+  };
+  const big = await runTool("browser_console_log", {}, flood, "console.log");
+  const tag = big.text.match(TRUNCATION_TAG);
+  check("browser_console_log：整屏日志按 6000 预算截断并带机器可读标记",
+    Boolean(tag) && Number(tag[2]) === 6000 && big.text.indexOf("\n… [renderedTruncated") === 6000,
+    tag ? `cutAt=${big.text.indexOf("\n… [renderedTruncated")} limit=${tag[2]} omitted=${tag[1]}` : "no tag");
+
+  const empty = await runTool("browser_console_log", {}, { tabId: 3, count: 0, total: 0, entries: [] }, "console.log");
+  check("browser_console_log：没有条目时不谎报", empty.violations.length === 0 && empty.value.entries.length === 0, empty.text);
+}
+
+{
+  const payload = {
+    tabId: 3, count: 3, total: 3,
+    requests: [
+      {
+        method: "GET", url: "https://api.example/x", resourceType: "XHR", status: 200, statusText: "OK",
+        mimeType: "application/json", encodedDataLength: 1234, wallTime: 1_760_000_000.5, finished: true,
+        headers: { "content-type": "application/json", cookie: "session=secret" },
+        responseHeaders: { "set-cookie": "a=b" }, postData: "k=v", initiator: { url: "https://p.example/" },
+      },
+      { method: "POST", url: "https://api.example/y", resourceType: "Fetch", status: 500, statusText: "Server Error", wallTime: 1_760_000_002 },
+      { method: "GET", url: "https://api.example/z", resourceType: "Fetch", failed: true, errorText: "net::ERR_CONNECTION_REFUSED", wallTime: 1_760_000_004 },
+    ],
+  };
+  const out = await runTool("browser_network_log", {}, payload, "network.log");
+  check("browser_network_log：真实扩展载荷过输出 schema", out.violations.length === 0, out.violations.join(" | "));
+  check("browser_network_log：模型看到每条请求的方法/状态/URL",
+    out.text.includes("GET 200 OK XHR 1.2 KB https://api.example/x") && out.text.includes("POST 500 Server Error"),
+    out.text.split("\n").slice(1, 3).join(" ⏎ "));
+  check("browser_network_log：失败的请求带上错误文本",
+    out.text.includes("FAILED net::ERR_CONNECTION_REFUSED"), out.text.split("\n")[3]);
+  check("browser_network_log：wallTime 按 UTC 秒显示", out.text.includes("[08:53:20]"), out.text.split("\n")[1]);
+  check("browser_network_log：headers / POST 正文不进 value（那是最灌爆上下文的东西）",
+    !JSON.stringify(out.value).includes("session=secret") && !JSON.stringify(out.value).includes("k=v"),
+    JSON.stringify(out.value.requests[0]));
+}
+
 for (const disposer of disposers) {
   try { await disposer[0](); } catch { /*  teardown 不参与断言 */ }
 }

@@ -219,11 +219,65 @@ function clampRendered(text: string, maxChars = MAX_RENDERED_CHARS): string {
 
 /** Model-facing budget for one snapshot listing; `limit` narrows the listing. */
 const SNAPSHOT_RENDER_MAX_CHARS = 8_000
+/** Model-facing budget for one console/network log listing. */
+const LOG_RENDER_MAX_CHARS = 6_000
 
 /** Collapse one page-supplied field to a single line inside a rendered listing. */
 function flattenOneLine(value: string, maxChars: number): string {
 	const flat = value.replace(/\s+/g, ' ').trim()
 	return flat.length <= maxChars ? flat : `${flat.slice(0, maxChars)}…`
+}
+
+/** `HH:MM:SS` in UTC from an epoch-milliseconds stamp. */
+function formatClock(epochMs: number): string {
+	return new Date(epochMs).toISOString().slice(11, 19)
+}
+
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** One rendered network row: the declared subset of the extension's capture. */
+interface NetworkRow {
+	method: string
+	url: string
+	resourceType?: string
+	status?: number
+	statusText?: string
+	mimeType?: string
+	bytes?: number
+	time?: string
+	finished?: boolean
+	failed?: boolean
+	canceled?: boolean
+	errorText?: string
+}
+
+/**
+ * Reduce one captured network row to the fields this tool declares. The buffer
+ * also carries request/response header maps and POST bodies; those stay out of
+ * the value, because the value never reaches the model and the header dump is
+ * what would blow the transcript.
+ */
+function networkRow(row: Record<string, unknown>): NetworkRow {
+	const out: NetworkRow = {
+		method: typeof row.method === 'string' ? row.method : 'GET',
+		url: flattenOneLine(typeof row.url === 'string' ? row.url : '', 200),
+	}
+	if (typeof row.resourceType === 'string') out.resourceType = row.resourceType
+	if (typeof row.status === 'number') out.status = row.status
+	if (typeof row.statusText === 'string' && row.statusText.length > 0) out.statusText = flattenOneLine(row.statusText, 60)
+	if (typeof row.mimeType === 'string') out.mimeType = row.mimeType
+	if (typeof row.encodedDataLength === 'number') out.bytes = row.encodedDataLength
+	// CDP `wallTime` is a Timestamp in seconds, not milliseconds.
+	if (typeof row.wallTime === 'number') out.time = formatClock(row.wallTime * 1000)
+	if (row.finished === true) out.finished = true
+	if (row.failed === true) out.failed = true
+	if (row.canceled === true) out.canceled = true
+	if (typeof row.errorText === 'string' && row.errorText.length > 0) out.errorText = flattenOneLine(row.errorText, 120)
+	return out
 }
 
 /**
@@ -848,7 +902,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_console_log',
-		description: 'Read the captured `console.log/info/warn/error` entries for a tab. Set `clear:true` to also empty the buffer so the next call shows only entries recorded after this one. Useful for "what did the page log after I clicked submit".',
+		description: 'Read the captured `console.log/info/warn/error` entries for a tab, with the entry text itself. Set `clear:true` to also empty the buffer so the next call shows only entries recorded after this one. Useful for "what did the page log after I clicked submit".',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			levels: { type: 'array', items: { type: 'string' }, description: 'Filter to one or more of: log, info, warn, error, debug.' },
@@ -864,13 +918,29 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					tabId: { type: 'number', required: true },
 					count: { type: 'number', required: true },
 					total: { type: 'number', required: true },
-					entries: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {} } },
+					entries: {
+						type: 'array',
+						required: true,
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							properties: {
+								level: { type: 'string', required: true },
+								text: { type: 'string', required: true },
+								time: { type: 'string' },
+								location: { type: 'string' },
+							},
+						},
+					},
 				},
 			},
-			render: (_args, value) => [{
-				type: 'text',
-				text: `Tab ${value.tabId}: ${value.count} of ${value.total} console entries`,
-			}],
+			render: (_args, value) => {
+				const head = `Tab ${value.tabId}: ${value.count} of ${value.total} console entries`
+					+ ` (times UTC)${value.count < value.total ? ` — showing the newest ${value.count}; raise limit to see more` : ''}:`
+				const lines = value.entries.map((entry, index) =>
+					`${index + 1}. [${entry.time ?? '?'}] ${entry.level}${entry.location === undefined ? '' : ` @${entry.location}`} — ${entry.text}`)
+				return [{ type: 'text', text: clampRendered([head, ...lines].join('\n'), LOG_RENDER_MAX_CHARS) }]
+			},
 		},
 		presentCall: () => ({ card: 'generic', title: 'Read browser console', kind: 'other' as const }),
 		async execute(args, exec) {
@@ -880,7 +950,23 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.pattern === 'string') params.pattern = args.pattern
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
-			return await controller.execute('console.log', params, exec.signal) as { tabId: number; count: number; total: number; entries: Array<Record<string, unknown>> }
+			const raw = await controller.execute('console.log', params, exec.signal) as {
+				tabId: number
+				count: number
+				total: number
+				entries?: Array<{ level?: string; text?: string; t?: number; location?: string }>
+			}
+			return {
+				tabId: raw.tabId,
+				count: raw.count,
+				total: raw.total,
+				entries: (raw.entries ?? []).map(entry => ({
+					level: entry.level ?? 'log',
+					text: flattenOneLine(entry.text ?? '', 400),
+					...(entry.t === undefined ? {} : { time: formatClock(entry.t) }),
+					...(entry.location === undefined ? {} : { location: entry.location }),
+				})),
+			}
 		},
 	}))
 
@@ -904,13 +990,43 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					tabId: { type: 'number', required: true },
 					count: { type: 'number', required: true },
 					total: { type: 'number', required: true },
-					requests: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {} } },
+					requests: {
+						type: 'array',
+						required: true,
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							properties: {
+								method: { type: 'string', required: true },
+								url: { type: 'string', required: true },
+								resourceType: { type: 'string' },
+								status: { type: 'number' },
+								statusText: { type: 'string' },
+								mimeType: { type: 'string' },
+								bytes: { type: 'number' },
+								time: { type: 'string' },
+								finished: { type: 'boolean' },
+								failed: { type: 'boolean' },
+								canceled: { type: 'boolean' },
+								errorText: { type: 'string' },
+							},
+						},
+					},
 				},
 			},
-			render: (_args, value) => [{
-				type: 'text',
-				text: `Tab ${value.tabId}: ${value.count} of ${value.total} network requests`,
-			}],
+			render: (_args, value) => {
+				const head = `Tab ${value.tabId}: ${value.count} of ${value.total} network requests`
+					+ ` (times UTC)${value.count < value.total ? ` — showing the newest ${value.count}; raise limit or filter by urlPattern/status` : ''}:`
+				const lines = value.requests.map((row, index) => {
+					const outcome = row.failed === true
+						? `FAILED ${row.errorText ?? ''}`.trim()
+						: row.status === undefined ? 'PENDING' : `${row.status} ${row.statusText ?? ''}`.trim()
+					const size = row.bytes === undefined ? '' : ` ${formatBytes(row.bytes)}`
+					const type = row.resourceType === undefined ? '' : ` ${row.resourceType}`
+					return `${index + 1}. [${row.time ?? '?'}] ${row.method} ${outcome}${type}${size} ${row.url}`
+				})
+				return [{ type: 'text', text: clampRendered([head, ...lines].join('\n'), LOG_RENDER_MAX_CHARS) }]
+			},
 		},
 		presentCall: () => ({ card: 'generic', title: 'Read browser network log', kind: 'other' as const }),
 		async execute(args, exec) {
@@ -922,7 +1038,18 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.status === 'string') params.status = args.status
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
-			return await controller.execute('network.log', params, exec.signal) as { tabId: number; count: number; total: number; requests: Array<Record<string, unknown>> }
+			const raw = await controller.execute('network.log', params, exec.signal) as {
+				tabId: number
+				count: number
+				total: number
+				requests?: Array<Record<string, unknown>>
+			}
+			return {
+				tabId: raw.tabId,
+				count: raw.count,
+				total: raw.total,
+				requests: (raw.requests ?? []).map(row => networkRow(row)),
+			}
 		},
 	}))
 
