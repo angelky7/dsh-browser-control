@@ -207,8 +207,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | 工具 | 功能 |
 |---|---|
 | `browser_navigate` | 导航到 URL |
-| `browser_read` | 读取页面文本/HTML |
-| `browser_snapshot` | 页面快照 → ref 交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名） |
+| `browser_read` | 读取页面文本/HTML，正文直接给模型（`offset`/`limit` 窗口，长文分页） |
+| `browser_snapshot` | 页面快照 → 逐条列出 ref 的交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名） |
 | `browser_click` | 点击元素（by ref / selector） |
 | `browser_type` | 在输入框填入文本 |
 | `browser_press` | 模拟键盘按键 |
@@ -219,8 +219,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_tabs` | 标签页管理（列表/新建/关闭/切换/归组/拆组；见「agent 开的标签长什么样」） |
 | `browser_evaluate` | 执行任意 JS |
 | `browser_screenshot` | 截取页面截图 |
-| `browser_console_log` | 抓取页面 console 日志（v1.0.7+） |
-| `browser_network_log` | 抓取 HTTP 请求/响应（v1.0.7+） |
+| `browser_console_log` | 抓取页面 console 日志并逐条给出正文（v1.0.7+） |
+| `browser_network_log` | 抓取 HTTP 请求/响应并逐条给出方法/状态/URL（v1.0.7+） |
 | `browser_network_clear` | 单独清空网络日志缓冲（v1.0.7+） |
 | `browser_pdf` | 当前页导出 PDF（v1.0.7+） |
 | `browser_emulate` | 切设备视口（移动 / 桌面 / 自定义，v1.0.7+） |

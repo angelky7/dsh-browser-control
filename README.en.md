@@ -208,8 +208,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | Tool | Purpose |
 |---|---|
 | `browser_navigate` | Navigate to a URL |
-| `browser_read` | Read page text/HTML |
-| `browser_snapshot` | Page snapshot → ref interaction tree (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
+| `browser_read` | Read page text/HTML — the text itself, in an `offset`/`limit` window |
+| `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
 | `browser_click` | Click an element (by ref / selector) |
 | `browser_type` | Type into inputs |
 | `browser_press` | Send keyboard keys |
@@ -220,8 +220,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; see "What agent tabs look like") |
 | `browser_evaluate` | Run arbitrary JS |
 | `browser_screenshot` | Capture page screenshot |
-| `browser_console_log` | Captured page console entries (v1.0.7+) |
-| `browser_network_log` | Captured HTTP request/response log (v1.0.7+) |
+| `browser_console_log` | Captured console entries, listed with their text (v1.0.7+) |
+| `browser_network_log` | Captured HTTP requests, listed with method/status/URL (v1.0.7+) |
 | `browser_network_clear` | Clear the network log buffer on its own (v1.0.7+) |
 | `browser_pdf` | Export the current page as PDF (v1.0.7+) |
 | `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+) |

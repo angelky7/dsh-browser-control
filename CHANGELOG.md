@@ -1,5 +1,20 @@
 # 更新日志
 
+## v1.0.12（未发布）
+
+这一批只动 `src/`+`lib/`（插件侧），**`extension/` 一个字没改** —— 已经装好的扩展不用重装。
+
+- **修掉一个自 v1.0.0 就存在的功能缺陷：数据型工具的 render 把数据本身丢掉了。** 宿主的规则是「模型可见内容 = `output.render(args, value)` 的返回值」（`@deepseek-ai/dsh-tools` `lib/index.js:3548-3551`），`value` 是 execution-local、"deliberately omitted from durable events"（`lib/types/index.d.ts:415`），`presentationMeta` 只喂 UI。而这几条工具的 render 一直只交出一句统计：
+  - `browser_read` → `Title (url) — 4321 chars`：页面正文一个字符都没给过模型；
+  - `browser_snapshot` → `12 interactive elements …; click or fill them by ref.`：**一个 ref 都没给**，而系统提示词写的正是「先快照、再按 ref 点击」；
+  - `browser_console_log` / `browser_network_log` → 只有 `20 of 140 entries` 这样的计数。
+  现在正文/条目/ref 全在模型可见文本里。`browser_read` 改成窗口读取（`offset`/`limit`，默认与上限 20 000 字符，`value` 加 `offset`/`totalChars`，头部直接写「call again with offset=N」）；顺带把我评审 PR #9 时担心的「一次灌 120 000 字符」消掉——旧上限只作用在模型看不见的 `value` 上。快照按 `[e13] button "Save" -> /path` 逐条列，8 000 字符预算，AX 回退原因也一并写出来。
+- **修掉一个必然失败：两条日志工具只要有条目就抛 `ToolOutputError`。** 它们的 `items` 声明是 `{type:'object', additionalProperties:false, properties:{}}`，而宿主 `checkValue`（`lib/index.js:468-470`）对 `additionalProperties:false` 是**逐键判违规**——`properties` 为空就是任何键都违规。用宿主自己的 `valueSchemaSpecToJsonSchema` 实测编译后该 items 原样保留，所以 `count>=1` 的每一次调用都会失败；没被发现是因为空日志恰好是常测到的那条路径，它反而是合法的。改法：按扩展真实回传的字段声明行形状，`execute` 归一化（时间统一 UTC 秒、长文本压一行），`headers`/`responseHeaders`/`postData` 不再进结果（它们到不了模型，只会放大载荷）。与 PR #12 修的 `siteUnreachable` 是同一类缺陷，只是藏在数组项里。
+- **补掉 PR #10 漏掉的三处定长硬切片**：`browser_wait` / `browser_find` / `browser_dialog` 还在 `JSON.stringify(value).slice(0, 200|600|1200)`，也就是仍会把 JSON 从 token 中间切断。现在与其余工具同走 `clampRendered`。
+- **截断信号改成机器可读**（我在 PR #10 评审里答应自己补的那步）：超预算时在切片**之后**追加 `… [renderedTruncated omittedChars=N limitChars=L] narrow the query and call again to see the rest`，数字实测对齐（12 000 字符载荷 → `omittedChars=8036`）。标记一定活着，因为它在切片之后拼上。
+- 新增 `verify/verify_render_contract.mjs`（51 项）：真实 `BridgeServer` + 假扩展 + **宿主自己的** `validateJsonSchemaValue`，把每条工具的真实返回值同时喂给它的 schema 和它的 render，逐条问「过不过」与「模型看到的文本里有没有这次调用真正要的数据」。这一层以前**没有任何测试覆盖**，所以两类缺陷分别活了 11 个与 5 个版本。`npm run verify` 从 191 项涨到 **242 项，exit 0**。
+- CI：`文档里的 release 下载链接不得为死链` 改为带 `secrets.GITHUB_TOKEN` 并重试三次（run#15 那次红是匿名配额 60 次/小时被 runner 共用出口 IP 限到 403、`curl -f` exit 22，不是死链）；三次都拉不到时明确报「审计没有执行」而不是放绿。run#16（`bedf15e`）10 步全 success。
+
 ## v1.0.11 (2026-10-12)
 
 - **合并 PR #10（long-arm-ape）：模型可见内容不再被定长切片砍掉。** `render()` 的返回值就是模型看到的全部内容（宿主注释：`ToolResult.content` = “final model-facing content”，而完整 `value` “deliberately omitted from durable events”），此前 `JSON.stringify(value).slice(0, 300/400)` 交给模型的是一段**在 token 中间断掉、语法都不完整的 JSON**，而且没有任何提示。现在统一走 `clampRendered`（上限 4000，超了明确说「还剩 N 字符被截，缩小查询再看」）。
