@@ -48,8 +48,37 @@ jobs:
       - name: 实测台
         run: pnpm run verify
 
+      # 匿名访问 api.github.com 只有 60 次/小时配额，runner 共用出口 IP 时会被限到 403，
+      # curl -f 于是以 exit 22 失败 —— 那是配额问题，不是文档里有死链。
+      # 带 GITHUB_TOKEN 是 5000 次/小时；再重试三次，仍拉不到就明确报"审计没执行"，
+      # 而不是悄悄放绿（审计本身照旧是致命步骤）。
       - name: 文档里的 release 下载链接不得为死链
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl -sfL "https://api.github.com/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-            -H "Accept: application/vnd.github+json" > /tmp/releases.json
+          set -u
+          auth=()
+          if [ -n "${GITHUB_TOKEN:-}" ]; then
+            auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+          fi
+          fetch() {
+            curl -sfL "${auth[@]}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases?per_page=100"
+          }
+          ok=0
+          for attempt in 1 2 3; do
+            if fetch > /tmp/releases.json && [ -s /tmp/releases.json ]; then
+              ok=1
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "releases 列表拉取失败（第 $attempt 次），10s 后重试"
+              sleep 10
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::三次都没能拉到 releases 列表，死链审计没有执行——先查 api.github.com 可达性与令牌配额，别当成链接没问题"
+            exit 1
+          fi
           node verify/verify_release_links.mjs /tmp/releases.json
