@@ -37,6 +37,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 5. 打 tag、建 Release，资产沿用现有命名：`DSH-Browser-Control-vX.Y.Z.zip`（扩展）、`dsh-browser-control-plugin-vX.Y.Z.zip`（插件）
 6. **插件离线包里必须有 `cordis.patch.yml`**——`package.json` 的 `dsh.bundle.patch` 指向它，v1.0.7 那份资产漏了这个文件，离线安装就等于没挂载；扩展包必须含 `extension/` 下全部文件（含 `icons/`）
 7. **校验和写在 Release 正文里，不要上传 `.sha256` 附件**：正文列 文件名 / 字节数 / SHA-256（必要时加 MD5），上传后匿名下载回来核对头 4 字节、`unzip -t` 与条目分隔符；最后跑 `verify_release_links.mjs` 确认文档链接不是死链
+8. **建完 Release 之后把那次 CI 重跑一次**（`gh run rerun <id> --failed` 或页面上的 Re-run failed jobs）：链接审计那一步要看的是「文档里的 release 下载链接是否存在」，而 push 与建 Release 之间必然有几分钟空窗，这一步在 Release 建好前一定红 —— 1.0.9 与 1.0.11 都是这样，别误判成产物问题
 
 ## 写宿主适配时会踩的坑
 
