@@ -12,7 +12,7 @@
 - **修掉一个必然失败：两条日志工具只要有条目就抛 `ToolOutputError`。** 它们的 `items` 声明是 `{type:'object', additionalProperties:false, properties:{}}`，而宿主 `checkValue`（`lib/index.js:468-470`）对 `additionalProperties:false` 是**逐键判违规**——`properties` 为空就是任何键都违规。用宿主自己的 `valueSchemaSpecToJsonSchema` 实测编译后该 items 原样保留，所以 `count>=1` 的每一次调用都会失败；没被发现是因为空日志恰好是常测到的那条路径，它反而是合法的。改法：按扩展真实回传的字段声明行形状，`execute` 归一化（时间统一 UTC 秒、长文本压一行），`headers`/`responseHeaders`/`postData` 不再进结果（它们到不了模型，只会放大载荷）。与 PR #12 修的 `siteUnreachable` 是同一类缺陷，只是藏在数组项里。
 - **补掉 PR #10 漏掉的三处定长硬切片**：`browser_wait` / `browser_find` / `browser_dialog` 还在 `JSON.stringify(value).slice(0, 200|600|1200)`，也就是仍会把 JSON 从 token 中间切断。现在与其余工具同走 `clampRendered`。
 - **截断信号改成机器可读**（我在 PR #10 评审里答应自己补的那步）：超预算时在切片**之后**追加 `… [renderedTruncated omittedChars=N limitChars=L] narrow the query and call again to see the rest`，数字实测对齐（12 000 字符载荷 → `omittedChars=8036`）。标记一定活着，因为它在切片之后拼上。
-- 新增 `verify/verify_render_contract.mjs`（51 项）：真实 `BridgeServer` + 假扩展 + **宿主自己的** `validateJsonSchemaValue`，把每条工具的真实返回值同时喂给它的 schema 和它的 render，逐条问「过不过」与「模型看到的文本里有没有这次调用真正要的数据」。这一层以前**没有任何测试覆盖**，所以两类缺陷分别活了 11 个与 5 个版本。`npm run verify` 从 191 项涨到 **242 项，exit 0**。
+- 新增 `verify/verify_render_contract.mjs`（51 项）：真实 `BridgeServer` + 假扩展 + **宿主自己的** `validateJsonSchemaValue`，把每条工具的真实返回值同时喂给它的 schema 和它的 render，逐条问「过不过」与「模型看到的文本里有没有这次调用真正要的数据」。这一层以前**没有任何测试覆盖**，所以两类缺陷分别活了 **12 个**（v1.0.0–v1.0.11，`browser_read` / `browser_snapshot`）与 **5 个**（v1.0.7–v1.0.11，两条日志）已发布版本。`npm run verify` 从 191 项涨到 **242 项，exit 0**。
 - CI：`文档里的 release 下载链接不得为死链` 改为带 `secrets.GITHUB_TOKEN` 并重试三次（run#15 那次红是匿名配额 60 次/小时被 runner 共用出口 IP 限到 403、`curl -f` exit 22，不是死链）；三次都拉不到时明确报「审计没有执行」而不是放绿。run#16（`bedf15e`）10 步全 success。
 
 ## v1.0.11 (2026-10-12)
