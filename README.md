@@ -257,6 +257,7 @@ Chrome 浏览器
 | 实测台 `verify_tab_groups`：agent 标签归组的建组 / 复用 / 退避重试 / 缓存失效 / 按窗口拆组 / 无权限降级 | ✅ 2026-10-11，node:vm + 有状态假 `chrome.tabs`/`chrome.tabGroups`，**未在真实 Chrome 里重跑** |
 | 实测台 `verify_extension_e2e`：真桥 + 真扩展代码 + 真 WebSocket 端到端（帧契约、命令可达、错误分类） | ✅ 2026-10-11，只有 `chrome.*` 是假的；视觉与真实 CDP 行为仍需实机确认 |
 | 实测台 `verify_cdp_retry`：CDP 会话被抢走后的恢复 / 重放不许把副作用做两遍 / 重试有界（6 场景） | ✅ 2026-10-11，真实 `background.js` + 有状态假 `chrome.debugger`；另用合并预览文件交叉验证过 |
+| 实测台 `verify_render_contract`：每条工具的真实返回值同时喂给宿主的输出校验器与它自己的 `render`，断言「模型可见文本里有这次调用真正要的数据」 | ✅ 2026-10-12，真桥 + 假扩展 + 宿主 `validateJsonSchemaValue`；这一层此前**零覆盖**，所以两类缺陷活了 12 / 5 个版本 |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 
 仓库自 v1.0.4 起不再有单测目录，上面三条浏览器场景是历史实机记录，本版未重跑；本版结论都来自 `verify/` 里可重复执行的实测台。
