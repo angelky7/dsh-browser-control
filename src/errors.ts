@@ -63,27 +63,49 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	command_failed: '扩展报回失败：按 error 文本处理，通常是选择器没命中、标签页已关闭或页面不允许该操作。',
 };
 
-/** 带分类的桥接错误；`message` 面向人，三个字段面向程序。 */
+/**
+ * 失败文案里「该不该重试」那半句。
+ *
+ * 宿主的失败内容是 `Error: ${message}`（`@deepseek-ai/dsh-tools` `lib/index.js:3616-3623`），
+ * `code` / `effectState` / `hint` 这些结构化字段只进 `error.info` 与 HTTP 面，
+ * **模型读不到**。所以决定下一步所需的两个信息——副作用状态与下一步动作——必须写进
+ * message 本身，否则整个错误契约对 agent 失效（和「render 只写摘要」是同一类缺陷）。
+ */
+function effectClause(effectState: EffectState): string {
+	switch (effectState) {
+		case 'unknown':
+			return 'effectState=unknown：动作可能已经落到页面上，先用只读工具看当前状态，再决定要不要重做，不要直接重试'
+		case 'committed':
+			return 'effectState=committed：动作已经生效'
+		default:
+			return 'effectState=not_started：这次调用没有动到页面，重试安全'
+	}
+}
+
+/** 带分类的桥接错误；`message` 面向模型，`toJSON()` 面向程序。 */
 export class BridgeError extends Error {
 	readonly code: BridgeErrorCode
 	readonly effectState: EffectState
 	readonly hint: string
 	readonly command: string
+	/** 原始失败描述：HTTP 面的 `error` 字段就是它，不含我们追加的契约文案。 */
+	readonly detail: string
 
 	constructor(command: string, code: BridgeErrorCode, effectState: EffectState, message: string) {
-		super(`[${code}] ${message}`)
+		super(`[${code}] ${message} — ${effectClause(effectState)}。下一步：${HINTS[code]}`)
 		this.name = 'BridgeError'
 		this.code = code
 		this.effectState = effectState
 		this.hint = HINTS[code]
 		this.command = command
+		this.detail = message
 	}
 
 	/** 给 HTTP 面用的扁平 JSON 形状。 */
 	toJSON(): { ok: false; error: string; code: string; effectState: string; hint: string } {
 		return {
 			ok: false,
-			error: this.message.replace(/^\[[a-z_]+\]\s*/, ''),
+			error: this.detail,
 			code: this.code,
 			effectState: this.effectState,
 			hint: this.hint,

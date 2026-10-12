@@ -80,4 +80,6 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - `browser_read` 用窗口读取：头部写 `chars 0-20000 of 43210; call again with offset=20000`，`value` 里带 `offset` / `totalChars`。**一次调用不会把整站灌进上下文**，长页面靠 `offset` 走。
 - 日志列表的时间统一 UTC 秒（`HH:MM:SS`），`count < total` 时明说「只给了最新的 N 条」。`headers` / `responseHeaders` / `postData` 不进结果：它们到不了模型，只会把载荷变大。
 - 封闭 `output.schema` 必须逐字段声明扩展真实回传的东西。宿主 `checkValue`（`lib/index.js:468-470`）对 `additionalProperties:false` 是**逐键判违规**，少声明一个字段等于这条工具每次调用都失败（`properties:{}` + `additionalProperties:false` = 任何键都违规——`browser_console_log` / `browser_network_log` 从 v1.0.7 到 v1.0.11 就一直栽在这)。
+- **失败路径同理**：宿主把异常渲染成 `content` 时只取一句 `Error: ${message}`（`lib/index.js:3616-3623`），`code` / `effectState` / `hint` 只进 `error.info` 和 HTTP 面，**模型看不到**。所以 `BridgeError` 把这三件事写进 message 本身：`[command_timeout] browser command timed out after 800ms: click — effectState=unknown：动作可能已经落到页面上，先用只读工具看当前状态…不要直接重试。下一步：扩展超时未回应…`。写操作超时/在途掉线报 `unknown`，只读报 `not_started（重试安全）`——决定下一步的信息必须在模型读得到的那一行里。
+- HTTP 面形状不跟着变长：`toJSON().error` 走新的 `detail` 字段（原始失败描述），`code` / `effectState` / `hint` 照旧各归其位，`hint` 不会在 `error` 里重复出现。`verify/verify_errors.mjs` 断言这两条。
 - 以上都由 `verify/verify_render_contract.mjs` 实测：真实 `BridgeServer` + 假扩展 + 宿主自己的 `validateJsonSchemaValue` 与 `valueSchemaSpecToJsonSchema`，逐条问「schema 过不过」「模型看到的文本里有没有这次调用真正要的数据」。**全部 20 条工具都在表里，不抽查**——因为抽查正是这两个缺陷活了 12 个 / 5 个版本的原因。

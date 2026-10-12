@@ -49,6 +49,36 @@ check("BridgeError.toJSON 带三个字段", (() => {
   return j.ok === false && j.code === "command_timeout" && j.effectState === "unknown" && typeof j.hint === "string";
 })(), JSON.stringify(once.toJSON()).slice(0, 120));
 
+// ---- 失败文案必须把「该不该重试」交给模型 ----
+// 宿主的失败内容是 `Error: ${message}`（@deepseek-ai/dsh-tools lib/index.js:3616-3623），
+// code / effectState / hint 这些字段只进 error.info 与 HTTP 面，模型读不到。
+// 所以这句 message 才是错误契约真正生效的地方。
+const writeTimeout = classify("click", new Error("browser command timed out after 800ms: click"));
+const readTimeout = classify("screenshot", new Error("browser command timed out after 800ms: screenshot"));
+const hostView = (e) => `Error: ${e.message}`; // 宿主就是这么渲染失败内容的
+
+check("写操作超时：模型可见文本里有 effectState=unknown", hostView(writeTimeout).includes("effectState=unknown"), hostView(writeTimeout));
+check("写操作超时：模型可见文本明确禁止直接重试", /不要直接重试|先用只读工具/.test(hostView(writeTimeout)), hostView(writeTimeout).slice(-90));
+check("写操作超时：模型可见文本带 hint 正文", hostView(writeTimeout).includes(writeTimeout.hint), hostView(writeTimeout).slice(-60));
+check("只读超时：模型可见文本说 retry 安全", hostView(readTimeout).includes("effectState=not_started") && hostView(readTimeout).includes("重试安全"), hostView(readTimeout));
+check("失败文本仍带 [code] 前缀", hostView(writeTimeout).startsWith("Error: [command_timeout]"), hostView(writeTimeout).slice(0, 40));
+for (const [cmd, msg, code] of [["click", "the browser extension disconnected mid-command", "link_lost"], ["click", "no browser extension connected", "extension_offline"], ["click", "browser-bridge is not configured yet", "not_configured"]]) {
+  const e = classify(cmd, new Error(msg));
+  check(`code=${code}：hint 与 effectState 都在模型可见文本里`, modelSeesContract(e), e.message.slice(-70));
+}
+/** 模型可见文本必须同时拿到分类、副作用状态与下一步动作。 */
+function modelSeesContract(e) {
+  const j = e.toJSON();
+  return e.message.includes(j.hint) && e.message.includes(`effectState=${j.effectState}`) && e.message.startsWith(`[${j.code}]`);
+}
+
+// HTTP 面形状不许因为文案变长而变脏
+check("toJSON().error 是原始失败描述（不含追加文案与前缀）",
+  writeTimeout.toJSON().error === "browser command timed out after 800ms: click",
+  writeTimeout.toJSON().error);
+check("toJSON() 的 hint 不重复出现在 error 字段里",
+  !writeTimeout.toJSON().error.includes("下一步"), writeTimeout.toJSON().error.slice(0, 80));
+
 // ---- 集成层：真 BridgeServer + 不回话的假扩展 ----
 const PORT = 9778;
 const TOKEN = "err-test-token";

@@ -26,12 +26,14 @@ export type EffectState =
  | 'committed';
 /** 该命令是否可能留下副作用。 */
 export declare function isWriteCommand(command: string): boolean;
-/** 带分类的桥接错误；`message` 面向人，三个字段面向程序。 */
+/** 带分类的桥接错误；`message` 面向模型，`toJSON()` 面向程序。 */
 export declare class BridgeError extends Error {
     readonly code: BridgeErrorCode;
     readonly effectState: EffectState;
     readonly hint: string;
     readonly command: string;
+    /** 原始失败描述：HTTP 面的 `error` 字段就是它，不含我们追加的契约文案。 */
+    readonly detail: string;
     constructor(command: string, code: BridgeErrorCode, effectState: EffectState, message: string);
     /** 给 HTTP 面用的扁平 JSON 形状。 */
     toJSON(): {

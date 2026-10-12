@@ -2,8 +2,11 @@
 
 ## 未发布
 
+- **错误契约补上最后一环：`effectState` 与 `hint` 现在写进 `message` 本身。** 宿主把异常渲染成模型可见内容时只取一句 `Error: ${message}`（`@deepseek-ai/dsh-tools` `lib/index.js:3616-3623`），`code` / `effectState` / `hint` 只进 `error.info` 与 HTTP 面——也就是说 v1.0.9 设计「不许盲目重试」这个信号时，接收方（模型）其实一个字都没收到，只能凭 `Error: browser command timed out after 800ms: click` 猜该不该重试。现在失败文案长这样：
+  `[command_timeout] browser command timed out after 800ms: click — effectState=unknown：动作可能已经落到页面上，先用只读工具看当前状态，再决定要不要重做，不要直接重试。下一步：扩展超时未回应：先别重试…`
+  HTTP 面不受影响：新增 `detail` 字段承载原始描述，`toJSON().error` 仍是它，`hint` 不会重复出现。
 - `verify/verify_render_contract.mjs` 从 9 条工具扩到**全部 20 条**：新增一张「扩展真实载荷 → 宿主 `validateJsonSchemaValue` → 模型可见文本必须含指定片段」的地面真相表（截图 / PDF / `browser_cleanup` 走临时 `shotsDir`，不污染仓库）。**这一轮没有再挖出新缺陷**——剩下 11 条本来就合格；价值在于这条线从「抽查 9 条」变成「一条都漏不掉」：以后谁再写一句摘要式 render、或封闭 schema 少声明一个字段，CI 当场红，而不是等 12 个版本。
-- `npm run verify` 从 242 项涨到 **301 项断言，exit 0**。纯测试改动，产物 `lib/` 未变，不需要重发版。
+- `npm run verify` 从 242 项涨到 **311 项断言，exit 0**。这一节改了 `src/`（错误文案），所以要发版才到用户手上；`extension/` 仍无改动。
 
 ## v1.0.12 (2026-10-12)
 
