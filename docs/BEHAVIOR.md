@@ -75,6 +75,15 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - 拿不到 `tabGroups` 权限（Chrome < 89）时整条路径降级为 `{grouped:false, reason}`，其它功能不受影响；manifest 里漏声明该权限也会静默走这条降级，所以 `verify/verify_tab_groups.mjs` 直接断言 manifest 内容。
 - 归组不算「写操作」：重复归组是空操作，错误契约（`src/errors.ts`）把它当重试安全，超时/掉线时报 `not_started` 而不是 `unknown`。
 
+## 关闭标签页：每个 id 都要有去向
+
+- `browser_tabs close` 收 `tabId`（一个）或 `tabIds`（一批）。一批在链路上是**一条命令**（扩展侧 `tabs.closeMany` → 一次 `chrome.tabs.remove([ids])`），不是 N 次往返中间掉线。
+- 结果一律是 `{ requested, closed: [...], alreadyGone: [...], failed: [{tabId, error}] }`，**单数与批量同一个形状**，模型只需要学一种结果。以前的 `for (id of ids) await tabs.close(id)` 在第一个失败就抛出，会把已经真的关掉的标签藏起来 —— 模型于是以为什么都没发生，重放整批。
+- **`alreadyGone` 是幂等成功，不是错误**：关一个已经不在的标签 = 目标已达成，直接重试是安全的。这条和 `src/errors.ts` 的 `effectState` 是同一件事的两半（那里管「失败该怎么报」，这里管「部分成功该怎么报」）。
+- **不猜**：`chrome.tabs.remove` 之后逐个复查，「还在」的才进 `failed`；调用被拒但其中一个其实已经关掉，也会如实进 `closed`。
+- 交给 Chrome 的只有「确认存在」的 id：真 Chrome 遇到无效 id 会拒绝**整批**，所以先自查存在性 —— 一个早已消失的标签不会连坐同批里还能关的标签。
+- `verify/verify_tabs_close_many.mjs`：扩展侧 7 组场景（一次调用/数组形态、早已不存在、幂等重试、入参清洗、单数同形状、整批被拒、拒了但已关掉一个），宿主侧 5 条（分发到 `tabs.close` 还是 `tabs.closeMany`、重复 id 去重、结果过 schema、文本里读得到去向、缺参明确报错）。
+
 ## 模型可见内容契约
 
 - 成功结果里，**模型看到的就是 `output.render(args, value)` 的返回值**（宿主实测：`@deepseek-ai/dsh-tools` `lib/index.js:3548-3551`，`content = snapshotProjection(render(...))`）。`value` 是 execution-local 的，"deliberately omitted from durable events"（`lib/types/index.d.ts:415`），`presentationMeta` 只喂 UI。**render 少写一个字段，模型就永远看不到那个字段。**

@@ -868,10 +868,66 @@ async function cmdTabsOpen(params) {
 	};
 }
 
+/** 这个 id 现在还在不在。关闭前先问一次，是为了不让「已经没了」把整批连坐。 */
+async function tabStillThere(tabId) {
+	try {
+		await chrome.tabs.get(tabId);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * 一句给人/模型看的失败文案。跨 realm 抛来的 Error（`instanceof Error` 为假，
+ * 例如从注入上下文或 chrome API 代理里冒出来的）也要认出它的 `message`，
+ * 否则文案会变成 `Error: <原因>` 这种带前缀的二手货。
+ */
+function failureText(error) {
+	if (error instanceof Error) return error.message;
+	if (error !== null && typeof error === 'object' && 'message' in error) return String(error.message);
+	return String(error);
+}
+
+/**
+ * 关闭一个或多个标签页，并把**每个 id** 的去向报清楚。
+ *
+ * 为什么不允许「第一个失败就抛出」：关标签是有副作用的写操作，前面的 id 可能
+ * 已经真的关掉了。只回一句错误，模型会以为什么都没发生，然后重放整批；而
+ * `effectState` 那套（errors.ts）对写操作的底线正是「不许把已发生的副作用藏起来」。
+ * 所以这里收齐 `closed` / `alreadyGone` / `failed`，并且**不猜**：调用
+ * `chrome.tabs.remove` 之后逐个复查，还在的才算 failed。
+ *
+ * `alreadyGone` 是幂等成功，不是错误 —— 这样重试是安全的。
+ */
+async function cmdTabsCloseMany(params) {
+	const raw = Array.isArray(params.tabIds) ? params.tabIds : [];
+	const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+	if (ids.length === 0) throw new Error('params.tabIds must be a non-empty array of tab ids');
+	const present = [];
+	const alreadyGone = [];
+	for (const id of ids) (await tabStillThere(id)) ? present.push(id) : alreadyGone.push(id);
+	let report = null;
+	if (present.length > 0) {
+		try {
+			// 一次调用、数组形态：一批标签在链路上是一条命令、一份超时预算。
+			await chrome.tabs.remove(present);
+		} catch (error) {
+			report = failureText(error);
+		}
+	}
+	const closed = [];
+	const failed = [];
+	for (const id of present) {
+		if (await tabStillThere(id)) failed.push({ tabId: id, error: report ?? 'tabs.remove resolved but the tab is still open' });
+		else closed.push(id);
+	}
+	return { requested: ids.length, closed, alreadyGone, failed };
+}
+
 async function cmdTabsClose(params) {
 	if (params.tabId === undefined) throw new Error('params.tabId is required');
-	await chrome.tabs.remove(Number(params.tabId));
-	return { closed: Number(params.tabId) };
+	return cmdTabsCloseMany({ tabIds: [Number(params.tabId)] });
 }
 
 async function cmdTabsActivate(params) {
@@ -1536,7 +1592,7 @@ async function cmdSnapshot(params) {
 
 const COMMANDS = {
 	ping: cmdPing, 'browser.info': cmdBrowserInfo,
-	'tabs.list': cmdTabsList, 'tabs.open': cmdTabsOpen, 'tabs.close': cmdTabsClose, 'tabs.activate': cmdTabsActivate,
+	'tabs.list': cmdTabsList, 'tabs.open': cmdTabsOpen, 'tabs.close': cmdTabsClose, 'tabs.closeMany': cmdTabsCloseMany, 'tabs.activate': cmdTabsActivate,
 	'tabs.group': cmdTabGroup, 'tabs.ungroup': cmdTabUngroup,
 	nav: cmdNav, eval: cmdEval, content: cmdContent, find: cmdFind,
 	click: cmdClick, input: cmdInput, press: cmdPress, scroll: cmdScroll,

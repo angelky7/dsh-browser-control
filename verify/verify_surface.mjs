@@ -33,8 +33,11 @@ const extCommands = new Set(
 check("扩展命令表可解析", extCommands.size >= 20, `${extCommands.size} 个：${[...extCommands].join(", ")}`);
 
 // 2) 插件调用的命令
+//    命令名允许大写后缀（`tabs.closeMany`）。原来的 `[a-z_.]+` 会把它截成 `tabs.close`：
+//    「扩展实现了但 agent 拿不到」那条断言于是**漏判**，而新命令又因为前缀恰好存在，
+//    静默通过了第 2 条 ghost 检查 —— 两个方向同时瞎掉。
 const pluginCommands = new Set(
-  [...src.matchAll(/controller\.execute\(\s*'([a-z_.]+)'/g)].map((m) => m[1]),
+  [...src.matchAll(/controller\.execute\(\s*'([A-Za-z_.]+)'/g)].map((m) => m[1]),
 );
 const ghost = [...pluginCommands].filter((c) => !extCommands.has(c));
 check("插件调用的命令都在扩展表里", ghost.length === 0, ghost.length ? `扩展没有：${ghost.join(", ")}` : `${pluginCommands.size} 个全部命中`);

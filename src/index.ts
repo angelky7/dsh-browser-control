@@ -304,6 +304,21 @@ function requireTabId(args: { tabId?: number }, action: string): number {
 	return args.tabId
 }
 
+/**
+ * Every tab the caller asked to close. `tabId` and `tabIds` are both accepted
+ * (a batch call that repeats one id, or passes both, must not close it twice),
+ * and the ids are deduplicated and normalised before they leave the host.
+ */
+function closeTabIds(args: { tabId?: number; tabIds?: number[] }): number[] {
+	const asked = [
+		...(Array.isArray(args.tabIds) ? args.tabIds : []),
+		...(typeof args.tabId === 'number' ? [args.tabId] : []),
+	]
+	const ids = [...new Set(asked.map(Number).filter(id => Number.isInteger(id) && id > 0))]
+	if (ids.length === 0) throw new Error('close requires tabId or tabIds')
+	return ids
+}
+
 interface ScreenshotPayload {
 	tabId: number
 	format: 'png' | 'jpeg'
@@ -778,11 +793,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_tabs',
-		description: 'List tabs, or open/close/activate/group/ungroup one. Actions act on real browser windows.',
+		description: 'List tabs, or open/close/activate/group/ungroup. `close` takes one tab (`tabId`) or several (`tabIds`); the result accounts for every id, so a retry is safe.',
 		parameters: {
 			action: { type: 'string', required: true, description: 'One of: list, open, close, activate, group, ungroup.' },
 			url: { type: 'string', description: 'URL for the open action.' },
 			tabId: { type: 'number', description: 'Target tab for close/activate/group.' },
+			tabIds: { type: 'array', items: { type: 'number' }, description: 'For close: every tab to close in one call. The result reports each id (closed / alreadyGone / failed) instead of stopping at the first failure.' },
 			active: { type: 'boolean', description: 'Whether a newly opened tab becomes active; defaults to true.' },
 			group: { type: 'boolean', description: 'For open: put the new tab in the DSH tab group. Defaults to true; pass false to keep it loose.' },
 			windowId: { type: 'number', description: 'For ungroup: only dissolve that window’s DSH group; omit to clear every window.' },
@@ -803,8 +819,14 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					if (args.group !== undefined) params.group = args.group
 					return await controller.execute('tabs.open', params, exec.signal) as Record<string, JsonValue>
 				}
-				case 'close':
-					return await controller.execute('tabs.close', { tabId: requireTabId(args, 'close') }, exec.signal) as Record<string, JsonValue>
+				case 'close': {
+					const ids = closeTabIds(args)
+					// One id keeps the single-tab command; several go out as ONE command
+					// (`tabs.closeMany`) instead of N round-trips that can die in between.
+					return ids.length === 1
+						? await controller.execute('tabs.close', { tabId: ids[0] }, exec.signal) as Record<string, JsonValue>
+						: await controller.execute('tabs.closeMany', { tabIds: ids }, exec.signal) as Record<string, JsonValue>
+				}
 				case 'activate':
 					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal) as Record<string, JsonValue>
 				case 'group':
