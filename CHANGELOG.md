@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v1.0.16 (2026-10-12)
 
 **这一版改了 `extension/`，扩展必须重装**（插件侧也要更新到新版本号）。
 
@@ -8,7 +8,9 @@
 - **顺带修掉报告方在同一函数里指出的两件事**：① 组合键现在真能用——`browser_press` 接受 `"Ctrl+A"` / `"Shift+ArrowRight"` 这种写法，也接受 `modifiers:["ctrl"]`（以前扩展层支持 `modifiers` 但工具层没暴露，`"Shift+ArrowRight"` 只会静默无效）；② **认不出的键名改成抛错**，不再带着 `undefined` 的 keyCode/code 照样派发、然后回一句 `pressed:true` 让调用方以为成功了。
 - **新增 `verify/verify_press_events.mjs`（19 项）：第一次按「派发次数」测键盘。** 单字符 / `Enter` / 数字键 / `type` 模式逐字符各断言「插入型事件恰好一个、不得有 `char` 事件」，外加组合键解析、未知键名零派发、`shift` 与 `ctrl` 的插入语义。台子支持传入另一份 `background.js` 来跑：对**修复前**的版本，同一批断言红 12 项（报出 `keyDown,char,keyUp`），所以它不是跟着新代码写的空断言。
 - 报告方关于「为什么测试没拦住」的判断是对的：`verify/` 以前对 `browser_press` 只断言模型可见文本（`verify_render_contract.mjs` 里那一条），**整个仓库没有任何一条真实按键事件计数**。这条缺口现在补上了。
-- `npm run verify` 从 331 项涨到 **350 项，exit 0**。
+- **合并 PR #11（long-arm-ape）：`browser_tabs close` 支持一次关一批，且每个 id 都有交代。** 第二版按评审要求改到位了：一批只发**一条命令**（扩展侧新增 `tabs.closeMany` → 一次 `chrome.tabs.remove([ids])`），不再 N 次往返中间掉线；结果统一成 `{requested, closed, alreadyGone, failed:[{tabId,error}]}`，**单数与批量同一个形状**。以前 `for (id of ids) await tabs.close(id)` 第一个失败就抛出，会把已经真的关掉的标签藏起来，模型于是以为什么都没发生、重放整批——这跟 `effectState` 契约直接冲突，也是当时没合的原因。`alreadyGone`（早就没了）算幂等成功、重试安全；并且**不猜**：`remove` 之后逐个复查，「还在」的才进 `failed`，被拒但其实已关掉的会如实进 `closed`。
+- 附带一个他们顺手挖出来的**我自己的**对账缺陷：`verify_surface.mjs` 里那条命令名正则 `[a-z_.]+` 会把 `tabs.closeMany` 截成 `tabs.close`（大小写敏感 → 新命令名进不了对账），已放宽。
+- `npm run verify` 从 331 项 → 350 项（键盘台）→ **381 项，exit 0**（PR #11 自带 31 项：扩展侧 7 组场景 + 宿主侧 5 条）。合并后 ubuntu 与 windows-latest 两个 job 在 `54d6aee` 上都 success。
 
 ## v1.0.15 (2026-10-12)
 
