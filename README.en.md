@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.0.16.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.16/DSH-Browser-Control-v1.0.16.zip) | Chrome extension (unzip and load; standard zip header, Explorer can expand it directly) |
-| [dsh-browser-control-plugin-v1.0.16.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.16/dsh-browser-control-plugin-v1.0.16.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.0.17.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.17/DSH-Browser-Control-v1.0.17.zip) | Chrome extension (unzip and load; standard zip header, Explorer can expand it directly) |
+| [dsh-browser-control-plugin-v1.0.17.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.17/dsh-browser-control-plugin-v1.0.17.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -104,7 +104,7 @@ npm install @caob23/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.16"
+dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.17"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
