@@ -654,9 +654,10 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_press',
-		description: 'Send a real keyboard event to the page (Enter, Tab, Escape, arrows, or a single character).',
+		description: 'Send a real keyboard event to the page: a named key (Enter, Tab, Escape, ArrowDown…), a single character, or a combination such as "Ctrl+A" / "Shift+ArrowRight".',
 		parameters: {
-			key: { type: 'string', required: true, description: 'Named key (Enter, Escape, ArrowDown…) or a single character.' },
+			key: { type: 'string', required: true, description: 'Named key, a single character, or "Modifier+Key" (alt, ctrl/control, meta/command, shift). Unknown names now fail loudly instead of doing nothing.' },
+			modifiers: { type: 'array', items: { type: 'string' }, description: 'Alternative to the "Ctrl+A" spelling: ["ctrl", "shift"]. Shift alone still lets the character be typed; ctrl/meta suppress insertion.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 		},
 		output: {
@@ -666,6 +667,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		presentCall: args => ({ card: 'generic', title: `Press ${args.key}`, kind: 'other' as const }),
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { key: args.key }
+			if (Array.isArray(args.modifiers)) params.modifiers = args.modifiers
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			return await controller.execute('press', params, exec.signal) as Record<string, JsonValue>
 		},

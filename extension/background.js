@@ -1243,10 +1243,27 @@ const KEY_CODES = {
 };
 const MODIFIER_BITS = { alt: 1, ctrl: 2, control: 2, meta: 4, command: 4, shift: 8 };
 
+/** 把 "Ctrl+A" 这类组合串拆成真正的按键 + 修饰键集合。 */
+function parseKeySpec(key, rawModifiers) {
+	const mods = new Set((Array.isArray(rawModifiers) ? rawModifiers : []).map((m) => String(m).toLowerCase()));
+	// 只有长度 > 1 且含 '+' 才当组合串：`+` 与 `=` 这类键本身就是单字符。
+	const parts = key.length > 1 && key.includes('+') ? key.split('+') : [key];
+	const finalKey = parts.pop();
+	for (const part of parts) {
+		const name = part.trim().toLowerCase();
+		if (!(name in MODIFIER_BITS)) {
+			throw new Error(`unknown modifier "${part.trim()}" in key "${key}". Valid: alt, ctrl/control, meta/command, shift — or pass modifiers: ["ctrl"] together with key: "a".`);
+		}
+		mods.add(name);
+	}
+	return { key: finalKey, modifiers: [...mods] };
+}
+
 async function cmdPress(params) {
-	const key = String(params.key ?? '');
-	if (key.length === 0) throw new Error('params.key is required');
+	const raw = String(params.key ?? '');
+	if (raw.length === 0) throw new Error('params.key is required');
 	const tab = await resolveTab(params.tabId);
+	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
 	// Key events need OS focus; a background tab swallows them silently.
 	await activateTabWindow(tab.id);
 	let keyCode, code;
@@ -1256,21 +1273,27 @@ async function cmdPress(params) {
 		if (/^[a-z]$/i.test(key)) code = `Key${key.toUpperCase()}`;
 		else if (/^[0-9]$/.test(key)) code = `Digit${key}`;
 	}
+	if (keyCode === undefined) {
+		// 以前这里不报错，照样把 undefined 的 keyCode/code 发出去：Chrome 什么都不做，
+		// 调用方却收到 `{key:"…", pressed:true}`——静默失败比失败本身更糟。
+		throw new Error(`unknown key "${raw}". Use one of ${Object.keys(KEY_CODES).join(', ')}, a single character, or a combination like "Ctrl+A" / "Shift+ArrowRight".`);
+	}
 	const text = params.text !== undefined
 		? String(params.text)
 		: key === 'Enter' ? '\r' // '\r' makes keyDown perform implicit form submission
-		: key.length === 1 && !(params.modifiers ?? []).some((m) => m in MODIFIER_BITS && m !== 'shift') ? key : undefined;
+		: key.length === 1 && !modifierNames.some((m) => m in MODIFIER_BITS && m !== 'shift') ? key : undefined;
 	let modifiers = 0;
-	for (const m of params.modifiers ?? []) modifiers |= MODIFIER_BITS[String(m).toLowerCase()] ?? 0;
+	for (const m of modifierNames) modifiers |= MODIFIER_BITS[String(m).toLowerCase()] ?? 0;
 	return withCDP(tab.id, async (send) => {
+		// NOTE: no separate 'char' event — Chrome inserts the character from
+		// keyDown's text field; an explicit char event duplicates the input
+		// (double characters, and Enter submitted the form twice). Same rule
+		// `cmdInput`'s type mode already follows; see issue #14.
 		await send('Input.dispatchKeyEvent', {
 			type: 'keyDown', key, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, code, text, unmodifiedText: text, modifiers,
 		});
-		if (text) {
-			await send('Input.dispatchKeyEvent', { type: 'char', key, text, unmodifiedText: text, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, code, modifiers });
-		}
 		await send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, code, modifiers });
-		return { tabId: tab.id, key };
+		return { tabId: tab.id, key, pressed: true, ...(modifiers ? { modifiers } : {}) };
 	});
 }
 

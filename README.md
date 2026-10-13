@@ -213,7 +213,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_snapshot` | 页面快照 → 逐条列出 ref 的交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名） |
 | `browser_click` | 点击元素（by ref / selector） |
 | `browser_type` | 在输入框填入文本 |
-| `browser_press` | 模拟键盘按键 |
+| `browser_press` | 模拟键盘按键（回车、Tab、方向键，以及 "Ctrl+A" / "Shift+ArrowRight" 这类组合键；一次按键只插入一次） |
 | `browser_scroll` | 滚动页面 |
 | `browser_wait` | 等元素出现 / 等文本出现 / 等条件为真（最长 120 秒，v1.0.9+） |
 | `browser_find` | 按 CSS 选择器查元素，返回数量与位置尺寸（只读，v1.0.9+） |

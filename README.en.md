@@ -214,7 +214,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
 | `browser_click` | Click an element (by ref / selector) |
 | `browser_type` | Type into inputs |
-| `browser_press` | Send keyboard keys |
+| `browser_press` | Send keyboard keys (Enter, Tab, arrows, and combinations like "Ctrl+A" / "Shift+ArrowRight"; one press inserts exactly once) |
 | `browser_scroll` | Scroll the page |
 | `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
 | `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
