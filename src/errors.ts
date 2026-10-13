@@ -44,7 +44,7 @@ export type EffectState =
  */
 const WRITE_COMMANDS = new Set<string>([
 	'nav', 'click', 'input', 'press', 'scroll', 'eval', 'emulate',
-	'tabs.open', 'tabs.close', 'tabs.activate', 'dialog',
+	'tabs.open', 'tabs.close', 'tabs.closeMany', 'tabs.activate', 'dialog',
 ]);
 
 /** 该命令是否可能留下副作用。 */

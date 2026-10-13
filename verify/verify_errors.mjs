@@ -79,6 +79,31 @@ check("toJSON().error 是原始失败描述（不含追加文案与前缀）",
 check("toJSON() 的 hint 不重复出现在 error 字段里",
   !writeTimeout.toJSON().error.includes("下一步"), writeTimeout.toJSON().error.slice(0, 80));
 
+// ---- 分类表与扩展命令表必须一一对上（PR #11 合并后暴露的缺口）----
+// tabs.closeMany 是批量关闭，在链路上是**一条**命令，所以它是新的命令名；
+// 而 effectState 是按命令名判写/读的。漏登记的名字会静默落到 not_started，
+// 于是超时报文写着「重试安全」，实际可能已经关掉了一半标签。
+{
+  const src = await (await import('node:fs/promises')).readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
+  const table = src.slice(src.indexOf('const COMMANDS = {'));
+  const commands = [...table.slice(0, table.indexOf('};')).matchAll(/'?([a-zA-Z.]+)'?\s*:\s*cmd[A-Za-z]/g)]
+    .map((m) => m[1]);
+  // 读操作与「重复执行无害」的幂等命令，逐条写理由：新增命令必须在这里做一次判断，
+  // 不能默默落在 neither 里。
+  const classifiedRead = new Set([
+    'ping', 'browser.info', 'tabs.list', 'tabs.group', 'tabs.ungroup', // 分组是幂等的：重复归组是空操作
+    'content', 'find', 'snapshot', 'screenshot', 'wait', 'console.log', 'network.log', 'network.clear', 'pdf',
+  ]);
+  const unclassified = commands.filter((c) => !isWriteCommand(c) && !classifiedRead.has(c));
+  const wronglyMarked = commands.filter((c) => isWriteCommand(c) && classifiedRead.has(c));
+  check('COMMANDS 表被解析出来了（解析不出来时后面三条全是空集合上的真命题）',
+    commands.length >= 24, `解析到 ${commands.length} 条：${commands.join(',')}`);
+  check('每条扩展命令都登记过写/读（新增命令不许静默算作重试安全）',
+    unclassified.length === 0, unclassified.join(','));
+  check('写/读分类表本身没有自相矛盾', wronglyMarked.length === 0, wronglyMarked.join(','));
+  check('tabs.closeMany 被当成写操作（部分关闭后超时不许说重试安全）', isWriteCommand('tabs.closeMany'));
+}
+
 // ---- 集成层：真 BridgeServer + 不回话的假扩展 ----
 const PORT = 9778;
 const TOKEN = "err-test-token";
