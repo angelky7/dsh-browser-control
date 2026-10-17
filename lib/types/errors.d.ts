@@ -15,7 +15,7 @@
  * 重试安全。
  */
 /** 失败原因分类。 */
-export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'command_failed';
+export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'command_failed';
 /** 副作用状态。 */
 export type EffectState = 
 /** 确定没有副作用落到页面上，重试安全。 */

@@ -23,6 +23,7 @@ export type BridgeErrorCode =
 	| 'link_lost'            // 命令在途时扩展掉线/链路被换掉
 	| 'cancelled'            // 调用方主动取消
 	| 'not_configured'       // 还没拿到任何一份配置
+	| 'blocked_by_policy'    // 本机策略（只读档 / 脚本开关）拦下，命令没有发出
 	| 'command_failed';      // 扩展明确回了失败
 
 /** 副作用状态。 */
@@ -60,6 +61,7 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	link_lost: '命令在途时链路断了：动作可能已经落到页面上。先用只读工具确认页面状态，再决定是否重做。',
 	cancelled: '调用被取消：按需重新发起，不必当作错误处理。',
 	not_configured: '插件还没读到配置：确认 dsh 已加载本插件（dsh plugin list）后再试。',
+	blocked_by_policy: '这是本机策略拦下的，不是故障：命令没有发给浏览器（零副作用）。要放开改 profile 的 cordis.patch.yml（browser-bridge 的 readOnly / allowScript）并重启 dsh，或换成本机允许的只读工具；不要原地重试。',
 	command_failed: '扩展报回失败：按 error 文本处理，通常是选择器没命中、标签页已关闭或页面不允许该操作。',
 };
 

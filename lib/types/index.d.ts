@@ -19,6 +19,7 @@
  */
 import { type Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+export { READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "browser-bridge";
 /** The tool registry this plugin contributes `browser_*` tools to. */
@@ -40,6 +41,21 @@ export interface Config {
      * Directory screenshots are written to and `cleanup` clears. Relative paths
      * resolve against the process working directory at resolve time.
      */ shotsDir?: string;
+    /**
+     * Read-only mode: refuse every command that would change the page or the
+     * browser (click / input / press / nav / scroll / tabs.* / emulate / dialog /
+     * network.clear …) while reads keep working. Off by default. Takes effect
+     * live — the gate reads the current settings on every call.
+     */
+    readOnly?: boolean;
+    /**
+     * Allow running arbitrary page scripts (`browser_evaluate`). On by default,
+     * because that tool is the escape hatch when no dedicated command fits. Set
+     * false to keep clicks and reads while forbidding arbitrary JS in the page:
+     * `browser_evaluate` can do everything the other tools can, so "read-only"
+     * alone does not take arbitrary code off the table.
+     */
+    allowScript?: boolean;
 }
 export declare const Config: z<Config>;
 /** Cordis plugin entry: wire the settings-driven lifecycle plus the model-facing tools. */

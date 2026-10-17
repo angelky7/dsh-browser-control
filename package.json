@@ -1,85 +1,85 @@
 {
-  "name": "@caob23/dsh-browser-control",
-  "description": "Local WebSocket bridge between dsh and the DSH Browser Control browser extension, with model-facing browser_* tools and a Settings-managed on/off switch",
-  "version": "1.0.17",
-  "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/types/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "default": "./lib/index.js"
-    },
-    "./invariant": {
-      "types": "./lib/types/invariant.d.ts",
-      "default": "./lib/invariant.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "cordis.patch.yml",
-    "lib/index.js",
-    "lib/invariant.js",
-    "lib/types/**/*.js",
-    "lib/types/**/*.d.ts",
-    "README.md",
-    "README.en.md",
-    "llms.txt",
-    "LICENSE"
-  ],
-  "license": "AGPL-3.0-only",
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json && tsdown",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check": "npm run typecheck && npm run build && publint",
-    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/caob23/dsh-browser-control.git"
-  },
-  "bugs": {
-    "url": "https://github.com/caob23/dsh-browser-control/issues"
-  },
-  "homepage": "https://github.com/caob23/dsh-browser-control#readme",
-  "keywords": [
-    "deepseek-harness",
-    "deepseek",
-    "dsh",
-    "dsh-plugin",
-    "browser",
-    "browser-automation",
-    "cdp",
-    "chrome-extension",
-    "websocket"
-  ],
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/dsh-invariants": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-settings": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0"
-  },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
-  },
-  "devDependencies": {
-    "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
-    "@types/node": "^22.20.0",
-    "publint": "^0.3.21",
-    "semver": "^7.8.5",
-    "tsdown": "^0.22.2",
-    "typescript": "^6.0.3"
-  }
+	"name": "@caob23/dsh-browser-control",
+	"description": "Local WebSocket bridge between dsh and the DSH Browser Control browser extension, with model-facing browser_* tools and a Settings-managed on/off switch",
+	"version": "1.0.17",
+	"type": "module",
+	"main": "lib/index.js",
+	"types": "lib/types/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/types/index.d.ts",
+			"default": "./lib/index.js"
+		},
+		"./invariant": {
+			"types": "./lib/types/invariant.d.ts",
+			"default": "./lib/invariant.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"cordis.patch.yml",
+		"lib/index.js",
+		"lib/invariant.js",
+		"lib/types/**/*.js",
+		"lib/types/**/*.d.ts",
+		"README.md",
+		"README.en.md",
+		"llms.txt",
+		"LICENSE"
+	],
+	"license": "AGPL-3.0-only",
+	"dsh": {
+		"bundle": {
+			"patch": "./cordis.patch.yml"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json && tsdown",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"check": "npm run typecheck && npm run build && publint",
+		"verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_policy.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs"
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/caob23/dsh-browser-control.git"
+	},
+	"bugs": {
+		"url": "https://github.com/caob23/dsh-browser-control/issues"
+	},
+	"homepage": "https://github.com/caob23/dsh-browser-control#readme",
+	"keywords": [
+		"deepseek-harness",
+		"deepseek",
+		"dsh",
+		"dsh-plugin",
+		"browser",
+		"browser-automation",
+		"cdp",
+		"chrome-extension",
+		"websocket"
+	],
+	"peerDependencies": {
+		"@deepseek-ai/cordis": "~4.0.4",
+		"@deepseek-ai/dsh-invariants": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0",
+		"@deepseek-ai/dsh-settings": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0",
+		"@deepseek-ai/dsh-tools": "0.2.0-rc.2 || >=0.1.0-rc.1 <0.3.0-0"
+	},
+	"dependencies": {
+		"@deepseek-ai/schemastery": "~3.18.4"
+	},
+	"devDependencies": {
+		"@deepseek-ai/cordis": "~4.0.4",
+		"@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
+		"@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+		"@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+		"@types/node": "^22.20.0",
+		"publint": "^0.3.21",
+		"semver": "^7.8.5",
+		"tsdown": "^0.22.2",
+		"typescript": "^6.0.3"
+	}
 }

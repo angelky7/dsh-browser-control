@@ -183,6 +183,20 @@ npm 发布的 bundle 只含宿主侧 `lib/index.js`，没有浏览器端模块�
 
 访问 `http://127.0.0.1:9777/` 查看连接状态。
 
+### 不想让它点，只想让它看：只读档与脚本开关
+
+profile 覆盖层里给 `browser-bridge` 配两项（完整写法见 [dsh-config/README.md](dsh-config/README.md#两个闸门)）：
+
+```yaml
+config:
+  readOnly: true      # 只读：点击/输入/按键/导航/滚动/标签页操作/视口模拟全拒
+  allowScript: false  # 再把 browser_evaluate（在页面里跑任意 JS）关掉
+```
+
+被拦的命令**不会发到浏览器**（零副作用），错误码 `blocked_by_policy`，文案写明改哪个字段。
+注意 `readOnly` 单独打开**不等于**拿掉了任意脚本能力：`browser_evaluate` 能做其它工具能做的所有事，
+所以「能不能执行脚本」是单独一项。这两个开关只管模型那条工具面，HTTP 面（带 token）不受影响。
+
 ### agent 开的标签长什么样（自动归进 DSH 分组）
 
 Agent **新建**的标签页会自动收进当前窗口的一个 `DSH` 蓝色标签分组里（每个窗口一组），所以你扫一眼就知道哪些页面是机器开的、哪些是自己开的，事后也能一把清掉：

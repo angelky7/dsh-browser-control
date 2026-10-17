@@ -24,6 +24,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_press_events.mjs` | 真实 `background.js` + 有状态假 `chrome.debugger`，按**派发次数**测键盘：一次按键只许插入一次（issue #14 那个 `keyDown(text)+char` 双倍插入）、`Enter` 只提交一次、组合键解析、未知键名必须抛错且零派发。**第二个参数可以换一份 background.js 跑**——对修复前的版本，同一批断言红 12 项 | issue #14 键盘回归 |
 | `verify_nav_landing.mjs` | 真实扩展代码 + 会演导航的假 `chrome.tabs`：正常加载 / 慢启动竞态（旧文档先 `complete` 400ms）/ 永不提交（必须报 `loadPending`，不许 0ms 或 1.2s 后假装成功）/ 导航到同一个地址仍算成功 / 新建标签出生在 `about:blank` 也要等到真 URL | PR #12 与其残留口子 |
 | `verify_render_contract.mjs` | 真实 `BridgeServer` + 假扩展 + **宿主自己的** `validateJsonSchemaValue`/`valueSchemaSpecToJsonSchema`：把每条工具的真实返回值同时喂给它的输出 schema 与它的 `render`，逐条问「schema 过不过」「模型可见文本里有没有这次调用真正要的数据」「超预算时 [renderedTruncated] 的数字对不对」「封闭 schema 的 11 条工具里不许出现 null（宿主对 null 下钻判类型）」。**地面真相表铺满全部 20 条工具**（截图 / PDF / cleanup 用临时 `shotsDir`），共 126 项 | 模型可见内容契约 |
+| `verify_policy.mjs` | 本机策略闸门（`readOnly` / `allowScript`）：用假 cordis 上下文跑真 `apply()`，断言默认值不变、只读档下 7 个写工具全部 `blocked_by_policy`（零副作用）而 4 个读工具照常走到链路（报 `extension_offline`，证明闸门放行）、单独关脚本只拦 `browser_evaluate` 不牵连点击、两个都限制时拒因是更具体的那个，并把扩展 `COMMANDS` 表 **26 条**逐条对账（每条要么在只读白名单里、要么被拒；白名单不许有改名后的幽灵条目） | 只读档 / 脚本开关 |
 | `verify_extension_e2e.mjs` | **端到端（只差真浏览器）**：起真的 `BridgeServer`，在 vm 里跑真的 `extension/background.js`，用 Node 自带的 `WebSocket` 真连 `ws://127.0.0.1:9779/ws`。断言 hello 带过来的 `protocol` 被桥认下、HTTP 命令面的 `tabs.open/group/list/ungroup` 确实走到扩展的 `COMMANDS` 表并原样返回、扩展抛的错变成 502 + `command_failed` + `effectState` | 帧契约 / 新命令可达性 |
 | `verify_errors.mjs` | 错误分类表（超时/掉线/离线/取消…）与 `effectState`：写操作超时必须是 `unknown`（不许盲目重试），只读超时是 `not_started`；起真桥 + 不回话的假扩展，验证 HTTP 面的 503/504 与 `code`/`hint` 字段 | 错误契约 |
 | `verify_protocol.mjs` | `hello` 帧的 `protocol` 握手：老扩展不声明或声明 0 视为兼容，扩展比桥新判不兼容并在 `/api/status` 给出说明 | 协议版本 |
@@ -36,6 +37,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 写这些脚本时踩到的坑，记在这里免得重来：
 
 - `dsh-settings` 的导出面按版本不同：`0.1.2-rc.1` 有 `register`，`0.1.7-rc.2`/`0.2.0-rc.2` 只有 `SettingsForms`（`configure/describe/update/replace/mutate`）。想验证兼容性，不必装宿主，`npm pack @deepseek-ai/dsh-settings@<ver>` 解包 grep 就够了。
+- 假 cordis 上下文里 `apply()` 起的监听是**异步**的：不等端口真的在听，"放行"的命令会报 `bridge_disabled`（还没起）而不是 `extension_offline`（起了但没扩展连上），后者才是「闸门放行」的证据。
 - schemastery 的 schema 本身就是校验函数：`Config(data)` 直接返回补齐默认值后的对象，没有 `.parse()`。
 - cordis 的 `ctx.effect(execute, label)` 里，`execute` 的返回值才是 teardown 函数，所以注册 disposer 要写 `ctx.effect(() => dispose, 'label')`。
 - 宿主 `latest` 已经是 dsh `0.2.0-rc.2`，插件 peer 上限写 `<0.2.0-0` 会让新宿主装不上；放宽前先把 0.2 的 `dsh-tools` 抓下来对比导出面（结论：`defineTool` 等完全一致）。
