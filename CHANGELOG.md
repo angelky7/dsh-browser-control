@@ -1,5 +1,31 @@
 # 更新日志
 
+## Unreleased
+
+**只改了 `extension/`（`background.js` / `popup.html` / `popup.js`）与文档，插件侧 `lib/` 不用重建。**
+
+- **新增本地硬锁（panic switch）：扩展弹窗里一个「锁定」按钮，单击即冻结模型的全部浏览器操作。**
+  动机是个结构性缺口，不是新功能：桥的唯一实际边界是回环 + token，而 token 明写在 profile 的
+  `cordis.patch.yml` 里——模型读得到、改得动，也能重启桥。也就是说「模型自己把浏览器控制关掉」在当前
+  架构里是可行的。把冻结放进浏览器扩展、并且只留人工通道（弹窗里的 `chrome.runtime` 消息），才是模型
+  够不到的那一层。
+  - 冻结期间**连接保持**（心跳照发），命令在 `runCommand` 入口被拦下，任何 handler 都不执行 ⇒ 零 CDP
+    派发、零标签页改动；徽标从绿色 `ON` 换成红色 `LOCK`，不会继续假装健康。
+  - 拒绝文案点名被拦的命令，并写明解锁只能由用户在工具栏弹窗里点「已锁定」完成、不要重试。
+  - 锁只能从弹窗解：`lockSet` 不在 `COMMANDS` 表里，桥侧塞同名命令帧只会被当普通命令拦下；
+    畸形消息 fail-closed（只有显式 `locked: false` 才解锁）。
+  - 状态落 `chrome.storage.local.hardLock`：MV3 会回收 service worker，内存标志丢了就等于没上锁，
+    所以这里用落盘 + 每次唤醒重读（同一类坑见 v1.0.16 的 `bi-042`：顶层读取早于声明，锁会静默失效）。
+  - 协议不动：`PROTOCOL_VERSION` 仍是 1。
+- **新增 `verify/verify_hard_lock.mjs`（26 项）与假 Chrome 台子的两处补强。** 断言：默认不锁、
+  `COMMANDS` 全部 26 条逐条被拦且零 CDP 派发、拒绝文案三要素、桥侧塞 `lockSet` 命令帧解不开、
+  **真·service worker 重启后仍锁着**、畸形消息不解锁、解锁后恢复执行，另核弹窗结构（按钮在
+  「断开连接」与「状态页」之间、单击切换）。台子能对未修版本判红（同一批断言红 **16** 项）。
+  为此把 `verify/ext_harness.mjs` 的假 `chrome.storage.local` 改成**真落盘并广播 `onChanged`**
+  （以前 `set` 是空实现，"活过重启"根本无法测），并把 `chrome.action` 的徽标调用记录下来、
+  加了 `chrome.runtime.onMessage` 的派发器（`model.sendRuntimeMessage`）。
+- `npm run verify` 385 → **411 项，exit 0**（改动前同一套台子 385 项 exit 0 作为基线）。
+
 ## v1.0.17 (2026-10-12)
 
 - **`tabs.closeMany` 登记为写操作，并给写/读分类表加一条与扩展 `COMMANDS` 表的对账。** 合并 PR #11 后扩展多了这条批量关闭命令，而 `effectState` 是按命令名判写/读的：漏登记会让批量关闭超时时报「`not_started`：这次调用没有动到页面，重试安全」，实际可能已经关掉了一半标签——同一类不诚实，这次出现在我刚合并进来的代码上。护栏要求 26 条命令每条要么在写清单里、要么显式登记为读/幂等并写理由；对护栏本身做过变异测试（临时摘掉登记 → 两条断言点名该命令变红）。`npm run verify` 381 → **385 项 exit 0**。

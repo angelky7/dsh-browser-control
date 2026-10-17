@@ -394,13 +394,52 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     onDetach: { addListener: (fn) => { dbg.listeners.onDetach.push(fn); } },
   };
 
+  // Badge calls are recorded rather than swallowed: "connected but frozen" is
+  // only honest if the icon says so, and that is now assertable.
+  const action = {
+    setBadgeText: ({ text } = {}) => { model.badgeText = text ?? ""; },
+    setBadgeBackgroundColor: ({ color } = {}) => { model.badgeColor = color; },
+    setTitle: () => {},
+  };
+
+  // chrome.runtime.onMessage: the popup -> service worker channel. Kept per
+  // boot() because a service-worker restart drops the previous listeners.
+  const runtimeMessages = {
+    listeners: [],
+    async send(msg) {
+      for (const fn of runtimeMessages.listeners) {
+        const response = await new Promise((resolve) => {
+          const keepOpen = fn(msg, { id: "test-extension-id" }, resolve);
+          // `return true` means "sendResponse comes later"; anything else must
+          // not resolve twice (Chrome logs that as an error).
+          if (keepOpen !== true) queueMicrotask(() => resolve(undefined));
+        });
+        if (response !== undefined) return response;
+      }
+      return undefined;
+    },
+  };
+
   const runtime = {
     getManifest: () => manifest,
+    onMessage: {
+      addListener: (fn) => { runtimeMessages.listeners.push(fn); },
+      removeListener: (fn) => {
+        const at = runtimeMessages.listeners.indexOf(fn);
+        if (at >= 0) runtimeMessages.listeners.splice(at, 1);
+      },
+    },
     id: "test-extension-id",
     // 必须是 getter：Chrome 在每次回调前改这个值，扩展就是读它来判失败的
     get lastError() { return state.lastError; },
   };
 
+  const storageListeners = [];
+  const fireStorageChanged = (changes) => {
+    for (const fn of storageListeners) {
+      try { fn(changes, "local"); } catch { /* 监听器炸了不该影响假浏览器 */ }
+    }
+  };
   const storageArea = {
     // 只返回真给得出值的键：扩展那边 `{...DEFAULT_CONFIG, ...stored}` 会被 undefined 覆盖
     get: (keys) => resolve(Object.fromEntries(
@@ -408,9 +447,36 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
         .filter((k) => storage[k] !== undefined)
         .map((k) => [k, storage[k]]),
     )),
-    set: (items) => resolve(),
-    onChanged: listener(),
+    // 真写入并广播：本地锁这类「必须活过 service worker 重启」的状态，
+    // 用一个 set 不落盘的假件测不出来。
+    set: (items) => {
+      const changes = {};
+      for (const [k, v] of Object.entries(items ?? {})) {
+        changes[k] = { oldValue: storage[k], newValue: v };
+        storage[k] = v;
+      }
+      fireStorageChanged(changes);
+      return resolve();
+    },
+    remove: (keys) => {
+      const changes = {};
+      for (const k of Array.isArray(keys) ? keys : [keys]) {
+        changes[k] = { oldValue: storage[k], newValue: undefined };
+        delete storage[k];
+      }
+      fireStorageChanged(changes);
+      return resolve();
+    },
+    onChanged: {
+      addListener: (fn) => storageListeners.push(fn),
+      removeListener: (fn) => {
+        const at = storageListeners.indexOf(fn);
+        if (at >= 0) storageListeners.splice(at, 1);
+      },
+    },
   };
+
+  model.sendRuntimeMessage = (msg) => runtimeMessages.send(msg);
 
   const withFallback = (obj, path) => new Proxy(obj, {
     get: (target, k) => (typeof k === "string" && !(k in target) ? stub(`${path}.${k}`, state) : target[k]),
@@ -420,7 +486,10 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     tabs: withFallback(tabs, "chrome.tabs"),
     runtime: withFallback(runtime, "chrome.runtime"),
     debugger: withFallback(debuggerApi, "chrome.debugger"),
-    storage: withFallback({ local: storageArea, session: storageArea, onChanged: listener() }, "chrome.storage"),
+    action: withFallback(action, "chrome.action"),
+    storage: withFallback({
+      local: storageArea, session: storageArea, onChanged: storageArea.onChanged,
+    }, "chrome.storage"),
   };
   if (withTabGroups) modeled.tabGroups = withFallback(tabGroups, "chrome.tabGroups");
 
