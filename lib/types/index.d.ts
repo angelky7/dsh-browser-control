@@ -19,7 +19,7 @@
  */
 import { type Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
-export { READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts';
+export { LOCAL_DESTRUCTIVE_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts';
 /** Cordis plugin name used by loader diagnostics. */
 export declare const name = "browser-bridge";
 /** The tool registry this plugin contributes `browser_*` tools to. */

@@ -12,6 +12,9 @@
  *
  * 白名单是**默认拒绝**：扩展以后新增一条命令，它自动被只读档拦下，等人判断完再放进来。
  * `verify/verify_policy.mjs` 会把扩展 `COMMANDS` 表逐条对账，让这个判断无法被跳过。
+ *
+ * 第三张表 `LOCAL_DESTRUCTIVE_COMMANDS` 是给**不经过扩展**的插件本地命令的：闸门如果只长在
+ * `execute()` 上，这类调用就整个绕开只读档（`browser_cleanup` 合并进来时正是这样）。
  */
 /** 只读档允许的命令：读页面、读扩展自己的缓冲、或者把页面**内容**落到本机文件。 */
 export declare const READ_ONLY_ALLOWED: ReadonlySet<string>;
@@ -20,6 +23,14 @@ export declare const READ_ONLY_ALLOWED: ReadonlySet<string>;
  * 也可以点，但别在我页面里跑任意 JS」——`browser_evaluate` 能绕开其他所有工具做的事。
  */
 export declare const SCRIPT_COMMANDS: ReadonlySet<string>;
+/**
+ * 不经过扩展、直接在插件进程里改动本机文件的命令名。
+ *
+ * `browser_cleanup` 走 `BridgeController.cleanup()`，**不经过 `execute()`**，所以它天然
+ * 绕开了上面两张表管的那条路。只读档下仍然能删掉用户的整个截图目录，这正是「只读」
+ * 最不该允许的动作，所以单独列一张表，并且由 `cleanup()` 自己调闸门。
+ */
+export declare const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string>;
 /** 两个闸门的当前值。取自插件配置，热更新即生效（改完重启 dsh 也一样）。 */
 export interface PolicyFlags {
     /** 只读档：true 时拒绝一切会改变页面/浏览器状态的命令。 */
@@ -28,8 +39,8 @@ export interface PolicyFlags {
     allowScript: boolean;
 }
 /**
- * 判断一条扩展命令是否被本机策略拦下。
- * @param command - 扩展命令名（`click` / `eval` / `tabs.close` …）。
+ * 判断一条命令是否被本机策略拦下。
+ * @param command - 扩展命令名（`click` / `eval` / `tabs.close` …），或 `LOCAL_DESTRUCTIVE_COMMANDS` 里的插件本地命令名。
  * @param flags - 当前的两个闸门值。
  * @returns 拒绝时写给 agent 的整句理由；放行时 `undefined`。
  */

@@ -36,7 +36,10 @@ export type EffectState =
 	| 'committed';
 
 /**
- * 会改变页面或不可逆地改变浏览器状态的扩展命令；其余按只读处理。
+ * 会改变页面或不可逆地改变浏览器状态的命令；其余按只读处理。
+ *
+ * 表里绝大多数是**扩展命令名**（`classify()` 按调用方传进来的名字查表），但也包含
+ * 插件本地命令（见下面 `cleanup`）：判据始终是同一条——失败之后重试会不会多造成一次损害。
  *
  * 判据是「重试会不会造成额外损害」，不是「有没有动到浏览器」。所以标签分组
  * （`tabs.group` / `tabs.ungroup`）不在这里：把已经在组里的标签再归一次是空操作，
@@ -46,6 +49,10 @@ export type EffectState =
 const WRITE_COMMANDS = new Set<string>([
 	'nav', 'click', 'input', 'press', 'scroll', 'eval', 'emulate',
 	'tabs.open', 'tabs.close', 'tabs.closeMany', 'tabs.activate', 'dialog',
+	// 这条不是扩展命令，而是插件本地命令 `browser_cleanup`：它逐条 rm，中途失败
+	// （Windows 上被占用的截图会 EPERM）时前面的文件已经没了，报 not_started
+	// 就是告诉模型「什么都没发生，重试安全」，而那正好是假的。
+	'cleanup',
 ]);
 
 /** 该命令是否可能留下副作用。 */

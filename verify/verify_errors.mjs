@@ -23,6 +23,9 @@ const cases = [
   ["tabs.open", "browser-bridge stopped", "link_lost", "unknown"],
   ["click", "浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里配 enabled: true", "bridge_disabled", "not_started"],
   ["cleanup", "browser-bridge is not configured yet —— 尚未加载配置", "not_configured", "not_started"],
+  // 删除是逐条 rm 的：半路失败（Windows 上被占用的截图 EPERM）时前面的文件已经没了，
+  // 这时报 not_started「没动过，重试安全」就是假的，必须 unknown 并先去看还剩什么。
+  ["cleanup", "EPERM: operation not permitted, unlink 'dsh-browser-shots/shot.png'", "command_failed", "unknown"],
 ];
 for (const [cmd, msg, code, effect] of cases) {
   const e = classify(cmd, new Error(msg));
@@ -102,6 +105,24 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
     unclassified.length === 0, unclassified.join(','));
   check('写/读分类表本身没有自相矛盾', wronglyMarked.length === 0, wronglyMarked.join(','));
   check('tabs.closeMany 被当成写操作（部分关闭后超时不许说重试安全）', isWriteCommand('tabs.closeMany'));
+}
+
+// ---- 插件本地命令同样要登记（PR #16 合并后复审抓到的）----
+// 上面那条只覆盖扩展的 COMMANDS 表。但 classify() 是按**调用方传进来的名字**查表的，
+// `browser_cleanup` 走 `controller.cleanup()`、根本不经 `execute()`，所以它的名字不在
+// 扩展表里：删到一半失败时（Windows 上被占用的截图会 EPERM）模型拿到的是一句没有 code
+// 的裸 fs 错误，而「没登记」在这里的默认含义是 not_started——正好是假的。
+{
+  const src = await (await import('node:fs/promises')).readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const classified = [...new Set([...src.matchAll(/classify\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1]))];
+  check('src/index.ts 里解析到 classify() 用到的命令名（解析不到时后面两条是空集合上的真命题）',
+    classified.length >= 1 && classified.includes('cleanup'), `解析到 ${classified.length} 个：${classified.join(',')}`);
+  // 插件本地命令里确实算只读的：目前没有，新增时必须在这里写理由。
+  const localRead = new Set();
+  const unregistered = classified.filter((c) => !isWriteCommand(c) && !localRead.has(c));
+  check('每个传给 classify() 的名字都登记过写/读（不许静默按「重试安全」处理）',
+    unregistered.length === 0, unregistered.join(','));
+  check('cleanup 被当成写操作（半路删除失败不许说重试安全）', isWriteCommand('cleanup'));
 }
 
 // ---- 集成层：真 BridgeServer + 不回话的假扩展 ----

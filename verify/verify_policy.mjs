@@ -14,8 +14,10 @@
 // 这个仓库错过一次的那种缺口（v1.0.17：新命令漏登记写操作分类）。
 //
 // 用法：node verify/verify_policy.mjs
-import { readFile } from 'node:fs/promises'
-import { Config, apply, READ_ONLY_ALLOWED, SCRIPT_COMMANDS } from '../lib/index.js'
+import { readFile, mkdtemp, writeFile, readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { Config, apply, LOCAL_DESTRUCTIVE_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS } from '../lib/index.js'
 
 let fails = 0
 /** 起监听是异步的：等端口真的在听，才能用 extension_offline 区分「放行」。 */
@@ -112,7 +114,7 @@ const READ_TOOLS = [
 
 // ---- 2) 只读档：写工具在链路上被拦，读工具照常放行 ----
 {
-  const { tools, dispose } = await boot({ readOnly: true, allowScript: true }, 9783)
+  const { tools, dispose } = await boot({ readOnly: true, allowScript: true }, 9787)
   for (const [name, args] of WRITE_TOOLS) {
     const r = await call(tools, name, args)
     check(`readOnly：${name} 被拦下（blocked_by_policy / not_started）`,
@@ -132,7 +134,7 @@ const READ_TOOLS = [
 
 // ---- 3) 单独关掉脚本执行：只拦 eval，点击照旧 ----
 {
-  const { tools, dispose } = await boot({ readOnly: false, allowScript: false }, 9784)
+  const { tools, dispose } = await boot({ readOnly: false, allowScript: false }, 9788)
   const evalRes = await call(tools, 'browser_evaluate', { expression: '1+1' })
   check('allowScript:false：browser_evaluate 被拦下并指向 allowScript',
     evalRes.ok === false && evalRes.code === 'blocked_by_policy' && /allowScript: false/.test(evalRes.message ?? ''),
@@ -146,7 +148,7 @@ const READ_TOOLS = [
 
 // ---- 4) 两个都开：脚本开关先说话（它比只读档更具体）----
 {
-  const { tools, dispose } = await boot({ readOnly: true, allowScript: false }, 9785)
+  const { tools, dispose } = await boot({ readOnly: true, allowScript: false }, 9789)
   const r = await call(tools, 'browser_evaluate', { expression: '1+1' })
   check('两个都限制时，eval 的拒因是 allowScript（更具体的那个）', /allowScript: false/.test(r.message ?? ''), (r.message ?? '').slice(0, 70))
   await dispose()
@@ -154,7 +156,7 @@ const READ_TOOLS = [
 
 // ---- 5) 什么都不限：闸门不参与（回归：别把正常路径挡了）----
 {
-  const { tools, dispose } = await boot({ readOnly: false, allowScript: true }, 9786)
+  const { tools, dispose } = await boot({ readOnly: false, allowScript: true }, 9790)
   const r = await call(tools, 'browser_click', { selector: '#q' })
   check('都不限制：点击走到链路（extension_offline），没有被策略拦', r.ok === false && r.code === 'extension_offline', r.code)
   await dispose()
@@ -180,6 +182,47 @@ const READ_TOOLS = [
   const allowed = all.filter((c) => READ_ONLY_ALLOWED.has(c))
   console.log(`      只读档放行 ${allowed.length} 条：${allowed.join(', ')}`)
   console.log(`      只读档拒绝 ${all.length - allowed.length} 条（写操作与改浏览器状态的）`)
+}
+
+// ---- 7) browser_cleanup：只读档不许删文件 ----
+// 它走 `controller.cleanup()`，**不经过 execute()**，所以闸门长在 execute() 上时它整个
+// 绕过去了：用户开了只读档，模型仍能用一条 browser_cleanup 删掉整个截图目录。
+{
+  const shotsDir = await mkdtemp(path.join(tmpdir(), 'dsh-policy-'))
+  await writeFile(path.join(shotsDir, 'keep.png'), 'x')
+  const { tools, dispose } = await boot({ readOnly: true, allowScript: true, shotsDir }, 9791)
+  const r = await call(tools, 'browser_cleanup', {})
+  check('readOnly：browser_cleanup 被拦下（blocked_by_policy / not_started）',
+    r.ok === false && r.code === 'blocked_by_policy' && r.effectState === 'not_started',
+    `${r.code}/${r.effectState}｜${(r.message ?? '').slice(0, 70)}`)
+  check('readOnly：browser_cleanup 的文案说的是「删本机文件」，不是「改页面」',
+    /删除本机保存的截图与临时文件/.test(r.message ?? '') && /没有任何文件被删除/.test(r.message ?? ''),
+    (r.message ?? '').slice(0, 90))
+  check('readOnly：被拦之后文件真的还在（不是只在文案上假装）',
+    (await readdir(shotsDir)).includes('keep.png'))
+  await dispose()
+}
+
+// ---- 8) 不开只读档时 cleanup 照常（回归：闸门别把正常路径吃掉）----
+{
+  const shotsDir = await mkdtemp(path.join(tmpdir(), 'dsh-policy-'))
+  await writeFile(path.join(shotsDir, 'gone.png'), 'x')
+  const { tools, dispose } = await boot({ readOnly: false, allowScript: true, shotsDir }, 9792)
+  const r = await call(tools, 'browser_cleanup', {})
+  check('readOnly:false：browser_cleanup 照常工作', r.ok === true && r.value.shotsRemoved >= 1,
+    JSON.stringify(r.ok ? r.value : { code: r.code, message: (r.message ?? '').slice(0, 60) }))
+  check('readOnly:false：文件确实被删掉了', !(await readdir(shotsDir)).includes('gone.png'))
+  await dispose()
+}
+
+// ---- 9) 对账：插件本地命令表不许烂掉 ----
+{
+  const src = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const used = [...new Set([...src.matchAll(/classify\(\s*'([^']+)'/g)].map((m) => m[1]))]
+  check('对账：解析到 src/index.ts 里 classify() 用的命令名（解析不到时下一条是空集合上的真命题）',
+    used.length >= 1 && used.includes('cleanup'), `解析到 ${used.length} 个：${used.join(',')}`)
+  const ghost = [...LOCAL_DESTRUCTIVE_COMMANDS].filter((c) => !used.includes(c))
+  check('对账：LOCAL_DESTRUCTIVE_COMMANDS 每条都真的被 classify() 用到', ghost.length === 0, ghost.join(',') || 'none')
 }
 
 console.log(fails === 0 ? '\n本机策略闸门全部符合契约' : `\n${fails} 项失败`)

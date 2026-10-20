@@ -12,6 +12,9 @@
  *
  * 白名单是**默认拒绝**：扩展以后新增一条命令，它自动被只读档拦下，等人判断完再放进来。
  * `verify/verify_policy.mjs` 会把扩展 `COMMANDS` 表逐条对账，让这个判断无法被跳过。
+ *
+ * 第三张表 `LOCAL_DESTRUCTIVE_COMMANDS` 是给**不经过扩展**的插件本地命令的：闸门如果只长在
+ * `execute()` 上，这类调用就整个绕开只读档（`browser_cleanup` 合并进来时正是这样）。
  */
 
 /** 只读档允许的命令：读页面、读扩展自己的缓冲、或者把页面**内容**落到本机文件。 */
@@ -30,6 +33,15 @@ export const READ_ONLY_ALLOWED: ReadonlySet<string> = new Set([
  */
 export const SCRIPT_COMMANDS: ReadonlySet<string> = new Set(['eval'])
 
+/**
+ * 不经过扩展、直接在插件进程里改动本机文件的命令名。
+ *
+ * `browser_cleanup` 走 `BridgeController.cleanup()`，**不经过 `execute()`**，所以它天然
+ * 绕开了上面两张表管的那条路。只读档下仍然能删掉用户的整个截图目录，这正是「只读」
+ * 最不该允许的动作，所以单独列一张表，并且由 `cleanup()` 自己调闸门。
+ */
+export const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string> = new Set(['cleanup'])
+
 /** 两个闸门的当前值。取自插件配置，热更新即生效（改完重启 dsh 也一样）。 */
 export interface PolicyFlags {
 	/** 只读档：true 时拒绝一切会改变页面/浏览器状态的命令。 */
@@ -42,8 +54,8 @@ const CONFIG_HINT = '开关在 profile 的 cordis.patch.yml 里（browser-bridge
 	+ 'dsh 0.1.7+ 的宿主也会在「设置 → 插件」里直接列出这两项'
 
 /**
- * 判断一条扩展命令是否被本机策略拦下。
- * @param command - 扩展命令名（`click` / `eval` / `tabs.close` …）。
+ * 判断一条命令是否被本机策略拦下。
+ * @param command - 扩展命令名（`click` / `eval` / `tabs.close` …），或 `LOCAL_DESTRUCTIVE_COMMANDS` 里的插件本地命令名。
  * @param flags - 当前的两个闸门值。
  * @returns 拒绝时写给 agent 的整句理由；放行时 `undefined`。
  */
@@ -51,6 +63,10 @@ export function policyRefusal(command: string, flags: PolicyFlags): string | und
 	if (!flags.allowScript && SCRIPT_COMMANDS.has(command)) {
 		return `在页面里执行任意脚本已被关闭（allowScript: false）：命令 ${command} 被拒绝，没有向浏览器发出任何操作。`
 			+ `要读页面内容请改用 browser_read / browser_snapshot / browser_find；确实需要执行脚本时，${CONFIG_HINT}之后再说。`
+	}
+	if (flags.readOnly && LOCAL_DESTRUCTIVE_COMMANDS.has(command)) {
+		return `只读模式已开启（readOnly: true）：命令 ${command} 会删除本机保存的截图与临时文件，删除不可逆，所以已被拒绝，没有任何文件被删除。`
+			+ `只读档的含义是「什么都不要改」，清理属于改动；要释放磁盘请由用户自己关掉 readOnly，${CONFIG_HINT}。不要原地重试本命令。`
 	}
 	if (flags.readOnly && !READ_ONLY_ALLOWED.has(command)) {
 		return `只读模式已开启（readOnly: true）：命令 ${command} 会改变页面或浏览器状态，已被拒绝，没有向浏览器发出任何操作。`
