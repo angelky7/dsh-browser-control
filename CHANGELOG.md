@@ -29,8 +29,20 @@
   四条写命令零动作派发、导航后自动解除、`hold off` 恢复、错误页 `covered:false`、观察面两向排除。
   为此给 `verify/ext_harness.mjs` 加了独立的 `chrome.storage.session` 落点（`sessionStorage` 选项）。
 - **其余三张对账台各补一条**：`verify_surface`（README/README.en 工具表 + llms.txt 工具数 20→21）、
-  `verify_policy`（`hold` 的只读拒因与 `status` 一并被拒）、`verify_errors`（浮层中止前缀对账）、
+  `verify_policy`（`hold` 的只读拒因；`on`/`off` 被拒、`status` 放行）、`verify_errors`（浮层中止前缀对账）、
   `verify_render_contract`（`covered:false` 那条载荷必须进模型可见文本）。
+- **合并后复审抓到的四处：**
+  ① **模型自己的点击被自己的浮层吃掉**：浮层是全屏、z-index 最大的，`click` 按坐标派发会先命中它，
+  页面什么都没发生，结果只说 `hitVerified:false`，而且同一坐标连点两下会被浮层当成「双击」、以用户
+  的名义关掉。现在命中到自己那层时临时 `pointer-events:none`、重测、派发完恢复，结果带
+  `bypassedOwnOverlay:true`。台子用一台真跑定位表达式的假 DOM 测，不是断言假件返回值。
+  ② **AX 快照把浮层自己也编进去了**：卡片上的「中止模型操作」是标准 button，会进 AX 树、占一个 ref，
+  模型读到的快照里就有自己挂的提示语。现在 stamping 函数遇到 `[data-dsh-hold]` 子树直接跳过：不占 ref、
+  不计入 `total`（`ax.ownOverlay` 单独计数），`verify_snapshot_ax` 两向断言。
+  ③ **`hold on` 会把「中止」静默清掉**：模型被拦一次之后只要再 `on` 一次就绕过去了，不用问用户。
+  现在中止期间 `hold on` 被拒（带同一个 `browser-hold-aborted:` 前缀），只有 `off`（= 确认继续）能解。
+  ④ **只读档把 `hold status` 也拒了**：status 只读（session 条目 + 探页面那层还在不在），不是写操作。
+  闸门改为按**动作**判（`policyRefusal(command, flags, params)`），`on`/`off` 仍拒、`status` 放行。
 
 ## v1.0.18 (2026-10-20)
 

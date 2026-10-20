@@ -192,7 +192,7 @@ class BridgeController {
 	 * @returns the extension's result payload verbatim.
 	 */
 	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number): Promise<unknown> {
-		this.policyGate(command)
+		this.policyGate(command, params)
 		const server = this.server
 		if (server === undefined) {
 			throw classify(command, new Error(
@@ -209,12 +209,14 @@ class BridgeController {
 	 * refused command must not leave a side effect behind. Reading `current` on every
 	 * call is what makes a settings edit take effect live.
 	 * @param command - extension command name, or a `LOCAL_DESTRUCTIVE_COMMANDS` name.
+	 * @param params - the command's params: action-bearing commands (`hold`) need them so a
+	 *   read-only action (`status`) is not judged by the command name alone.
 	 */
-	private policyGate(command: string): void {
+	private policyGate(command: string, params?: Record<string, unknown>): void {
 		const refusal = policyRefusal(command, {
 			readOnly: this.current?.readOnly === true,
 			allowScript: this.current?.allowScript !== false,
-		})
+		}, params)
 		if (refusal !== undefined) throw new BridgeError(command, 'blocked_by_policy', 'not_started', refusal)
 	}
 

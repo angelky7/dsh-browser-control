@@ -132,10 +132,14 @@ const READ_TOOLS = [
     /会往页面里插入一层接管浮层/.test(holdDenied.message ?? ''), (holdDenied.message ?? '').slice(0, 70))
   check('readOnly：browser_hold 的拒因顺手说清「浮层不是安全边界」',
     /不是安全边界/.test(holdDenied.message ?? ''), (holdDenied.message ?? '').slice(0, 70))
-  const holdStatusDenied = await call(tools, 'browser_hold', { action: 'status' })
-  check('readOnly：连 hold status 也被拒（一条命令只看命令名；BEHAVIOR.md 写明）',
-    holdStatusDenied.ok === false && holdStatusDenied.code === 'blocked_by_policy',
-    `${holdStatusDenied.code}`)
+  // 同一命令的 `status` 只读状态（session 条目 + 探一下页面那层还在不在），只读档放行：
+  // 「只读」不该连看一眼浮层现在是什么状态都不让。闸门因此要按**动作**判，不只按命令名。
+  const holdStatus = await call(tools, 'browser_hold', { action: 'status' })
+  check('readOnly：hold status 放行（只读动作，走到链路而不是被闸门拦下）',
+    holdStatus.ok === false && holdStatus.code === 'extension_offline', `${holdStatus.code}`)
+  const holdOff = await call(tools, 'browser_hold', { action: 'off' })
+  check('readOnly：hold off 仍被拒（它要改页面 DOM，和 on 同一类）',
+    holdOff.ok === false && holdOff.code === 'blocked_by_policy', `${holdOff.code}`)
   for (const [name, args] of READ_TOOLS) {
     const r = await call(tools, name, args)
     check(`readOnly：${name} 放行（走到链路，报 extension_offline 而不是被拦）`,

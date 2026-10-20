@@ -148,5 +148,28 @@ const visibleNodes = (ids) => ids.map((id) => ({ backendNodeId: id }));
     typeof res.axFallback === "string" && /Accessibility/.test(res.axFallback), res.axFallback);
 }
 
+/* 接管浮层自己的节点不进快照：它是扩展挂的，不是页面内容 */
+// 浮层卡片上有个「中止模型操作」按钮，AX 树里它是标准的 button——不排除的话模型
+// 会在快照里读到自己的提示语，甚至按 ref 去点那个按钮。
+{
+  const { ctx, model, elements } = await axPage({
+    nodes: [
+      axNode({ backendDOMNodeId: 61, role: "button", name: "提交订单" }),
+      axNode({ backendDOMNodeId: 62, role: "button", name: "中止模型操作" }),
+    ],
+    pageNodes: visibleNodes([61, 62]),
+  });
+  const overlayBtn = elements.get(62);
+  overlayBtn.closest = (sel) => (sel === "[data-dsh-hold]" ? { id: "host" } : null);
+  const res = await ctx.cmdSnapshot({ mode: "ax", tabId: [...model.tabs.keys()][0], limit: 100 });
+  check("AX：浮层里的按钮不进快照", res.items.length === 1 && res.items[0].name === "提交订单",
+    JSON.stringify(res.items.map((i) => i.name)));
+  check("AX：浮层节点不占 ref 编号", res.items.every((i) => i.ref !== "e2") && res.items[0].ref === "e1");
+  check("AX：浮层节点没被写 data-dsh-ref（不会被 click-by-ref 点到）",
+    overlayBtn.attributes[REF_ATTR] === undefined);
+  check("AX：total 只数页面元素，candidates 里多出来的自己人单独记",
+    res.total === 1 && res.ax.candidates === 2 && res.ax.ownOverlay === 1, JSON.stringify(res.ax));
+}
+
 console.log(`\n结论：${fails === 0 ? "AX 快照行为符合预期" : fails + " 项未通过"}`);
 process.exit(fails ? 1 : 0);

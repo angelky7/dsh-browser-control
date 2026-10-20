@@ -39,9 +39,10 @@ export declare const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string>;
  * 这一条要的不是安全性，是**拒绝理由**——告诉模型为什么一个「只是提示用户」的动作
  * 在只读档里也算写操作。
  *
- * 注意 `hold` 是一条命令带 `action`（on/off/status），而闸门只看命令名 ⇒ 只读档下
- * `status` 也会被拒。这是有意的（读状态需要一条可用的桥，而只读档用户不需要浮层），
- * 在 `docs/BEHAVIOR.md` 里写明。
+ * `hold` 是一条命令带 `action`（on/off/status）：on/off 改 DOM，**status 只读**
+ * （它读 session 里的条目 + 探一下页面上还有没有那层宿主），所以只读档放行 status。
+ * 这也是 `policyRefusal` 唯一需要看参数的地方——判据是「这个动作改不改东西」，
+ * 不是「这个命令名字在不在表里」。
  */
 export declare const PAGE_MUTATING_COMMANDS: ReadonlySet<string>;
 /** 两个闸门的当前值。取自插件配置，热更新即生效（改完重启 dsh 也一样）。 */
@@ -55,6 +56,7 @@ export interface PolicyFlags {
  * 判断一条命令是否被本机策略拦下。
  * @param command - 扩展命令名（`click` / `eval` / `tabs.close` …），或 `LOCAL_DESTRUCTIVE_COMMANDS` 里的插件本地命令名。
  * @param flags - 当前的两个闸门值。
+ * @param params - 这条命令的参数；只有带动作的命令（目前是 `hold`）需要它来分辨「这个动作改不改东西」。
  * @returns 拒绝时写给 agent 的整句理由；放行时 `undefined`。
  */
-export declare function policyRefusal(command: string, flags: PolicyFlags): string | undefined;
+export declare function policyRefusal(command: string, flags: PolicyFlags, params?: Record<string, unknown>): string | undefined;

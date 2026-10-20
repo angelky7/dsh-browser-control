@@ -40,6 +40,29 @@ function installFakePage(model) {
 
 /** 把一台已有的假页面（含它的状态）挂到某个假浏览器上。 */
 function installFakePageInto(model, page) {
+  // click 的定位表达式**真的被执行**：假页面里有一个目标元素与一个全屏浮层宿主，
+  // elementFromPoint 尊重宿主的 pointer-events（宿主对指针透明之后才命中目标）。
+  // 这样「模型自己的点击会不会被自己的浮层吃掉」是测出来的，而不是断言假件编好的返回值。
+  const target = {
+    tagName: "BUTTON", textContent: "q", style: {},
+    scrollIntoView() {},
+    getBoundingClientRect: () => ({ left: 5, top: 10, width: 10, height: 20, right: 15, bottom: 30 }),
+    contains: (x) => x === target,
+    closest: () => null,
+  };
+  const host = { tagName: "DIV", style: { pointerEvents: "" }, closest: (sel) => (sel === "[data-dsh-hold]" ? host : null) };
+  page.host = host;
+  const clickCtx = createContext({
+    document: {
+      querySelector: (sel) => {
+        if (sel === "#q") return target;
+        if (sel === "[data-dsh-hold]") return page.active ? host : null;
+        return null;
+      },
+      elementFromPoint: () => (page.active && host.style.pointerEvents !== "none" ? host : target),
+    },
+    JSON, Math, String, Number, Object,
+  });
   model.dbg.results["Runtime.evaluate"] = (params) => {
     const expr = String(params?.expression ?? "");
     const m = /\)\s*\(([\s\S]*)\)\s*$/.exec(expr);
@@ -66,10 +89,13 @@ function installFakePageInto(model, page) {
       const { injections, ...rest } = page;
       return { result: { value: { ...rest } } };
     }
-    // click 的定位表达式：返回一个「命中了的元素」，否则真实现会抛 element not found，
-    // 「命令照常派发」这类断言就测不到了。
-    if (expr.includes("elementFromPoint")) {
-      return { result: { value: { x: 10, y: 20, tag: "button", text: "q", hitTag: "button", isTop: true } } };
+    // click 的定位表达式（含临时让开浮层的分支）与派发后的恢复语句都在假 DOM 上真跑。
+    if (expr.includes("elementFromPoint") || expr.includes(".style.pointerEvents")) {
+      try {
+        return { result: { value: runInContext(expr, clickCtx) } };
+      } catch (err) {
+        return { exceptionDetails: { text: String((err && err.message) || err) }, result: { value: null } };
+      }
     }
     if (expr.includes("scrollIntoView") && expr.includes("focus")) {
       return { result: { value: { tag: "input" } } };
@@ -249,6 +275,39 @@ let sharedPageForRecycle;
   };
   const out = runPageFn(htmlOf, { document: fakeDoc });
   check("content(html)：浮层宿主被摘掉，页面正文还在", removed === 1 && out.includes("页面正文") && !out.includes("data-dsh-hold"), String(out));
+}
+
+// ---- 8) 浮层在时，模型自己的点击必须照常落到目标上 ----
+// 浮层是全屏的（z-index 最大），坐标派发会先命中它。不处理的话：
+//   ① 模型的 click 落在浮层上，页面什么都没发生，结果却只轻描淡写一句 hitVerified:false；
+//   ② 同一坐标连点两下会被浮层当成「双击」，以用户的名义把它关掉。
+{
+  const { ctx, model, page } = await stage();
+  await ctx.runCommand("hold", { action: "on", note: "模型在操作" });
+  const before = mouseSends(model);
+  const res = await ctx.runCommand("click", { selector: "#q" });
+  check("浮层在时 click 仍然派发到页面", mouseSends(model) > before, `${mouseSends(model) - before} 个鼠标事件`);
+  check("命中校验为真（不是被自己的浮层挡住的「假成功」）", res?.hitVerified === true, JSON.stringify(res?.hitInstead ?? null));
+  check("结果里如实标出「让开了自己的浮层」", res?.bypassedOwnOverlay === true, JSON.stringify(res));
+  check("浮层没有被模型自己的点击关掉（用户没按双击）", page.active === true, String(page.active));
+  check("派发完把 pointer-events 恢复了（下一个真人点击照样被挡）",
+    page.host.style.pointerEvents === "", JSON.stringify(page.host.style.pointerEvents));
+}
+
+// ---- 9) 中止之后 hold on 不能把中止静默清掉 ----
+// 如果 on 能重挂一层并清掉 aborted，模型就有一条不用问用户、也不必说「继续」的旁路：
+// 被拦一次 → 再 on → 照常点。只有 off（= 用户确认继续）能解。
+{
+  const { ctx, page } = await stage();
+  await ctx.runCommand("hold", { action: "on", note: "第一次" });
+  page.aborted = true; // 用户在浮层上按了「中止操作」
+  const err = await errOf(ctx.runCommand("hold", { action: "on", note: "再挂一层" }));
+  check("中止期间 hold on 被拒（不能靠再挂一层把中止清掉）",
+    err !== null && String(err).startsWith("browser-hold-aborted:"), String(err)?.slice(0, 50));
+  check("被拒时没有重新注入任何东西", page.injections.length === 1, String(page.injections.length));
+  await ctx.runCommand("hold", { action: "off" });
+  const again = await ctx.runCommand("hold", { action: "on", note: "确认继续之后" });
+  check("off（确认继续）之后可以重新 on", again?.covered === true, JSON.stringify(again));
 }
 
 console.log(fails === 0 ? "\n接管浮层全部符合契约" : `\n${fails} 项失败`);

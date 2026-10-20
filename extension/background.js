@@ -587,6 +587,13 @@ async function cmdHold(params) {
 		return { tabId: tab.id, action, active: false, covered: false, reason }
 	}
 	const note = holdNoteOf(params)
+	// 中止只有 `off` 能解（= 用户确认继续）。如果 `on` 能静默清掉中止，模型就有一条
+	// 不用问用户、也不必说「继续」的旁路：被拦一次 → 再调一次 on → 照常点。
+	const live = await holdEval(tab, pageHoldStatus).catch(() => null)
+	if (live && live.active === true && live.aborted === true) {
+		throw new Error(`${HOLD_ABORTED_MARKER} 用户已在浮层上按下「中止操作」，不能再挂一层去覆盖它：命令 hold 被拦下，没有向页面注入任何东西。`
+			+ `请先与用户确认；用户同意继续后调用 browser_hold action=off（这一步等于确认继续），之后才能重新 on。不要重试本命令。`)
+	}
 	const injected = await holdEval(tab, pageHoldInject, { title: HOLD_FIXED_TITLE, note }).catch((err) => ({
 		covered: false, reason: `inject-failed: ${String((err && err.message) || err)}`,
 	}))
@@ -1564,9 +1571,22 @@ async function cmdClick(params) {
 				// (sticky headers, ads) that would swallow the click.
 				const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
 				const topEl = document.elementFromPoint(x, y);
-				const isTop = topEl === el || el.contains(topEl);
+				let isTop = topEl === el || el.contains(topEl);
+				// 盖住命中的如果是我们自己的接管浮层，那不是「页面挡住了目标」——它存在的
+				// 意义是不让**人**误触，不该把模型自己的点击吃掉（否则浮层一挂，click 就全废，
+				// 而且同一坐标连点两下会被浮层当成双击、以用户的名义把浮层关掉）。
+				// 做法：临时让宿主对指针透明、重测一次命中点，派发完再恢复（见下面的 finally）。
+				const ownOverlay = !isTop && topEl && topEl.closest ? topEl.closest('[data-dsh-hold]') : null;
+				let bypassedOwnOverlay = false;
+				if (ownOverlay) {
+					ownOverlay.style.pointerEvents = 'none';
+					bypassedOwnOverlay = true;
+					const clear = document.elementFromPoint(x, y);
+					isTop = clear === el || el.contains(clear);
+				}
+				const after = bypassedOwnOverlay ? document.elementFromPoint(x, y) : topEl;
 				return { x, y, tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().slice(0, 120),
-					hitTag: topEl ? topEl.tagName.toLowerCase() : null, isTop };
+					hitTag: after ? after.tagName.toLowerCase() : null, isTop, bypassedOwnOverlay };
 			})()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
 		}).then((res) => {
@@ -1575,14 +1595,25 @@ async function cmdClick(params) {
 		});
 		if (!hit) throw new Error(`element not found: ${params.selector}`);
 		const clickCount = params.doubleClick ? 2 : 1;
-		await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: hit.x, y: hit.y });
-		await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: hit.x, y: hit.y, button: 'left', clickCount });
-		await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: hit.x, y: hit.y, button: 'left', clickCount });
+		try {
+			await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: hit.x, y: hit.y });
+			await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: hit.x, y: hit.y, button: 'left', clickCount });
+			await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: hit.x, y: hit.y, button: 'left', clickCount });
+		} finally {
+			if (hit.bypassedOwnOverlay) {
+				// 点击可能触发导航：上下文没了就算了，浮层本来就随页面消失。
+				await send('Runtime.evaluate', {
+					expression: `(() => { const h = document.querySelector('[data-dsh-hold]'); if (h) h.style.pointerEvents = ''; })()`,
+					awaitPromise: false, returnByValue: true,
+				}).catch(() => {});
+			}
+		}
 		return {
 			tabId: tab.id,
 			clicked: { x: hit.x, y: hit.y, tag: hit.tag, text: hit.text },
 			hitVerified: hit.isTop,
 			...(hit.isTop ? {} : { hitInstead: hit.hitTag }),
+			...(hit.bypassedOwnOverlay ? { bypassedOwnOverlay: true } : {}),
 			dialogsAnswered: dialogLog.filter((d) => d.tabId === tab.id && Date.now() - d.t < 5000).length,
 		};
 	});
@@ -1898,6 +1929,10 @@ const AX_ACTIONABLE_ROLES = new Set([
 const AX_STAMP_FN = 'function(ref){'
 	+ 'var r = this.getBoundingClientRect();'
 	+ 'if (r.width === 0 && r.height === 0) return null;'
+	// 接管浮层自己也是「可操作」的（卡片上有个按钮），但它属于扩展、不属于页面：
+	// 让它进快照，模型就会看到自己刚挂上去的那句话和一个「中止模型操作」按钮。
+	+ 'var hold = this.closest ? this.closest("[data-dsh-hold]") : null;'
+	+ 'if (hold) return { ownOverlay: true };'
 	+ 'this.setAttribute("data-dsh-ref", ref);'
 	+ 'return {'
 	+ ' tag: this.tagName.toLowerCase(),'
@@ -1932,7 +1967,7 @@ async function snapshotViaAx(send, tab, limit) {
 		&& node.backendDOMNodeId !== undefined
 		&& AX_ACTIONABLE_ROLES.has(String(node.role && node.role.value || '').toLowerCase()));
 	const items = [];
-	const skipped = { unresolved: 0, invisible: 0 };
+	const skipped = { unresolved: 0, invisible: 0, ownOverlay: 0 };
 	for (const node of candidates) {
 		if (items.length >= limit) break;
 		const ref = 'e' + (items.length + 1);
@@ -1957,6 +1992,8 @@ async function snapshotViaAx(send, tab, limit) {
 		if (call && call.exceptionDetails) { skipped.unresolved += 1; continue; }
 		// null means invisible: the stamp function refused to write the attribute,
 		// so this ref number is simply reused by the next candidate.
+		// 我们自己的接管浮层：不是页面内容，跳过（也不占 ref 编号）。
+		if (geo && geo.ownOverlay === true) { skipped.ownOverlay += 1; continue; }
 		if (!geo) { skipped.invisible += 1; continue; }
 		items.push({
 			ref,
@@ -1976,7 +2013,8 @@ async function snapshotViaAx(send, tab, limit) {
 			.then((r) => r.result && r.result.value).catch(() => undefined),
 		url: await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
 			.then((r) => r.result && r.result.value).catch(() => undefined),
-		total: candidates.length,
+		// total 是「页面上可操作的元素数」：我们自己的浮层不属于页面，别算进去。
+		total: candidates.length - skipped.ownOverlay,
 		ax: { nodes: nodes.length, candidates: candidates.length, ...skipped },
 		items,
 		limitedTo: limit,
