@@ -24,6 +24,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_press_events.mjs` | 真实 `background.js` + 有状态假 `chrome.debugger`，按**派发次数**测键盘：一次按键只许插入一次（issue #14 那个 `keyDown(text)+char` 双倍插入）、`Enter` 只提交一次、组合键解析、未知键名必须抛错且零派发。**第二个参数可以换一份 background.js 跑**——对修复前的版本，同一批断言红 12 项 | issue #14 键盘回归 |
 | `verify_nav_landing.mjs` | 真实扩展代码 + 会演导航的假 `chrome.tabs`：正常加载 / 慢启动竞态（旧文档先 `complete` 400ms）/ 永不提交（必须报 `loadPending`，不许 0ms 或 1.2s 后假装成功）/ 导航到同一个地址仍算成功 / 新建标签出生在 `about:blank` 也要等到真 URL | PR #12 与其残留口子 |
 | `verify_render_contract.mjs` | 真实 `BridgeServer` + 假扩展 + **宿主自己的** `validateJsonSchemaValue`/`valueSchemaSpecToJsonSchema`：把每条工具的真实返回值同时喂给它的输出 schema 与它的 `render`，逐条问「schema 过不过」「模型可见文本里有没有这次调用真正要的数据」「超预算时 [renderedTruncated] 的数字对不对」「封闭 schema 的 11 条工具里不许出现 null（宿主对 null 下钻判类型）」。**地面真相表铺满全部 20 条工具**（截图 / PDF / cleanup 用临时 `shotsDir`），共 126 项 | 模型可见内容契约 |
+| `verify_hard_lock.mjs` | 本地硬锁（扩展弹窗「锁定」）：真实 `background.js` + 有状态假 `chrome.tabs`/`chrome.debugger`/`chrome.storage`，断言默认不锁、上锁后 `COMMANDS` **全部 26 条**逐条被拦且零 CDP 派发、拒绝文案点名命令并写明解锁只能由用户在弹窗里做、桥侧塞同名命令帧解不开、**service worker 重启后仍然锁着**（内存标志会丢，落盘的不会）、畸形消息 fail-closed、解锁后恢复执行；另核 popup.html/popup.js 的按钮位置与单击切换。可传第二个参数换一份 `background.js` 跑——对未修版本同一批断言红 16 项 | 本地硬锁 |
 | `verify_extension_e2e.mjs` | **端到端（只差真浏览器）**：起真的 `BridgeServer`，在 vm 里跑真的 `extension/background.js`，用 Node 自带的 `WebSocket` 真连 `ws://127.0.0.1:9779/ws`。断言 hello 带过来的 `protocol` 被桥认下、HTTP 命令面的 `tabs.open/group/list/ungroup` 确实走到扩展的 `COMMANDS` 表并原样返回、扩展抛的错变成 502 + `command_failed` + `effectState` | 帧契约 / 新命令可达性 |
 | `verify_errors.mjs` | 错误分类表（超时/掉线/离线/取消…）与 `effectState`：写操作超时必须是 `unknown`（不许盲目重试），只读超时是 `not_started`；起真桥 + 不回话的假扩展，验证 HTTP 面的 503/504 与 `code`/`hint` 字段 | 错误契约 |
 | `verify_protocol.mjs` | `hello` 帧的 `protocol` 握手：老扩展不声明或声明 0 视为兼容，扩展比桥新判不兼容并在 `/api/status` 给出说明 | 协议版本 |
@@ -36,6 +37,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 写这些脚本时踩到的坑，记在这里免得重来：
 
 - `dsh-settings` 的导出面按版本不同：`0.1.2-rc.1` 有 `register`，`0.1.7-rc.2`/`0.2.0-rc.2` 只有 `SettingsForms`（`configure/describe/update/replace/mutate`）。想验证兼容性，不必装宿主，`npm pack @deepseek-ai/dsh-settings@<ver>` 解包 grep 就够了。
+- 假 `chrome.storage.local` 的 `set` 必须真的落盘并广播 `onChanged`，否则「活过 service worker 重启」这类状态测不出来；`verify/ext_harness.mjs` 现在是这个语义。
 - schemastery 的 schema 本身就是校验函数：`Config(data)` 直接返回补齐默认值后的对象，没有 `.parse()`。
 - cordis 的 `ctx.effect(execute, label)` 里，`execute` 的返回值才是 teardown 函数，所以注册 disposer 要写 `ctx.effect(() => dispose, 'label')`。
 - 宿主 `latest` 已经是 dsh `0.2.0-rc.2`，插件 peer 上限写 `<0.2.0-0` 会让新宿主装不上；放宽前先把 0.2 的 `dsh-tools` 抓下来对比导出面（结论：`defineTool` 等完全一致）。

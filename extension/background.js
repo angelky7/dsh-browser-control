@@ -107,6 +107,9 @@ function setBadge(text, color) {
 
 function setState(state) {
 	wsState = state;
+	// While the local lock is on it owns the badge: "connected but frozen" must
+	// not look like a healthy green ON.
+	if (hardLocked) { setBadge('LOCK', '#dc2626'); return; }
 	if (state === 'open') setBadge('ON', '#16a34a');
 	else if (state === 'connecting') setBadge('…', '#d97706');
 	else setBadge('OFF', '#6b7280');
@@ -216,6 +219,57 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 	else send({ type: 'ping', t: Date.now() });
 });
 
+/* ------------------------------------------------------------- local lock */
+
+/**
+ * Local hard lock ("panic switch"): while on, every command from the bridge is
+ * refused before it reaches a handler, and the WebSocket stays connected — so a
+ * caller sees "reachable but frozen" instead of a dead link it might retry.
+ *
+ * Only the popup can toggle it, and that is structural rather than a promise:
+ * the bridge speaks over the WebSocket, while this gate is set through a
+ * `chrome.runtime` message, which only an extension page can post (the manifest
+ * declares no `externally_connectable`). Nothing on the bridge side unlocks it.
+ *
+ * The flag is persisted in chrome.storage.local because MV3 evicts the service
+ * worker after ~30s idle: an in-memory flag would silently lapse between two
+ * commands, which is the one failure mode a panic switch cannot have.
+ */
+const HARD_LOCK_KEY = 'hardLock';
+let hardLocked = false;
+let hardLockLoaded = false;
+
+/** Read the persisted flag once per worker lifetime. */
+async function syncHardLock() {
+	if (hardLockLoaded) return;
+	try {
+		const stored = await chrome.storage.local.get([HARD_LOCK_KEY]);
+		hardLocked = stored[HARD_LOCK_KEY] === true;
+	} catch (err) {
+		// Reading the flag failed: stay open, but say so instead of pretending.
+		lastError = `读取本地锁失败: ${err.message}`;
+	}
+	hardLockLoaded = true;
+	// A worker that came back after eviction has not painted the badge yet; do it
+	// now so "locked" is visible before the first command rather than after it.
+	if (hardLocked) setState(wsState);
+}
+
+/** Persist and apply the lock; called only from the popup message handler. */
+async function setHardLock(locked) {
+	hardLocked = Boolean(locked);
+	hardLockLoaded = true;
+	await chrome.storage.local.set({ [HARD_LOCK_KEY]: hardLocked });
+	setState(wsState);
+	return hardLocked;
+}
+
+/** Refusal text the agent actually reads; it must say who can undo this. */
+function hardLockRefusal(command) {
+	return `本机扩展已被用户锁定：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
+		+ `解锁只能由用户在浏览器工具栏的扩展弹窗里点「已锁定」完成；在那之前请先与用户确认，不要重试。`;
+}
+
 /* ------------------------------------------------------------- dispatching */
 
 function handleBridgeMessage(msg) {
@@ -228,6 +282,8 @@ function handleBridgeMessage(msg) {
 }
 
 async function runCommand(command, params) {
+	await syncHardLock();
+	if (hardLocked) throw new Error(hardLockRefusal(command));
 	const handler = COMMANDS[command];
 	if (!handler) throw new Error(`unknown command: ${command}`);
 	return handler(params);
@@ -1657,8 +1713,19 @@ async function cmdDialogPolicy(params) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	if (msg?.type === 'bridgeStatus') {
-		sendResponse({ state: wsState, cfg, helloInfo, lastError });
+		sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked });
 		return false;
+	}
+	if (msg?.type === 'lockSet') {
+		// The lock is set from the popup only (see the local-lock section): this
+		// channel cannot be reached by the bridge, so "unlock from the browser"
+		// is enforced by where the code lives, not by who asks nicely.
+		// Fail closed: only an explicit `locked: false` unlocks, so a malformed
+		// message cannot quietly unfreeze the browser.
+		setHardLock(msg.locked !== false)
+			.then((locked) => sendResponse({ locked }))
+			.catch((err) => sendResponse({ locked: hardLocked, error: String((err && err.message) || err) }));
+		return true;
 	}
 	if (msg?.type === 'reconnect') {
 		manualDisconnect = false;

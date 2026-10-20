@@ -193,6 +193,21 @@ Tabs the agent **opens** are collected into a blue `DSH` tab group, one per wind
 - Grouping is a nicety, never a prerequisite: on an old Chrome, without the `tabGroups` permission, or when Chrome's own tab bookkeeping wins the race, **opening the tab still succeeds** and the result carries `grouped: false` plus a reason. Grouping never changes page content, so retrying it is safe.
 - `browser_tabs` `action: "close"` takes one tab (`tabId`) or a batch (`tabIds`), and a batch goes out as **one command**. The result accounts for every id — `closed` / `alreadyGone` (already gone = idempotent success, safe to retry) / `failed` (with the error) — so a partial failure is never swallowed, and single and batch share one shape.
 
+### One-click freeze: the extension popup's lock
+
+Click the extension icon and hit **锁定** in the middle of the button row — a single click is enough.
+Every browser command is then refused before it runs (click, input, press, navigation, script
+execution), while the WebSocket stays up: a caller sees "reachable but frozen", not a dropped link,
+so it does not retry what looks like a network failure.
+
+- There is exactly one way out: click the same button (now **已锁定**) in that popup. The bridge has no
+  unlock command and neither does the tool surface.
+- The flag lives in `chrome.storage.local`, so an MV3 service-worker eviction cannot silently unfreeze it.
+- The toolbar badge shows a red `LOCK` while frozen instead of a reassuring green `ON`.
+- Why this lives in the client rather than the bridge: the bridge token sits in the profile's
+  `cordis.patch.yml`, which the agent can read *and* rewrite. A freeze that only a human can lift has to
+  be enforced somewhere the agent cannot reach.
+
 ### Calling the HTTP face from a script
 
 `/api/command` and `/api/cleanup` now require the token — the same value the extension presents on the WebSocket:

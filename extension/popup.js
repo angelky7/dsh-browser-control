@@ -29,6 +29,15 @@ function render(status) {
 	btn.textContent = connected ? '断开连接' : (status.state === 'connecting' ? '连接中…' : '立即连接');
 	btn.classList.toggle('danger', connected);
 	btn.dataset.connected = String(connected);
+	const locked = status.locked === true;
+	const lock = $('lock');
+	lock.textContent = locked ? '已锁定' : '锁定';
+	lock.classList.toggle('locked', locked);
+	const hint = $('lockhint');
+	hint.textContent = locked
+		? '已冻结：扩展会拒绝模型的全部浏览器操作（连接保持）。点「已锁定」解除。'
+		: '锁定 = 冻结模型的全部浏览器操作，连接不断。解锁只能在这里点。';
+	hint.className = locked ? 'lockhint on' : 'lockhint';
 	const errorBox = $('error');
 	errorBox.textContent = status.lastError ?? '';
 	errorBox.className = errorBox.textContent.length > 0 ? 'error show' : 'error';
@@ -48,6 +57,14 @@ $('reconnect').addEventListener('click', async () => {
 	const connected = $('reconnect').dataset.connected === 'true';
 	await chrome.runtime.sendMessage({ type: connected ? 'disconnect' : 'reconnect' });
 	setTimeout(refresh, 600);
+});
+
+// Single click: opening the popup is already a deliberate user gesture, and a
+// panic switch that needs a second click is a panic switch with a delay.
+$('lock').addEventListener('click', async () => {
+	const locked = $('lock').textContent === '已锁定';
+	await chrome.runtime.sendMessage({ type: 'lockSet', locked: !locked });
+	refresh();
 });
 
 $('openStatus').addEventListener('click', async () => {

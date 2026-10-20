@@ -37,7 +37,7 @@
     "build": "tsc -p tsconfig.json && tsdown",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check": "npm run typecheck && npm run build && publint",
-    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs"
+    "verify": "node verify/verify_config_patch.mjs && node verify/verify_peers.mjs && node verify/verify_surface.mjs && node verify/verify_tab_groups.mjs && node verify/verify_tabs_close_many.mjs && node verify/verify_cdp_retry.mjs && node verify/verify_snapshot_ax.mjs && node verify/verify_hard_lock.mjs && node verify/verify_extension_e2e.mjs && node verify/verify_plugin.mjs legacy && node verify/verify_plugin.mjs conflict && node verify/verify_plugin.mjs new && node verify/verify_http.mjs && node verify/verify_errors.mjs && node verify/verify_protocol.mjs && node verify/verify_bundle_http.mjs && node verify/verify_nav_report.mjs && node verify/verify_nav_landing.mjs && node verify/verify_render_contract.mjs && node verify/verify_press_events.mjs"
   },
   "publishConfig": {
     "access": "public",
