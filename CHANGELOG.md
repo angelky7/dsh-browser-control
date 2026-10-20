@@ -40,12 +40,24 @@
   全部 `blocked_by_policy`、4 个读工具照常走到链路（报 `extension_offline`，正是「闸门放行」的证据），
   单独关脚本只拦 `browser_evaluate`、两个都限制时拒因取更具体的那个，另有扩展 `COMMANDS` **26 条逐条对账**
   （每条要么在白名单、要么被拒；白名单不许留下改名后的幽灵条目）。
-- 两个台子合并进来后 `npm run verify` 385 → **440 项，exit 0**（硬锁 26 + 策略 29）；`lib/` 由本版重新构建，
-  与 `src/` 一致（重建后 `git diff` 为空）。
-- 合并后我自己复审抓到三处，另见下面三条 fix：**`browser_cleanup` 完全绕过了只读档**（它走
-  `controller.cleanup()` 不经过 `execute()`，只读档下仍能删文件）、**`cleanup` 从没进过写/读分类表**
-  （半路删除失败时报的是没有 code 的裸错误）、**硬锁的两个 fail-open 口子**（读 storage 失败就当没锁、
-  service worker 重启后第一条命令之前徽标还是绿色 ON）。
+- `lib/` 由本版重新构建，与 `src/` 一致（重新构建后 `git diff` 为空）。
+- **合并后我自己复审抓到四处，两条 fix 提交补上：**
+  ① `browser_cleanup` **完全绕过了只读档**——它走 `controller.cleanup()`、不经过 `execute()`，
+  开了 `readOnly: true` 之后模型仍能一条命令删掉整个截图目录；② `cleanup` 从没进过写/读分类表，
+  而它是逐条 `rm` 的，半路失败（Windows 上被占用的截图 EPERM）时前面已经删掉了，模型拿到的却是
+  没有 code 的裸错误 + 默认含义「没动过，重试安全」；③ 硬锁**读不出 storage 时按「没锁」继续**，
+  而且一次瞬时失败后不再重试——panic switch 唯一不能有的失败方式；④ 只有 `runCommand` 会触发重读，
+  所以 service worker 刚唤醒到第一条命令之间图标显示的是绿色 `ON`。
+- **锁的拒绝进了错误契约**（第 ③/④ 条同批）：结果帧只有一个 `error` 字符串，所以扩展在文本最前面写
+  `browser-locked-by-user:` / `browser-lock-unreadable:` 前缀，`classify()` 认它 ⇒
+  `code=locked_by_user` / `lock_unreadable`、`effectState=not_started`（写操作也是，因为拦在 handler
+  之前），标记本身从给模型的那句话里剥掉。以前它被报成 `command_failed` + 写操作 `unknown` +
+  hint「通常是选择器没命中」，那两句都指向错误的下一步。两种来源的文案分开：读不出锁状态时不说
+  「已被用户锁定」，`bridgeStatus` 多带 `lockReason`，弹窗按它显示。
+- 台子数：385 → 411（硬锁 26）→ 440（策略 29）→ 451（cleanup 过闸门 + classify 对账 11 项）→
+  **478 项 exit 0**（锁的 fail-closed / 开机即 LOCK / 端到端错误形状 13 + 7 项）。四条 fix 逐条做过
+  变异测试：改回 fail-open → 4 项红（其中一条报 `no tab available`，证明命令真的执行了）；去掉
+  `init()` 里的预读 → 3 项红（徽标变 OFF）；扩展侧前缀改名 → 对账红；`classify` 去掉锁分支 → 5 项红。
 
 ## v1.0.17 (2026-10-12)
 
