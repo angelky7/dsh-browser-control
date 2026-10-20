@@ -97,6 +97,8 @@ const WRITE_TOOLS = [
   ['browser_navigate', { url: 'https://example.com' }],
   ['browser_tabs', { action: 'close', tabId: 1 }],
   ['browser_evaluate', { expression: '1+1' }],
+  // 接管浮层往页面里插一个宿主元素 = 改页面 DOM，只读档里必须拒
+  ['browser_hold', { action: 'on', note: 'x' }],
 ]
 const READ_TOOLS = [
   ['browser_read', {}],
@@ -123,6 +125,17 @@ const READ_TOOLS = [
     check(`readOnly：${name} 的文案点名 readOnly: true 与改哪里`,
       /只读模式已开启（readOnly: true）/.test(r.message ?? '') && /cordis\.patch\.yml/.test(r.message ?? ''))
   }
+  // 浮层的拒因要**专门**说清「插一层浮层改页面 DOM」，而不是笼统的「会改变页面状态」：
+  // 这条是维护者点名要求的（理由写在名字旁边，不靠默认拒绝）。
+  const holdDenied = await call(tools, 'browser_hold', { action: 'on', note: 'x' })
+  check('readOnly：browser_hold 的拒因写的是「插一层浮层改页面 DOM」',
+    /会往页面里插入一层接管浮层/.test(holdDenied.message ?? ''), (holdDenied.message ?? '').slice(0, 70))
+  check('readOnly：browser_hold 的拒因顺手说清「浮层不是安全边界」',
+    /不是安全边界/.test(holdDenied.message ?? ''), (holdDenied.message ?? '').slice(0, 70))
+  const holdStatusDenied = await call(tools, 'browser_hold', { action: 'status' })
+  check('readOnly：连 hold status 也被拒（一条命令只看命令名；BEHAVIOR.md 写明）',
+    holdStatusDenied.ok === false && holdStatusDenied.code === 'blocked_by_policy',
+    `${holdStatusDenied.code}`)
   for (const [name, args] of READ_TOOLS) {
     const r = await call(tools, name, args)
     check(`readOnly：${name} 放行（走到链路，报 extension_offline 而不是被拦）`,

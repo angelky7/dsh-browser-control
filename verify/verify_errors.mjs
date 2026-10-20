@@ -1,7 +1,7 @@
 // 错误契约实测：分类是否正确、写操作是否被标成「结果未知」、HTTP 面是否把
 // code / effectState / hint 一起回给调用方。
 import net from "node:net";
-import { classify, BridgeError, isWriteCommand, LOCKED_BY_USER_MARKER, LOCK_UNREADABLE_MARKER } from "../src/errors.ts";
+import { classify, BridgeError, isWriteCommand, LOCKED_BY_USER_MARKER, LOCK_UNREADABLE_MARKER, HOLD_ABORTED_MARKER } from "../src/errors.ts";
 import { BridgeServer } from "../src/server.ts";
 
 let fails = 0;
@@ -136,6 +136,19 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
 {
   const fs = await import('node:fs/promises');
   const bg = await fs.readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
+  // 接管浮层的「中止」也一样：前缀是线协议，两边必须逐字一致，否则插件那侧只是安静地
+  // 退回 command_failed/unknown（写操作会被说成「可能已经落到页面上」，而那恰好是假的）。
+  check('对账：扩展里写着与插件侧逐字相同的浮层中止前缀',
+    bg.includes(`'${HOLD_ABORTED_MARKER}'`), HOLD_ABORTED_MARKER);
+  const held = classify('click', new Error(`${HOLD_ABORTED_MARKER} 用户已在页面的接管浮层上按下「中止操作」：命令 click 被拦下`));
+  check('浮层中止：认成 held_by_user 且 effectState=not_started（一条都没发出去）',
+    held.code === 'held_by_user' && held.effectState === 'not_started', `${held.code}/${held.effectState}`);
+  check('浮层中止：前缀不出现在给模型的那句话里',
+    !held.message.includes(HOLD_ABORTED_MARKER), held.message.slice(0, 70));
+  check('浮层中止：hint 指路 browser_hold action=off，而不是「换个选择器重试」',
+    /browser_hold action=off/.test(held.hint) && !/选择器/.test(held.hint), held.hint.slice(0, 60));
+  check('hold 本身按写操作分类（超时/掉线之后重试可能多留一层）', isWriteCommand('hold') === true);
+
   check('对账：扩展里写着与插件侧逐字相同的两个锁前缀',
     bg.includes(`'${LOCKED_BY_USER_MARKER}'`) && bg.includes(`'${LOCK_UNREADABLE_MARKER}'`),
     `${LOCKED_BY_USER_MARKER} / ${LOCK_UNREADABLE_MARKER}`);

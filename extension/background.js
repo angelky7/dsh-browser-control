@@ -290,6 +290,335 @@ function hardLockRefusal(command) {
 		+ `解锁只能由用户在浏览器工具栏的扩展弹窗里点「已锁定」完成；在那之前请先与用户确认，不要重试。`;
 }
 
+/* --------------------------------------------------- 接管浮层（hold，软层） */
+
+/**
+ * 软层：在某个标签页上加一层可撤销的浮层，告诉用户「模型正在这一页操作」，并挡住误触。
+ *
+ * 定位（维护者在 #17 里明确过）：它是**告知 + 防误触**，不是安全边界 —— 桥的 token 模型
+ * 读得到也改得动，所以任何长在插件侧/扩展侧的开关都只是策略。真正的硬停是弹窗里的本地锁。
+ * 因此这里只做三件事：告诉用户、挡住误触、把「用户按了中止」如实回报给模型（模型可以
+ * 通过 `hold action=off` 解除，这一步等于确认继续）。
+ *
+ * 状态放 **`chrome.storage.session`、按 tabId 记**：活过 service worker 回收（内存标志
+ * 30 秒就丢，那正是浮层会「以为挡着、其实没挡」的失败方式），不落盘，浏览器关掉即清。
+ * 页面里另留一份只读的 `window.__dshHold` 供读取「谁撤的、什么时候撤的」，它不参与决策。
+ *
+ * 覆盖不到的场合（严格 CSP、全屏、跨源 iframe、PDF 阅读器、错误页）是事实，所以
+ * `covered: false` + `reason` 会被**如实报回去**，而不是只在文档里认怂。
+ */
+const HOLD_HOST_ID = '__dsh_hold_overlay__'
+/** 浮层宿主的稳定标记：读取路径靠它把整棵子树排除掉（见 content / find / snapshot）。 */
+const HOLD_MARKER_ATTR = 'data-dsh-hold'
+/** storage.session 里的键：{ [tabId]: { at, note, aborted, covered, reason } }。 */
+const HOLD_STATE_KEY = 'holdByTab'
+/** 标题由扩展写死；调用方只能提供正文（否则模型能写一句系统口吻的话冒充提示）。 */
+const HOLD_FIXED_TITLE = 'DSH Browser Control'
+/** 正文上限：模型给的话头再长也不会把卡片撑爆；换行压平成空格。 */
+const HOLD_NOTE_MAX = 400
+/** 中止态下直接拒绝的扩展命令（与 #17 里列的那四条一致）。 */
+const HOLD_BLOCKED_COMMANDS = new Set(['click', 'input', 'press', 'nav'])
+/** 拒绝文案前缀：与 src/errors.ts 里的同名常量对账（verify_errors 会检查两边一致）。 */
+const HOLD_ABORTED_MARKER = 'browser-hold-aborted:'
+
+/** 内存副本；`null` = 还没读。 */
+let holdByTab = null
+let holdStateLoaded = false
+
+/** Lazily read the per-tab overlay state (once per worker lifetime). */
+async function syncHoldState() {
+	if (holdStateLoaded && holdByTab !== null) return holdByTab
+	try {
+		const stored = await chrome.storage.session.get([HOLD_STATE_KEY])
+		const raw = stored && stored[HOLD_STATE_KEY]
+		holdByTab = raw && typeof raw === 'object' ? raw : {}
+	} catch (err) {
+		// 读不到按「没有浮层」处理：它是软层，不拿它当边界；状态面会把这件事说出来。
+		holdByTab = {}
+		lastError = `读取浮层状态失败（按无浮层处理）：${err.message}`
+	}
+	holdStateLoaded = true
+	return holdByTab
+}
+
+/** Persist one tab's entry (or delete it when `entry === null`). */
+async function persistHoldEntry(tabId, entry) {
+	await syncHoldState()
+	if (entry === null) delete holdByTab[tabId]
+	else holdByTab[tabId] = entry
+	try {
+		await chrome.storage.session.set({ [HOLD_STATE_KEY]: holdByTab })
+	} catch (err) {
+		lastError = `写入浮层状态失败：${err.message}`
+	}
+	return entry
+}
+
+/** 正文归一：压平换行、限长（给用户看的，也是模型传进来的那一句）。 */
+function holdNoteOf(params) {
+	const raw = typeof params?.note === 'string' ? params.note : ''
+	const flat = raw.replace(/\s+/g, ' ').trim()
+	return flat.length > HOLD_NOTE_MAX ? `${flat.slice(0, HOLD_NOTE_MAX)}…` : flat
+}
+
+/**
+ * 页面侧：装浮层。**自包含**（会被 toString() 后送到页面里执行），不引用扩展作用域的
+ * 任何东西 —— 标题与正文都从 payload 进来，正文只走 textContent。
+ */
+function pageHoldInject(payload) {
+	const ID = '__dsh_hold_overlay__'
+	const MARK = 'data-dsh-hold'
+	try {
+		const prev = document.getElementById(ID)
+		if (prev && prev.parentNode) prev.parentNode.removeChild(prev)
+		const host = document.createElement('div')
+		host.id = ID
+		host.setAttribute(MARK, '1')
+		const root = host.attachShadow({ mode: 'open' })
+		root.innerHTML = [
+			'<style>',
+			':host { all: initial; }',
+			'.wrap { position: fixed; inset: 0; z-index: 2147483647; background: rgba(15,17,21,.42);',
+			'  display: flex; align-items: center; justify-content: center;',
+			'  font: 13px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }',
+			'.card { min-width: 280px; max-width: 460px; padding: 16px 18px; border-radius: 14px;',
+			'  background: rgba(32,34,40,.94); color: #f2f3f5; box-shadow: 0 12px 40px rgba(0,0,0,.35); }',
+			'.title { font-size: 12px; font-weight: 600; letter-spacing: .02em; opacity: .8; }',
+			'.note { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }',
+			'.hint { margin-top: 10px; font-size: 12px; opacity: .62; }',
+			'.row { margin-top: 12px; }',
+			'button { font: inherit; padding: 5px 12px; border-radius: 999px; cursor: pointer;',
+			'  border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); color: inherit; }',
+			'button:disabled { opacity: .6; cursor: default; }',
+			'button:focus-visible { outline: 2px solid #7aa7ff; outline-offset: 2px; }',
+			'</style>',
+			'<div class="wrap">',
+			'  <div class="card" role="dialog" aria-modal="true">',
+			'    <div class="title"></div>',
+			'    <div class="note"></div>',
+			'    <div class="hint">双击这一页任意处即可关掉（键盘：连按两下 Esc，或按住 Esc）。关掉之后模型可以继续操作这一页。</div>',
+			'    <div class="row"><button type="button" class="abort">中止模型操作</button></div>',
+			'  </div>',
+			'</div>',
+		].join('')
+		root.querySelector('.title').textContent = String(payload && payload.title ? payload.title : '')
+		root.querySelector('.note').textContent = String(payload && payload.note ? payload.note : '')
+		const wrap = root.querySelector('.wrap')
+		const abortBtn = root.querySelector('.abort')
+		const state = { at: Date.now(), note: String(payload && payload.note ? payload.note : ''), aborted: false, dismissedBy: null, closedAt: null }
+		window.__dshHold = state
+		const kill = (by) => {
+			state.dismissedBy = by
+			state.closedAt = Date.now()
+			window.__dshHold = state
+			if (host.parentNode) host.parentNode.removeChild(host)
+		}
+		// 双击任意处接管（500ms 内两下；点按钮不算）
+		let lastClick = 0
+		wrap.addEventListener('click', (e) => {
+			if (e.target === abortBtn || (abortBtn.contains && abortBtn.contains(e.target))) return
+			const now = Date.now()
+			if (now - lastClick <= 500) { lastClick = 0; kill('user'); return }
+			lastClick = now
+		}, true)
+		// Esc：800ms 内连按两下，或按住 600ms（单次 Esc 在网页里太常见，不能当接管）
+		let escLastUp = 0
+		let escLongPress = 0
+		let escDown = false
+		wrap.addEventListener('keydown', (e) => {
+			if (e.key !== 'Escape') return
+			e.preventDefault()
+			if (escDown) return
+			escDown = true
+			escLongPress = setTimeout(() => { escLongPress = 0; escDown = false; kill('user') }, 600)
+		}, true)
+		wrap.addEventListener('keyup', (e) => {
+			if (e.key !== 'Escape') return
+			e.preventDefault()
+			escDown = false
+			if (escLongPress) { clearTimeout(escLongPress); escLongPress = 0 }
+			const now = Date.now()
+			if (now - escLastUp <= 800) { escLastUp = 0; kill('user'); return }
+			escLastUp = now
+		}, true)
+		// 中止：两段确认（点一次变「再点一次确认」，3 秒不点还原）
+		let armedAt = 0
+		abortBtn.addEventListener('click', () => {
+			const now = Date.now()
+			if (armedAt !== 0 && now - armedAt <= 3000) {
+				state.aborted = true
+				window.__dshHold = state
+				abortBtn.textContent = '已中止（模型操作已被拦）'
+				abortBtn.disabled = true
+				return
+			}
+			armedAt = now
+			abortBtn.textContent = '再点一次确认中止'
+			setTimeout(() => {
+				if (armedAt !== 0 && Date.now() - armedAt >= 3000) {
+					armedAt = 0
+					abortBtn.textContent = '中止模型操作'
+				}
+			}, 3200)
+		})
+		// 先挂进文档，再抢焦点：不在文档里的按钮 focus() 是空操作（真机踩过）。
+		document.documentElement.appendChild(host)
+		const connected = host.isConnected !== false
+		try { abortBtn.focus({ preventScroll: true }) } catch (err) { /* 页面不允许聚焦就算了 */ }
+		return { covered: connected }
+	} catch (err) {
+		return { covered: false, reason: `inject-failed: ${String((err && err.message) || err)}` }
+	}
+}
+
+/** 页面侧：撤掉浮层（模型 `hold action=off` 用；用户双击/按 Esc 由页面自己撤）。 */
+function pageHoldRemove(by) {
+	const host = document.getElementById('__dsh_hold_overlay__')
+	if (host && host.parentNode) host.parentNode.removeChild(host)
+	const prev = window.__dshHold || null
+	const state = {
+		at: prev ? prev.at : Date.now(), note: prev ? prev.note : '',
+		aborted: false, dismissedBy: by || 'agent', closedAt: Date.now(),
+	}
+	window.__dshHold = state
+	return { active: false, dismissedBy: state.dismissedBy }
+}
+
+/** 页面侧：读浮层现状（DOM 是否存在为准，别信内存）。 */
+function pageHoldStatus() {
+	const host = document.getElementById('__dsh_hold_overlay__')
+	const st = window.__dshHold || null
+	return {
+		active: !!host,
+		aborted: !!(st && st.aborted),
+		dismissedBy: st ? st.dismissedBy : null,
+		at: st ? st.at : null,
+		closedAt: st ? st.closedAt : null,
+		note: st ? st.note : '',
+	}
+}
+
+/**
+ * 页面侧判定：这个元素是不是我们自己那层浮层里的东西（含宿主本身）。
+ *
+ * 单独抽成函数、并在读取路径里以 `(${pageIsHoldNode.toString()})(el)` 的形式注入，
+ * 是为了让它能被台子**直接执行**（`verify_hold` 拿假元素两向各跑一次），而不是只能
+ * 断言"表达式里出现了某个字符串"。
+ */
+function pageIsHoldNode(el) {
+	try {
+		return !!(el && el.closest && el.closest('[data-dsh-hold]'))
+	} catch (err) {
+		return false
+	}
+}
+
+/**
+ * 页面侧：把浮层那棵子树摘掉之后的 `outerHTML`。
+ * 宿主挂在 `<html>` 下，直接 `documentElement.outerHTML` 会把模型自己的提示带进
+ * 「页面内容」里（模型随后可能把那句话当成页面文字去点）。克隆一份再摘，不动真页面。
+ */
+function pageHtmlWithoutHold() {
+	try {
+		const clone = document.documentElement.cloneNode(true)
+		const mine = clone.querySelector ? clone.querySelector('[data-dsh-hold]') : null
+		if (mine && mine.remove) mine.remove()
+		return clone.outerHTML
+	} catch (err) {
+		return document.documentElement.outerHTML
+	}
+}
+
+/** 在页面里跑一段自包含函数，返回它的返回值。 */
+async function holdEval(tab, fn, arg) {
+	return withCDP(tab.id, (send) => send('Runtime.evaluate', {
+		expression: `(${fn.toString()})(${arg === undefined ? '' : JSON.stringify(arg)})`,
+		awaitPromise: false, returnByValue: true, userGesture: true,
+	}).then((res) => {
+		if (res.exceptionDetails) throw new Error(`page exception: ${res.exceptionDetails.text}`)
+		return res.result ? res.result.value : undefined
+	}))
+}
+
+/** 哪些页面盖不住：扩展自己都读不到页面时，先说清楚，不要假装盖住了。 */
+function holdSupportOf(tab) {
+	const url = String(tab.url || '')
+	if (url.startsWith('chrome-error:') || url.startsWith('edge-error:')) return 'error-page'
+	if (url.startsWith('chrome:') || url.startsWith('edge:')) return 'browser-page'
+	if (url.startsWith('devtools:')) return 'devtools'
+	return null
+}
+
+/**
+ * `hold on|off|status`：接管浮层的唯一入口（一条命令，参数区分动作）。
+ *
+ * `on` 会往页面里插一个宿主元素 ⇒ 它**改页面 DOM**，所以在只读档里必须被拒
+ * （`src/policy.ts` 里显式登记，理由写在那个集合旁边）。
+ */
+async function cmdHold(params) {
+	const action = String(params?.action ?? 'status')
+	if (!['on', 'off', 'status'].includes(action)) throw new Error(`invalid hold action: ${action} (use on|off|status)`)
+	const tab = await resolveTab(params?.tabId)
+	const stored = (await syncHoldState())[tab.id] || null
+	if (action === 'status') {
+		const page = await holdEval(tab, pageHoldStatus).catch(() => null)
+		return {
+			tabId: tab.id,
+			action,
+			active: page ? page.active === true : false,
+			covered: page !== null,
+			...(page === null ? { reason: 'probe-failed' } : {}),
+			aborted: page ? page.aborted === true : !!(stored && stored.aborted),
+			dismissedBy: page ? page.dismissedBy : null,
+			stored: stored ? { at: stored.at ?? null, aborted: stored.aborted === true, covered: stored.covered === true } : null,
+			recentDialogs: dialogLog.slice(-1),
+			support: holdSupportOf(tab),
+		}
+	}
+	if (action === 'off') {
+		await holdEval(tab, pageHoldRemove, 'agent').catch(() => {})
+		await persistHoldEntry(tab.id, null)
+		return { tabId: tab.id, action, active: false, covered: true }
+	}
+	const unsupported = holdSupportOf(tab)
+	if (unsupported !== null) {
+		const reason = unsupported
+		await persistHoldEntry(tab.id, { at: Date.now(), note: holdNoteOf(params), aborted: false, covered: false, reason })
+		return { tabId: tab.id, action, active: false, covered: false, reason }
+	}
+	const note = holdNoteOf(params)
+	const injected = await holdEval(tab, pageHoldInject, { title: HOLD_FIXED_TITLE, note }).catch((err) => ({
+		covered: false, reason: `inject-failed: ${String((err && err.message) || err)}`,
+	}))
+	const covered = injected ? injected.covered !== false : false
+	const reason = covered ? undefined : (injected && injected.reason) || 'unknown'
+	await persistHoldEntry(tab.id, { at: Date.now(), note, aborted: false, covered, ...(reason ? { reason } : {}) })
+	return { tabId: tab.id, action, active: covered, covered, note, ...(reason ? { reason } : {}) }
+}
+
+/**
+ * 中止态下的拒绝：命令一条都不发出去。
+ *
+ * 只在**存下来的状态说中止**、且页面上的浮层还在时才拦 —— 页面一导航浮层就没了，
+ * 那时把存储里那条顺手清掉（如实报「覆盖层已消失」，不许假装还挡着）。
+ */
+async function holdRefusalFor(command, params) {
+	if (!HOLD_BLOCKED_COMMANDS.has(command)) return null
+	let tab
+	try { tab = await resolveTab(params?.tabId) } catch { return null }
+	const entry = (await syncHoldState())[tab.id] || null
+	if (!entry) return null
+	// 「谁按了中止」只发生在页面里（用户点浮层上的按钮，没有任何命令经过桥），所以
+	// 页面现场是**唯一**可信来源；存储里那条只用来判断「这个标签页有没有浮层」。
+	// 这也是为什么每拦一次都要探一次：省下这次探测，就等于让中止在 30 秒后自己失效。
+	const page = await holdEval(tab, pageHoldStatus).catch(() => null)
+	if (page === null) return null
+	if (page.active !== true) { await persistHoldEntry(tab.id, null); return null }
+	if (page.aborted !== true) return null
+	return `${HOLD_ABORTED_MARKER} 用户已在页面的接管浮层上按下「中止操作」：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
+		+ `请先与用户确认；用户同意继续后调用 browser_hold action=off 解除这一状态（这一步等于确认继续）。不要重试，也不要换一个工具绕过去。`
+}
+
 /* ------------------------------------------------------------- dispatching */
 
 function handleBridgeMessage(msg) {
@@ -306,6 +635,10 @@ async function runCommand(command, params) {
 	if (hardLocked) throw new Error(hardLockRefusal(command));
 	const handler = COMMANDS[command];
 	if (!handler) throw new Error(`unknown command: ${command}`);
+	// 接管浮层上的「中止操作」：只拦写页面那四条，且只在页面上的浮层还在时拦
+	//（页面一导航浮层就没了，那时把存储里那条清掉并放行，不许假装还挡着）。
+	const held = await holdRefusalFor(command, params);
+	if (held !== null) throw new Error(held);
 	return handler(params);
 }
 
@@ -1170,8 +1503,11 @@ async function cmdEval(params) {
 async function cmdContent(params) {
 	const mode = params.mode === 'html' ? 'html' : 'text';
 	const tab = await resolveTab(params.tabId);
+	// html 模式要把浮层那棵子树摘掉：宿主挂在 <html> 下，outerHTML 会把模型自己的提示
+	// 带进「页面内容」里（模型随后可能把这句话当成页面文字去点）。`data-dsh-hold` 是
+	// 稳定标记，克隆一份再摘，不动真页面。
 	const inner = mode === 'html'
-		? 'document.documentElement.outerHTML'
+		? `(${pageHtmlWithoutHold.toString()})()`
 		: '(document.body && (document.body.innerText || document.body.textContent)) || ""';
 	const payload = await withCDP(tab.id, (send) =>
 		send('Runtime.evaluate', {
@@ -1190,7 +1526,8 @@ async function cmdFind(params) {
 	const tab = await resolveTab(params.tabId);
 	const payload = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
 		expression: `(() => {
-			const els = [...document.querySelectorAll(${JSON.stringify(String(params.selector))})];
+			const els = [...document.querySelectorAll(${JSON.stringify(String(params.selector))})]
+				.filter((el) => !(${pageIsHoldNode.toString()})(el));
 			return JSON.stringify({
 				count: els.length,
 				items: els.slice(0, ${limit}).map((el) => {
@@ -1505,7 +1842,8 @@ async function snapshotViaDom(send, tab, limit) {
 		expression: `(() => {
 			const ATTR = 'data-dsh-ref';
 			document.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
-			const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})];
+			const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})]
+				.filter((el) => !(${pageIsHoldNode.toString()})(el));
 			const items = [];
 			let n = 0;
 			for (const el of nodes) {
@@ -1676,6 +2014,7 @@ const COMMANDS = {
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
 	pdf: cmdPdf, emulate: cmdEmulate,
+	hold: cmdHold,
 };
 
 /**

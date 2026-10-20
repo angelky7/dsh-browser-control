@@ -15,7 +15,7 @@
  * 重试安全。
  */
 /** 失败原因分类。 */
-export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'command_failed';
+export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'held_by_user' | 'command_failed';
 /**
  * 扩展侧拒绝命令时写在 error 文本最前面的两个标记。
  *
@@ -27,6 +27,8 @@ export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command
  */
 export declare const LOCKED_BY_USER_MARKER = "browser-locked-by-user:";
 export declare const LOCK_UNREADABLE_MARKER = "browser-lock-unreadable:";
+/** 接管浮层上的「中止操作」。同样的线协议约定：字面量在扩展侧有一份，对账在 `verify_errors.mjs`。 */
+export declare const HOLD_ABORTED_MARKER = "browser-hold-aborted:";
 /** 副作用状态。 */
 export type EffectState = 
 /** 确定没有副作用落到页面上，重试安全。 */

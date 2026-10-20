@@ -31,6 +31,19 @@ export declare const SCRIPT_COMMANDS: ReadonlySet<string>;
  * 最不该允许的动作，所以单独列一张表，并且由 `cleanup()` 自己调闸门。
  */
 export declare const LOCAL_DESTRUCTIVE_COMMANDS: ReadonlySet<string>;
+/**
+ * 明确登记「会改页面 DOM」的命令 —— 只读档里必须拒，理由写在名字旁边。
+ *
+ * 现在只有 `hold`（接管浮层）：它往页面 `<html>` 下插一个宿主元素。默认拒绝其实已经
+ * 盖住它（不在 `READ_ONLY_ALLOWED` 里），但「默认拒绝是对的」不等于「不需要解释」：
+ * 这一条要的不是安全性，是**拒绝理由**——告诉模型为什么一个「只是提示用户」的动作
+ * 在只读档里也算写操作。
+ *
+ * 注意 `hold` 是一条命令带 `action`（on/off/status），而闸门只看命令名 ⇒ 只读档下
+ * `status` 也会被拒。这是有意的（读状态需要一条可用的桥，而只读档用户不需要浮层），
+ * 在 `docs/BEHAVIOR.md` 里写明。
+ */
+export declare const PAGE_MUTATING_COMMANDS: ReadonlySet<string>;
 /** 两个闸门的当前值。取自插件配置，热更新即生效（改完重启 dsh 也一样）。 */
 export interface PolicyFlags {
     /** 只读档：true 时拒绝一切会改变页面/浏览器状态的命令。 */

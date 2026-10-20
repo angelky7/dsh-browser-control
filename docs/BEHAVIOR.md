@@ -98,6 +98,26 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - 宿主只对 `undefined` 放行，**对 `null` 会下钻判类型**（`checkValue` 的物体分支里是 `!hasOwn(value,key) || value[key] === void 0` 才跳过）。因此扩展回 `字段: null` 时，封闭 schema 这一侧必须把 null 剥掉或如实声明可用类型——`browser_emulate` 就是因为原样透传 `userAgent: null`（`background.js:719`，`desktop` 预设的 UA 是空串）从 v1.0.7 一路坏到 v1.0.13。审计台对 11 条封闭 schema 工具断言 `value` 里不得出现任何 null。
 - 以上都由 `verify/verify_render_contract.mjs` 实测：真实 `BridgeServer` + 假扩展 + 宿主自己的 `validateJsonSchemaValue` 与 `valueSchemaSpecToJsonSchema`，逐条问「schema 过不过」「模型看到的文本里有没有这次调用真正要的数据」。**全部 20 条工具都在表里，不抽查**——因为抽查正是这两个缺陷活了 12 个 / 5 个版本的原因。
 
+## 接管浮层（`browser_hold`）
+
+在某个标签页上加一层可撤销的浮层：页面变暗、中间一张卡片写明模型在做什么，用户双击页面任意处
+（或连按两下 Esc、或按住 Esc 约 0.6 秒）就能关掉。**它是软层，不是安全边界** —— 桥的 token 模型
+读得到也改得动，所以任何长在插件侧/扩展侧的开关都只是策略；真正能冻住浏览器的只有弹窗里的本地锁。
+
+| 维度 | 行为 |
+|---|---|
+| 命令 | 扩展 `COMMANDS` 里只有一条 `hold`，参数 `action: 'on' \| 'off' \| 'status'`；工具面是 `browser_hold`，参数 `action` / `note` / `tabId` |
+| 标题 | **由扩展写死**（`DSH Browser Control`）。调用方只能提供 `note`（正文），且正文压平换行、截到 400 字符 —— 否则模型能写一句系统口吻的话冒充提示 |
+| 状态 | 放 `chrome.storage.session`、按 `tabId` 记。活过 service worker 回收（MV3 会回收 worker，内存标志 30 秒就丢——那正是浮层「以为挡着、其实没挡」的失败方式），不落盘，浏览器关掉即清。页面里另留一份只读的 `window.__dshHold`（谁撤的、什么时候撤的），**不参与决策** |
+| 关掉浮层 | 双击任意处 / 连按两下 Esc / 按住 Esc ≈0.6 秒。这是**接管**，不是中止：模型照常可以继续操作这一页 |
+| 中止 | 卡片上的「中止模型操作」要两次点击确认（点一次变「再点一次确认」，3 秒不点还原）。中止之后 `click` / `input` / `press` / `nav` 被扩展在 `runCommand` 入口拒绝，**零 CDP 调用**；模型要恢复得先与用户确认，再调 `browser_hold action=off`（这一步等于确认继续） |
+| 模型看到的错误 | 结果帧只有一个 `error` 字符串，所以扩展在文本最前面写 `browser-hold-aborted:`，`classify()` 认前缀 ⇒ `code=held_by_user`、`effectState=not_started`（拦截在 handler 之前，这是可以确定的真相），标记从给模型的那句话里剥掉。两边字面量由 `verify_errors` 对账 |
+| 页面换了就没了 | 导航/刷新会把浮层带走。此时命令直接放行，并把存储里那条顺手清掉，`status` 如实报 `active:false` —— 不许假装还挡着 |
+| 覆盖范围 | **可观测的失败**：盖不住时 `browser_hold` 回 `covered:false` 且带 `reason`（`error-page` / `browser-page` / `devtools` / `inject-failed`）。已知盖不住的有：严格 CSP、全屏、跨源 iframe、PDF 阅读器、原生弹窗挡在上面 —— 这些时候状态里能看出来，而不是只在文档里认怂 |
+| 只读档 | `readOnly: true` 时 `hold` 被拒（它往页面里插宿主元素 = 改页面 DOM），拒因专门写清这一点。因为闸门只看命令名，`action=status` 同样被拒 |
+| 观察面 | 浮层是**注入物**，所以 `content`（含 html 模式）/ `find` / `snapshot` 三条读取路径都排除带 `data-dsh-hold` 的子树，`verify_hold` 两向断言（浮层文字不出现在模型可见文本里 + 页面上同名 class 的正常元素不被误伤） |
+| 失败分类 | `hold` 算写操作：超时/在途掉线报 `unknown`（重试可能多留一层），不许报「没动到页面，重试安全」 |
+
 ## 本地硬锁（扩展弹窗的「锁定」）
 
 用户在扩展弹窗里单击「锁定」后，本机进入冻结状态，契约如下：
