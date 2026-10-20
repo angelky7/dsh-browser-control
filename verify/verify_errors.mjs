@@ -1,7 +1,7 @@
 // 错误契约实测：分类是否正确、写操作是否被标成「结果未知」、HTTP 面是否把
 // code / effectState / hint 一起回给调用方。
 import net from "node:net";
-import { classify, BridgeError, isWriteCommand } from "../src/errors.ts";
+import { classify, BridgeError, isWriteCommand, LOCKED_BY_USER_MARKER, LOCK_UNREADABLE_MARKER } from "../src/errors.ts";
 import { BridgeServer } from "../src/server.ts";
 
 let fails = 0;
@@ -26,6 +26,10 @@ const cases = [
   // 删除是逐条 rm 的：半路失败（Windows 上被占用的截图 EPERM）时前面的文件已经没了，
   // 这时报 not_started「没动过，重试安全」就是假的，必须 unknown 并先去看还剩什么。
   ["cleanup", "EPERM: operation not permitted, unlink 'dsh-browser-shots/shot.png'", "command_failed", "unknown"],
+  // 扩展弹窗的锁：连写操作也确定一条命令都没发出，所以是 not_started，
+  // 不能因为 click 在写清单里就报 unknown（那等于说「动作可能已经落到页面上」）。
+  ["click", "browser-locked-by-user: 本机扩展已被用户锁定：命令 click 被拦下", "locked_by_user", "not_started"],
+  ["tabs.close", "browser-lock-unreadable: 扩展读不出本地锁的状态，已按冻结处理", "lock_unreadable", "not_started"],
 ];
 for (const [cmd, msg, code, effect] of cases) {
   const e = classify(cmd, new Error(msg));
@@ -123,6 +127,25 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
   check('每个传给 classify() 的名字都登记过写/读（不许静默按「重试安全」处理）',
     unregistered.length === 0, unregistered.join(','));
   check('cleanup 被当成写操作（半路删除失败不许说重试安全）', isWriteCommand('cleanup'));
+}
+
+// ---- 锁的前缀是跨两侧的线协议，两边必须逐字一致 ----
+// 结果帧只有一个 error 字符串能带信息，所以「命令根本没发出」这件事只能写在文本前缀上。
+// 前缀一旦对不上，插件侧不会报错——它会安静地把锁当成 command_failed，于是写操作的
+// 锁拒绝被报成 effectState=unknown「动作可能已经落到页面上」，而那恰好是假的。
+{
+  const fs = await import('node:fs/promises');
+  const bg = await fs.readFile(new URL('../extension/background.js', import.meta.url), 'utf8');
+  check('对账：扩展里写着与插件侧逐字相同的两个锁前缀',
+    bg.includes(`'${LOCKED_BY_USER_MARKER}'`) && bg.includes(`'${LOCK_UNREADABLE_MARKER}'`),
+    `${LOCKED_BY_USER_MARKER} / ${LOCK_UNREADABLE_MARKER}`);
+  const stripped = classify('click', new Error(`${LOCKED_BY_USER_MARKER} 本机扩展已被用户锁定：命令 click 被拦下`));
+  check('锁标记不留在给模型的那句话里（但 [code] 与文案都在）',
+    !stripped.message.includes(LOCKED_BY_USER_MARKER)
+    && stripped.message.startsWith('[locked_by_user]')
+    && /已被用户锁定/.test(stripped.message), stripped.message.slice(0, 90));
+  check('锁拒绝的 detail 也不带标记（HTTP 面的 error 字段是原始描述）',
+    !stripped.detail.includes(LOCKED_BY_USER_MARKER), stripped.detail.slice(0, 60));
 }
 
 // ---- 集成层：真 BridgeServer + 不回话的假扩展 ----

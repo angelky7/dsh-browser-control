@@ -95,6 +95,39 @@ const missingTab = await call("tabs.group", { tabId: 999999 });
 check("归组不存在的标签 → 扩展的错误文本原样回到调用方",
   missingTab.status === 502 && /不存在|No tab/.test(String(missingTab.json.error)), JSON.stringify(missingTab.json).slice(0, 180));
 
+/* 本地锁 → 桥分类 → HTTP 结构化：整条链路一次对齐（PR #15 的锁 + 本次补的错误契约） */
+{
+  const dbgBefore = model.dbg.log.length;
+  const lockedOn = await model.sendRuntimeMessage({ type: "lockSet", locked: true });
+  check("锁从弹窗这一侧上上了（真扩展、真 WS）", lockedOn?.locked === true, JSON.stringify(lockedOn));
+
+  const lockedRead = await call("content", { selector: "body" });
+  check("锁着时只读命令 → HTTP 502 + code=locked_by_user",
+    lockedRead.status === 502 && lockedRead.json.code === "locked_by_user",
+    JSON.stringify(lockedRead.json).slice(0, 200));
+
+  // 关键是这条：click 在写清单里，若不认锁前缀就会被报成 unknown「动作可能已经落到页面上」。
+  // 锁的拦截发生在 handler 之前，所以真相是 not_started。
+  const lockedWrite = await call("click", { selector: "#q" });
+  check("锁着时写命令也报 not_started（一条事件都没派发，不许报 unknown）",
+    lockedWrite.json.code === "locked_by_user" && lockedWrite.json.effectState === "not_started",
+    `${lockedWrite.json.code}/${lockedWrite.json.effectState}`);
+  check("error 字段是剥掉线协议标记的整句话",
+    typeof lockedWrite.json.error === "string"
+    && !lockedWrite.json.error.includes("browser-locked-by-user:")
+    && /已被用户锁定/.test(lockedWrite.json.error), String(lockedWrite.json.error).slice(0, 80));
+  check("hint 指向「让用户解锁」，不是「选择器没命中」",
+    /扩展弹窗/.test(String(lockedWrite.json.hint)) && !/选择器/.test(String(lockedWrite.json.hint)),
+    String(lockedWrite.json.hint).slice(0, 70));
+  check("锁着期间一次 CDP 都没派发（拦在 handler 之前，不是拦在页面里）",
+    model.dbg.log.length === dbgBefore, `新增 ${model.dbg.log.length - dbgBefore} 次`);
+
+  await model.sendRuntimeMessage({ type: "lockSet", locked: false });
+  const afterUnlock = await call("tabs.list", {});
+  check("解锁后同一条链路立刻恢复（不需要重启桥或扩展）",
+    afterUnlock.status === 200 && afterUnlock.json.ok !== false, JSON.stringify(afterUnlock.json).slice(0, 120));
+}
+
 ctx.disconnectNow?.();
 await new Promise((r) => setTimeout(r, 120));
 await server.stop();

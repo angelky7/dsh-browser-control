@@ -109,8 +109,10 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 错误文案 | 点名被拦的命令，并写明「解锁只能由用户在浏览器工具栏的扩展弹窗里点『已锁定』完成」与「不要重试」 |
 | 解锁通道 | 只有扩展弹窗的 `chrome.runtime` 消息（`lockSet`）。桥接侧没有解锁命令；`lockSet` 不在扩展的 `COMMANDS` 表里，所以模型塞一条同名命令帧只会被当作普通命令拦下 |
 | 持久化 | 状态落在 `chrome.storage.local.hardLock`。MV3 回收 service worker 后重新读盘，**不会**因为内存标志丢失而解冻 |
-| 徽标 | 冻结期间显示红色 `LOCK`；恢复后按连接状态显示 `ON` / `…` / `OFF` |
-| 协议 | 不动 `PROTOCOL_VERSION`：冻结是本机开关，不是帧契约的一部分 |
+| 读盘失败 | **按锁定处理**（fail-closed）。panic switch 唯一不能有的失败方式是「以为锁着其实没锁」，所以读不出状态时宁可拒绝；此时拒绝文案与 `bridgeStatus.lockReason` 都写「读不出锁状态」而不是「已被用户锁定」，不冤枉用户，也不误导模型。下一次调用会重读，存储恢复后自动放行。用户仍能从弹窗解锁——那条通道走内存里的 `setHardLock`，不依赖这次失败的读 |
+| 徽标 | 冻结期间显示红色 `LOCK`；恢复后按连接状态显示 `ON` / `…` / `OFF`。`init()` 会**先读锁再连接**，所以 service worker 刚唤醒、一条命令都还没跑的时候图标就是 `LOCK`，而不是让人误判健康的绿色 `ON` |
+| 模型看到的错误 | 结果帧只有一个 `error` 字符串可以带信息，所以扩展把 `browser-locked-by-user:` / `browser-lock-unreadable:` 写在文本最前面，`classify()` 认前缀：`code=locked_by_user` 或 `lock_unreadable`，`effectState=not_started`（**写操作也是**，因为拦截发生在 handler 之前，这是可以确定的真相），标记本身从给模型的那句话里剥掉。认不出前缀就退成 `command_failed` + 写操作 `unknown` + 「通常是选择器没命中」那种误导 hint，所以 `verify_errors` 对账两侧字面量逐字一致 |
+| 协议 | 不动 `PROTOCOL_VERSION`：冻结是本机开关，不是帧契约的一部分。老扩展不会发这两个前缀，因此不存在「静默降级读不到」的版本错位——它压根没有锁 |
 
 之所以放在客户端而不是桥接侧：桥的唯一实际边界是回环地址 + token，而 token 明写在 profile 的
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，

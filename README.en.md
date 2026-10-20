@@ -219,6 +219,9 @@ so it does not retry what looks like a network failure.
 - There is exactly one way out: click the same button (now **已锁定**) in that popup. The bridge has no
   unlock command and neither does the tool surface.
 - The flag lives in `chrome.storage.local`, so an MV3 service-worker eviction cannot silently unfreeze it.
+- If that flag cannot be **read**, the extension freezes anyway (fail closed): a panic switch that is
+  believed-on but actually off is worth nothing. The refusal and the popup then say "lock state unreadable"
+  instead of blaming you for a lock you never pressed, and one click in the popup still writes a definite state.
 - The toolbar badge shows a red `LOCK` while frozen instead of a reassuring green `ON`.
 - Why this lives in the client rather than the bridge: the bridge token sits in the profile's
   `cordis.patch.yml`, which the agent can read *and* rewrite. A freeze that only a human can lift has to

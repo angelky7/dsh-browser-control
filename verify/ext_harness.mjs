@@ -442,11 +442,20 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
   };
   const storageArea = {
     // 只返回真给得出值的键：扩展那边 `{...DEFAULT_CONFIG, ...stored}` 会被 undefined 覆盖
-    get: (keys) => resolve(Object.fromEntries(
-      (Array.isArray(keys) ? keys : Object.keys(keys ?? {}))
-        .filter((k) => storage[k] !== undefined)
-        .map((k) => [k, storage[k]]),
-    )),
+    // model.storageGetError 非空时让 get 直接失败：本地锁这类东西在「读不到」时
+    // 必须 fail-closed，而这只有把读盘演成失败才测得出来。
+    // storageGetErrorKeys 用来把失败限制在某几个键上（真 Chrome 不会只让一个键读不出来，
+    // 但不限制就会连 loadConfig 一起炸，测不到想测的那条分支）。
+    get: (keys) => {
+      const list = Array.isArray(keys) ? keys : Object.keys(keys ?? {});
+      const only = model.storageGetErrorKeys;
+      if (model.storageGetError && (!only || list.some((k) => only.includes(k)))) {
+        return Promise.reject(new Error(model.storageGetError));
+      }
+      return resolve(Object.fromEntries(
+        list.filter((k) => storage[k] !== undefined).map((k) => [k, storage[k]]),
+      ));
+    },
     // 真写入并广播：本地锁这类「必须活过 service worker 重启」的状态，
     // 用一个 set 不落盘的假件测不出来。
     set: (items) => {

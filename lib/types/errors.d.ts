@@ -15,7 +15,18 @@
  * 重试安全。
  */
 /** 失败原因分类。 */
-export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'command_failed';
+export type BridgeErrorCode = 'bridge_disabled' | 'extension_offline' | 'command_timeout' | 'link_lost' | 'cancelled' | 'not_configured' | 'blocked_by_policy' | 'locked_by_user' | 'lock_unreadable' | 'command_failed';
+/**
+ * 扩展侧拒绝命令时写在 error 文本最前面的两个标记。
+ *
+ * 结果帧里只有一个 `error` 字符串，没有 code 字段，所以「这条命令根本没发出去」
+ * 这个信息只能长在文本上穿过渡线上。字面量在 `extension/background.js` 里有一份
+ * 一模一样的，`verify/verify_errors.mjs` 会对账两边——少了对账就是一边改了前缀、
+ * 另一边静默退回 `command_failed` + `unknown`（写操作会被说成「可能已经落到页面上」，
+ * 而那恰好是假的）。
+ */
+export declare const LOCKED_BY_USER_MARKER = "browser-locked-by-user:";
+export declare const LOCK_UNREADABLE_MARKER = "browser-lock-unreadable:";
 /** 副作用状态。 */
 export type EffectState = 
 /** 确定没有副作用落到页面上，重试安全。 */

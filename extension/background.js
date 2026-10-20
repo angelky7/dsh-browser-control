@@ -236,8 +236,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * commands, which is the one failure mode a panic switch cannot have.
  */
 const HARD_LOCK_KEY = 'hardLock';
+/** 拒绝文案的两种来源：真的是用户锁的，还是锁状态读不出来、按冻结处理。 */
+const HARD_LOCK_REASON_MARKER = 'browser-locked-by-user:';
+const HARD_LOCK_UNREADABLE_MARKER = 'browser-lock-unreadable:';
 let hardLocked = false;
 let hardLockLoaded = false;
+let hardLockReason = 'user';
 
 /** Read the persisted flag once per worker lifetime. */
 async function syncHardLock() {
@@ -245,11 +249,17 @@ async function syncHardLock() {
 	try {
 		const stored = await chrome.storage.local.get([HARD_LOCK_KEY]);
 		hardLocked = stored[HARD_LOCK_KEY] === true;
+		hardLockReason = 'user';
+		hardLockLoaded = true;
 	} catch (err) {
-		// Reading the flag failed: stay open, but say so instead of pretending.
-		lastError = `读取本地锁失败: ${err.message}`;
+		// 读不到锁的状态时按「锁着」处理。panic switch 唯一的失败方式就是「以为锁着
+		// 其实没锁」，而 fail-open 恰好是那种失败；这里宁可让模型多做一次询问。
+		// 不置 hardLockLoaded：下一条命令再读一次，存储恢复后自愈。
+		// 用户仍然能解：弹窗那条通道走的是内存里的 setHardLock，不依赖这次读。
+		hardLocked = true;
+		hardLockReason = 'unreadable';
+		lastError = `读取本地锁失败，已按「锁定」处理：${err.message}`;
 	}
-	hardLockLoaded = true;
 	// A worker that came back after eviction has not painted the badge yet; do it
 	// now so "locked" is visible before the first command rather than after it.
 	if (hardLocked) setState(wsState);
@@ -259,14 +269,24 @@ async function syncHardLock() {
 async function setHardLock(locked) {
 	hardLocked = Boolean(locked);
 	hardLockLoaded = true;
+	hardLockReason = 'user';
 	await chrome.storage.local.set({ [HARD_LOCK_KEY]: hardLocked });
 	setState(wsState);
 	return hardLocked;
 }
 
-/** Refusal text the agent actually reads; it must say who can undo this. */
+/**
+ * Refusal text the agent actually reads; it must say who can undo this.
+ *
+ * 前缀是给插件侧 `classify()` 认的线协议（`src/errors.ts` 里有一份同样的字面量，
+ * `verify/verify_errors.mjs` 对账两边），所以文案怎么改都不能动前缀。
+ */
 function hardLockRefusal(command) {
-	return `本机扩展已被用户锁定：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
+	if (hardLockReason === 'unreadable') {
+		return `${HARD_LOCK_UNREADABLE_MARKER} 扩展读不出本地锁的状态（chrome.storage.local 失败），已按「冻结」处理：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
+			+ `这不是用户按了锁定，请如实告诉用户原因；下一次调用会重新读一次锁状态，存储恢复后自动放行，所以现在重试是安全的，但不要循环重试。`;
+	}
+	return `${HARD_LOCK_REASON_MARKER} 本机扩展已被用户锁定：命令 ${command} 被拦下，没有向浏览器发出任何操作。`
 		+ `解锁只能由用户在浏览器工具栏的扩展弹窗里点「已锁定」完成；在那之前请先与用户确认，不要重试。`;
 }
 
@@ -1713,7 +1733,7 @@ async function cmdDialogPolicy(params) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	if (msg?.type === 'bridgeStatus') {
-		sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked });
+		sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none' });
 		return false;
 	}
 	if (msg?.type === 'lockSet') {
@@ -1747,6 +1767,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function init() {
 	await loadConfig();
+	// 先把本地锁读出来再连：service worker 被回收后重新唤醒时，如果只有第一条命令
+	// 才触发重读，那段时间图标上显示的是绿色 ON —— 用户以为锁着，桥那边却一切正常。
+	await syncHardLock();
 	connect();
 }
 

@@ -16,7 +16,7 @@ import { readFile } from "node:fs/promises";
 import { runInContext } from "node:vm";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { bootBackground } from "./ext_harness.mjs";
+import { bootBackground, makeModel } from "./ext_harness.mjs";
 
 const CANDIDATE = process.argv[2];
 /** 换一份背景脚本跑时，弹窗也读那一份旁边的（否则结构断言测的还是本地仓库）。 */
@@ -113,7 +113,7 @@ const sharedModel = m1.model;
   check("协议版本没有变（帧契约未动）", evalIn(ctx, "PROTOCOL_VERSION") === 1, String(evalIn(ctx, "PROTOCOL_VERSION")));
 }
 
-// ---- 5) service worker 被回收后重启：锁必须还在（bi-042 的教训）----
+// ---- 5) service worker 被回收后重启：锁必须还在 ----
 {
   const revived = await boot({ model: sharedModel, storage: store });
   const pingErr = await errOf(revived.ctx.runCommand("ping", {}));
@@ -146,6 +146,49 @@ const sharedModel = m1.model;
     /id="reconnect"[\s\S]*id="lock"[\s\S]*id="openStatus"/.test(html));
   check("popup.js 用单击切换并走 lockSet 通道", /type: ['"]lockSet['"],\s*locked: !locked/.test(js));
   check("按钮文案在锁定后变成「已锁定」", /'已锁定' : '锁定'/.test(js));
+  check("popup 分得清「用户锁的」与「读不出锁状态」，不冤枉用户去按一个他没按的键",
+    /lockReason === 'unreadable'/.test(js) && /锁状态读不出来/.test(js));
+}
+
+// ---- 8) service worker 刚唤醒就把徽标画对，不能等第一条命令 ----
+// 锁状态是落盘的，而 setState() 只在连接变化时画徽标。如果只有 runCommand 里才重读，
+// 唤醒后到第一条命令之间图标显示的是绿色 ON —— 用户以为锁着，桥那边却一切正常。
+{
+  const seeded = { hardLock: true };
+  const { model, ctx } = await boot({ storage: seeded });
+  check("开机（未跑任何命令）徽标就已经是 LOCK", model.badgeText === "LOCK",
+    JSON.stringify({ text: model.badgeText, color: model.badgeColor }));
+  const status = await model.sendRuntimeMessage({ type: "bridgeStatus" });
+  check("开机时 bridgeStatus 就报 locked:true", status?.locked === true, JSON.stringify(status?.locked));
+  check("bridgeStatus 说明锁的来路（user），弹窗才敢写「已被用户锁定」",
+    status?.lockReason === "user", String(status?.lockReason));
+  const err = await errOf(ctx.runCommand("content", { selector: "body" }));
+  check("锁着的扩展连只读命令也不放行", err !== null && /已被用户锁定/.test(err), String(err));
+}
+
+// ---- 9) 读不出锁状态时必须 fail-closed ----
+// panic switch 唯一不能有的失败方式是「以为锁着其实没锁」。读盘失败如果按「没锁」
+// 处理，锁就在最需要它的时候消失，而且没有任何人会知道。
+{
+  const m = makeModel();
+  m.storageGetError = "storage unavailable (simulated)";
+  m.storageGetErrorKeys = ["hardLock"]; // 只让锁那一次读盘失败，loadConfig 照常
+  const { ctx } = await boot({ model: m, storage: {} });
+  const err = await errOf(ctx.runCommand("click", { selector: "#q" }));
+  check("读盘失败 → 命令被拦下（fail-closed，不是照常执行）", err !== null, String(err));
+  check("读盘失败 → 文案说的是「读不出锁状态」，不冤枉用户去按锁定",
+    /读不出本地锁的状态/.test(err ?? "") && !/已被用户锁定/.test(err ?? ""), String(err)?.slice(0, 90));
+  check("读盘失败 → 告诉模型下一次会重读（所以重试安全）", /下一次调用会重新读/.test(err ?? ""));
+  check("读盘失败时徽标也是 LOCK（不能只显示绿色 ON）", m.badgeText === "LOCK", String(m.badgeText));
+  const reason = evalIn(ctx, "lastError");
+  check("读盘失败写进 lastError，状态页看得到原因", /读取本地锁失败/.test(String(reason ?? "")), String(reason)?.slice(0, 60));
+  const status = await m.sendRuntimeMessage({ type: "bridgeStatus" });
+  check("bridgeStatus 报 lockReason=unreadable，弹窗才不会谎称「已被用户锁定」",
+    status?.lockReason === "unreadable" && status?.locked === true, JSON.stringify(status?.lockReason));
+  // 用户仍然解得开：解锁走内存里的 setHardLock，不依赖那次失败的读盘。
+  const unlocked = await m.sendRuntimeMessage({ type: "lockSet", locked: false });
+  check("读盘失败后用户仍能从弹窗解锁（解锁不依赖那次 get）", unlocked?.locked === false, JSON.stringify(unlocked));
+  check("解锁后命令恢复执行", (await ctx.runCommand("ping", {}))?.pong === true);
 }
 
 console.log(fails === 0 ? "\n本地硬锁全部符合契约" : `\n${fails} 项失败`);

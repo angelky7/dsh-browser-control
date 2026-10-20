@@ -30,13 +30,18 @@ function render(status) {
 	btn.classList.toggle('danger', connected);
 	btn.dataset.connected = String(connected);
 	const locked = status.locked === true;
+	// 冻结有两种来路：用户真按了锁，或者扩展读不出锁状态、按冻结处理（fail-closed）。
+	// 后者也说「点『已锁定』解除」会让用户以为是自己误触，所以分开写。
+	const unreadable = locked && status.lockReason === 'unreadable';
 	const lock = $('lock');
 	lock.textContent = locked ? '已锁定' : '锁定';
 	lock.classList.toggle('locked', locked);
 	const hint = $('lockhint');
-	hint.textContent = locked
-		? '已冻结：扩展会拒绝模型的全部浏览器操作（连接保持）。点「已锁定」解除。'
-		: '锁定 = 冻结模型的全部浏览器操作，连接不断。解锁只能在这里点。';
+	hint.textContent = unreadable
+		? '锁状态读不出来（chrome.storage.local 失败），已按冻结处理。点这里可以重新写入明确状态。'
+		: locked
+			? '已冻结：扩展会拒绝模型的全部浏览器操作（连接保持）。点「已锁定」解除。'
+			: '锁定 = 冻结模型的全部浏览器操作，连接不断。解锁只能在这里点。';
 	hint.className = locked ? 'lockhint on' : 'lockhint';
 	const errorBox = $('error');
 	errorBox.textContent = status.lastError ?? '';

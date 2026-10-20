@@ -24,7 +24,21 @@ export type BridgeErrorCode =
 	| 'cancelled'            // 调用方主动取消
 	| 'not_configured'       // 还没拿到任何一份配置
 	| 'blocked_by_policy'    // 本机策略（只读档 / 脚本开关）拦下，命令没有发出
+	| 'locked_by_user'       // 扩展弹窗里的本地锁拦下，只有用户能解除
+	| 'lock_unreadable'      // 扩展读不出锁状态，按冻结处理（会自动重读）
 	| 'command_failed';      // 扩展明确回了失败
+
+/**
+ * 扩展侧拒绝命令时写在 error 文本最前面的两个标记。
+ *
+ * 结果帧里只有一个 `error` 字符串，没有 code 字段，所以「这条命令根本没发出去」
+ * 这个信息只能长在文本上穿过渡线上。字面量在 `extension/background.js` 里有一份
+ * 一模一样的，`verify/verify_errors.mjs` 会对账两边——少了对账就是一边改了前缀、
+ * 另一边静默退回 `command_failed` + `unknown`（写操作会被说成「可能已经落到页面上」，
+ * 而那恰好是假的）。
+ */
+export const LOCKED_BY_USER_MARKER = 'browser-locked-by-user:';
+export const LOCK_UNREADABLE_MARKER = 'browser-lock-unreadable:';
 
 /** 副作用状态。 */
 export type EffectState =
@@ -69,6 +83,8 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	cancelled: '调用被取消：按需重新发起，不必当作错误处理。',
 	not_configured: '插件还没读到配置：确认 dsh 已加载本插件（dsh plugin list）后再试。',
 	blocked_by_policy: '这是本机策略拦下的，不是故障：命令没有发给浏览器（零副作用）。要放开改 profile 的 cordis.patch.yml（browser-bridge 的 readOnly / allowScript）并重启 dsh，或换成本机允许的只读工具；不要原地重试。',
+	locked_by_user: '这是用户在扩展弹窗里按下的「锁定」，不是故障：命令一条都没有发出。请先与用户确认，由他在同一个弹窗里点「已锁定」解除；不要重试，也不要试图改配置绕过它。',
+	lock_unreadable: '扩展这次读不出锁的状态，按冻结处理了：命令没有发出。下一条命令会重新读一次，所以可以再试一次，但不要循环重试；一直如此就请用户重启浏览器或重装扩展。',
 	command_failed: '扩展报回失败：按 error 文本处理，通常是选择器没命中、标签页已关闭或页面不允许该操作。',
 };
 
@@ -128,11 +144,19 @@ export class BridgeError extends Error {
  */
 export function classify(command: string, error: unknown): BridgeError {
 	if (error instanceof BridgeError) return error
-	const message = error instanceof Error ? error.message : String(error)
+	const raw = error instanceof Error ? error.message : String(error)
+	// 扩展弹窗的锁把「这条命令根本没发出去」写在文本前缀上（结果帧里只有 error 一个
+	// 字符串可以带信息）。先认它，并把标记从给模型看的那句话里剥掉：它不该跟着
+	// 落到上下文中。认不出前缀的那些（老扩展、别的失败）照原路走。
+	const locked = raw.startsWith(LOCKED_BY_USER_MARKER) ? 'locked_by_user' as const
+		: raw.startsWith(LOCK_UNREADABLE_MARKER) ? 'lock_unreadable' as const
+			: undefined
+	const message = locked ? raw.slice(locked === 'locked_by_user' ? LOCKED_BY_USER_MARKER.length : LOCK_UNREADABLE_MARKER.length).trim() : raw
 	// 写操作一旦超时或掉线，结果就是未知的；读操作永远可以安全重试。
 	const unknownIsPossible = isWriteCommand(command)
 	let code: BridgeErrorCode
-	if (/no browser extension connected/.test(message)) code = 'extension_offline'
+	if (locked !== undefined) code = locked
+	else if (/no browser extension connected/.test(message)) code = 'extension_offline'
 	else if (/disconnected mid-command|browser-bridge stopped/.test(message)) code = 'link_lost'
 	else if (/timed out after/.test(message)) code = 'command_timeout'
 	else if (/cancelled/.test(message)) code = 'cancelled'
