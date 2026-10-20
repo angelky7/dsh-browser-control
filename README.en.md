@@ -254,6 +254,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
 | `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
 | `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
+| `browser_hold` | Put or remove a cancellable take-over overlay on a tab (tells the user, stops mis-clicks); `covered:false` says why it could not cover the page. A soft layer, not a security boundary |
 | `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; see "What agent tabs look like") |
 | `browser_evaluate` | Run arbitrary JS |
 | `browser_screenshot` | Capture page screenshot |
@@ -265,7 +266,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-20 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+21 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

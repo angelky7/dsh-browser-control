@@ -30,13 +30,14 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - `/` 与 `/api/status` 免鉴权，只报链路状态
 - 两个本机策略开关（profile 的 `browser-bridge` 配置）：`readOnly: true` 拒绝一切会改变页面/浏览器状态或删本机文件的命令，`allowScript: false` 单独关掉 `browser_evaluate`（它能做其它所有工具能做的事）。闸门在把命令发给扩展**之前**，所以被拒的调用零副作用；它们只约束模型那条工具面，HTTP 面按同一 token 走、不受影响，也**不是**防有权限的人
 - 扩展弹窗里的「锁定」是另一层：只有人工通道能开与关，冻结期间命令在扩展的 `runCommand` 入口就被拒绝（连接保持），读不出锁状态时按冻结处理（fail-closed）
+- `browser_hold`（接管浮层）是**软层**：它告诉用户模型在操作这一页并挡住误触，用户双击即可关掉；卡片上按「中止操作」后扩展拒绝 `click`/`input`/`press`/`nav`，但模型可以调 `hold action=off` 解除。它不是安全边界，也不是防逃逸手段——要冻住浏览器用扩展弹窗里的「锁定」
 
 ## 关键文件
 
-- `src/index.ts` - 20 个 `browser_*` 工具注册 + settings 接线的版本兼容分支
+- `src/index.ts` - 21 个 `browser_*` 工具注册 + settings 接线的版本兼容分支
 - `src/policy.ts` - 三张互不相同的表：只读白名单、脚本命令、插件本地破坏性命令（`browser_cleanup` 不经过 `execute()`，必须自己站闸门）
 - `src/server.ts` - WebSocket 服务 + HTTP 面（鉴权、来源校验、状态页）
 - `src/ws.ts` - RFC 6455 帧编解码
 - `src/errors.ts` - 失败分类：`code` / `effectState` / `hint` 写进模型读得到的那句话
-- `extension/background.js` - CDP 命令分发 + 持久 debugger 附着 + 本地硬锁
+- `extension/background.js` - CDP 命令分发 + 持久 debugger 附着 + 本地硬锁 + 接管浮层（`hold`）
 - `extension/popup.js` - 弹窗状态 UI 与「锁定」按钮

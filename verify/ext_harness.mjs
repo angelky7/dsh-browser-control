@@ -186,9 +186,12 @@ function stub(path, state) {
  * @param model 假浏览器
  * @param options.withTabGroups 关掉即模拟「Chrome 太旧或权限没给」
  * @param options.storage chrome.storage.local.get 的返回值（扩展的端口/Token 就从这里来）
+ * @param options.sessionStorage `chrome.storage.session` 的落点；默认与 local 同一份（多数台子
+ *   不关心区别）。接管浮层把「哪个标签页被接管」放在 session 里，`verify_hold` 传一份单独的
+ *   对象，才能断言它**没有**落进会跨浏览器重启留下的 local。
  * @param options.manifest 喂给 chrome.runtime.getManifest() 的内容（扩展会把它报给桥）
  */
-export function makeChrome(model, { withTabGroups = true, storage = {}, manifest = { version: "0.0.0-harness" } } = {}) {
+export function makeChrome(model, { withTabGroups = true, storage = {}, sessionStorage = storage, manifest = { version: "0.0.0-harness" } } = {}) {
   const state = { lastError: undefined };
   const resolve = (v) => Promise.resolve(v);
   const reject = (m) => Promise.reject(new Error(m));
@@ -440,7 +443,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
       try { fn(changes, "local"); } catch { /* 监听器炸了不该影响假浏览器 */ }
     }
   };
-  const storageArea = {
+  const makeArea = (store) => ({
     // 只返回真给得出值的键：扩展那边 `{...DEFAULT_CONFIG, ...stored}` 会被 undefined 覆盖
     // model.storageGetError 非空时让 get 直接失败：本地锁这类东西在「读不到」时
     // 必须 fail-closed，而这只有把读盘演成失败才测得出来。
@@ -453,7 +456,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
         return Promise.reject(new Error(model.storageGetError));
       }
       return resolve(Object.fromEntries(
-        list.filter((k) => storage[k] !== undefined).map((k) => [k, storage[k]]),
+        list.filter((k) => store[k] !== undefined).map((k) => [k, store[k]]),
       ));
     },
     // 真写入并广播：本地锁这类「必须活过 service worker 重启」的状态，
@@ -461,8 +464,8 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     set: (items) => {
       const changes = {};
       for (const [k, v] of Object.entries(items ?? {})) {
-        changes[k] = { oldValue: storage[k], newValue: v };
-        storage[k] = v;
+        changes[k] = { oldValue: store[k], newValue: v };
+        store[k] = v;
       }
       fireStorageChanged(changes);
       return resolve();
@@ -470,8 +473,8 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     remove: (keys) => {
       const changes = {};
       for (const k of Array.isArray(keys) ? keys : [keys]) {
-        changes[k] = { oldValue: storage[k], newValue: undefined };
-        delete storage[k];
+        changes[k] = { oldValue: store[k], newValue: undefined };
+        delete store[k];
       }
       fireStorageChanged(changes);
       return resolve();
@@ -483,7 +486,10 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
         if (at >= 0) storageListeners.splice(at, 1);
       },
     },
-  };
+  });
+
+  const storageArea = makeArea(storage);
+  const sessionArea = makeArea(sessionStorage);
 
   model.sendRuntimeMessage = (msg) => runtimeMessages.send(msg);
 
@@ -497,7 +503,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
     debugger: withFallback(debuggerApi, "chrome.debugger"),
     action: withFallback(action, "chrome.action"),
     storage: withFallback({
-      local: storageArea, session: storageArea, onChanged: storageArea.onChanged,
+      local: storageArea, session: sessionArea, onChanged: storageArea.onChanged,
     }, "chrome.storage"),
   };
   if (withTabGroups) modeled.tabGroups = withFallback(tabGroups, "chrome.tabGroups");
@@ -519,7 +525,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, manifest
  * @param options.realWebSocket 注入 Node 的全局 WebSocket，让它真的去连本地 BridgeServer
  * @param options.backgroundPath 换一份扩展代码来跑（评审外部补丁 / 合并预览用），默认仓库的 extension/background.js
  */
-export async function bootBackground({ model, withTabGroups = true, storage = {}, realWebSocket = false, backgroundPath, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
+export async function bootBackground({ model, withTabGroups = true, storage = {}, sessionStorage, realWebSocket = false, backgroundPath, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
   const code = backgroundPath
     ? await readFile(new URL(backgroundPath, import.meta.url), "utf8")
     : (bgCode ??= await readFile(BG_PATH, "utf8"));
@@ -535,7 +541,10 @@ export async function bootBackground({ model, withTabGroups = true, storage = {}
     fetch: () => Promise.resolve({}),
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
-    chrome: makeChrome(browser, { withTabGroups, storage, manifest: realManifest }),
+    chrome: makeChrome(browser, {
+      withTabGroups, storage, manifest: realManifest,
+      ...(sessionStorage === undefined ? {} : { sessionStorage }),
+    }),
   };
   if (realWebSocket) sandbox.WebSocket = globalThis.WebSocket;
   sandbox.globalThis = sandbox.self = sandbox;

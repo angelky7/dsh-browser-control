@@ -1,5 +1,37 @@
 # 更新日志
 
+## Unreleased
+
+**这一版改了 `extension/`（新增接管浮层 `hold`）与 `src/`＋`lib/`（新工具、写操作分类、只读档登记），扩展与插件都要更新。**
+
+- **新增接管浮层（`browser_hold` / 扩展命令 `hold`）。** 给某个标签页加一层可撤销的提示层：页面变暗、
+  中间一张卡片写明模型在做什么，用户双击任意处（或连按两下 Esc、按住 Esc ≈0.6 秒）就能关掉。
+  定位是**告知 + 防误触的软层**，不是安全边界 —— 桥的 token 模型读得到也改得动，真正能冻住浏览器的
+  是 v1.0.18 的弹窗硬锁。
+  - 卡片标题由扩展写死，调用方只能提供正文（`note`，压平换行、截到 400 字符），模型伪造不了系统口吻的提示。
+  - 状态放 `chrome.storage.session`、按 `tabId` 记：活过 service worker 回收，不落盘，浏览器关掉即清。
+    页面里另留一份只读的 `__dshHold` 供状态查询，不参与决策。
+  - 卡片上的「中止模型操作」两段确认；中止后 `click` / `input` / `press` / `nav` 在 `runCommand` 入口
+    被拒（零 CDP 派发），模型要恢复得先与用户确认再调 `browser_hold action=off`。
+  - 页面导航会把浮层带走：此时命令放行、存储里那条顺手清掉、`status` 如实报 `active:false`。
+  - 盖不住时**如实回报**：`covered:false` + `reason`（错误页 / 浏览器内部页 / 注入失败），不再只在文档里
+    认怂。已知盖不住：严格 CSP、全屏、跨源 iframe、PDF 阅读器、原生弹窗。
+  - 观察面不被污染：`content`（含 html 模式）/ `find` / `snapshot` 三条读取路径都排除带 `data-dsh-hold`
+    的子树，防止模型把自己那句提示当成页面内容。
+- **`hold` 进写操作分类表**（`src/errors.ts` 的 `WRITE_COMMANDS`）：超时/在途掉线报 `unknown`，
+  不许说「没动到页面，重试安全」；中止态的前缀 `browser-hold-aborted:` 由 `classify()` 认成
+  `held_by_user` / `not_started`，与硬锁同一套线协议，`verify_errors` 对账两侧字面量。
+- **只读档显式登记 `hold`**（`src/policy.ts` 的 `PAGE_MUTATING_COMMANDS`）：它往页面里插宿主元素 =
+  改页面 DOM，拒因专门写清这一点，并说明浮层不是安全边界。闸门只看命令名，所以 `action=status` 同样被拒
+  （`docs/BEHAVIOR.md` 写明）。
+- **新增 `verify/verify_hold.mjs`（44 项）**：真 `background.js` + 假 `chrome.tabs/debugger/storage`，
+  断言标题不可伪造、正文压平限长、状态落 session 不落 local、**真·service worker 重启后仍记得「中止着」**、
+  四条写命令零动作派发、导航后自动解除、`hold off` 恢复、错误页 `covered:false`、观察面两向排除。
+  为此给 `verify/ext_harness.mjs` 加了独立的 `chrome.storage.session` 落点（`sessionStorage` 选项）。
+- **其余三张对账台各补一条**：`verify_surface`（README/README.en 工具表 + llms.txt 工具数 20→21）、
+  `verify_policy`（`hold` 的只读拒因与 `status` 一并被拒）、`verify_errors`（浮层中止前缀对账）、
+  `verify_render_contract`（`covered:false` 那条载荷必须进模型可见文本）。
+
 ## v1.0.18 (2026-10-20)
 
 **这一版改了 `extension/`（弹窗「锁定」+ 锁的拒绝形状），扩展必须重装**；插件侧 `lib/` 也重新构建过，两边都要更新。

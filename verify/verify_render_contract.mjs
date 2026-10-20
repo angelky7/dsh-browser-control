@@ -317,6 +317,10 @@ const GROUND_TRUTH = [
     { tabId: 3, base64: PDF_B64 }, ["PDF written to", ".pdf"]],
   ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
     { tabId: 3, width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7)" }, ["412", "915", "mobile=true", "UA="]],
+  // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
+  ["browser_hold", "hold", { action: "on", note: "改档中" },
+    { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
+    ["covered", "error-page", "\"active\":false"]],
 ];
 
 // 封闭 schema 的工具里，任何 null 都会打穿调用：宿主 checkValue 只对 undefined 放行
