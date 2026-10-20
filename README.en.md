@@ -184,6 +184,22 @@ The config file works on both; see [dsh-config/README.md](dsh-config/README.md).
 
 Visit `http://127.0.0.1:9777/` for connection status.
 
+### Read-only mode and a separate script switch
+
+In your profile overlay, on `browser-bridge`:
+
+```yaml
+config:
+  readOnly: true      # reads only: click/input/press/nav/scroll/tabs/emulate/… are refused
+  allowScript: false  # also turn off browser_evaluate (arbitrary JS in the page)
+```
+
+Refused commands are **never sent to the browser** (zero side effects), come back with
+`blocked_by_policy`, and say which field to change. `readOnly` alone does **not** remove arbitrary
+script execution — `browser_evaluate` can do everything the other tools can, which is why it is a
+separate switch. These two govern the tool surface the model drives; the HTTP face (token-gated) is
+your own channel and is unaffected.
+
 ### What agent tabs look like (automatic DSH group)
 
 Tabs the agent **opens** are collected into a blue `DSH` tab group, one per window, so at a glance you can tell which pages a machine is driving and sweep them away afterwards:

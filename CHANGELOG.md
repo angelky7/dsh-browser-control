@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**只改了 `extension/`（`background.js` / `popup.html` / `popup.js`）与文档，插件侧 `lib/` 不用重建。**
+**这一版同时改了 `extension/`（要重装扩展）与 `src/`＋`lib/`（已重新构建并一起提交）。**
 
 - **新增本地硬锁（panic switch）：扩展弹窗里一个「锁定」按钮，单击即冻结模型的全部浏览器操作。**
   动机是个结构性缺口，不是新功能：桥的唯一实际边界是回环 + token，而 token 明写在 profile 的
@@ -15,7 +15,7 @@
   - 锁只能从弹窗解：`lockSet` 不在 `COMMANDS` 表里，桥侧塞同名命令帧只会被当普通命令拦下；
     畸形消息 fail-closed（只有显式 `locked: false` 才解锁）。
   - 状态落 `chrome.storage.local.hardLock`：MV3 会回收 service worker，内存标志丢了就等于没上锁，
-    所以这里用落盘 + 每次唤醒重读（同一类坑见 v1.0.16 的 `bi-042`：顶层读取早于声明，锁会静默失效）。
+    所以这里用落盘 + 每次唤醒重读。
   - 协议不动：`PROTOCOL_VERSION` 仍是 1。
 - **新增 `verify/verify_hard_lock.mjs`（26 项）与假 Chrome 台子的两处补强。** 断言：默认不锁、
   `COMMANDS` 全部 26 条逐条被拦且零 CDP 派发、拒绝文案三要素、桥侧塞 `lockSet` 命令帧解不开、
@@ -24,7 +24,28 @@
   为此把 `verify/ext_harness.mjs` 的假 `chrome.storage.local` 改成**真落盘并广播 `onChanged`**
   （以前 `set` 是空实现，"活过重启"根本无法测），并把 `chrome.action` 的徽标调用记录下来、
   加了 `chrome.runtime.onMessage` 的派发器（`model.sendRuntimeMessage`）。
-- `npm run verify` 385 → **411 项，exit 0**（改动前同一套台子 385 项 exit 0 作为基线）。
+- **新增两个本机策略闸门：`readOnly`（只读档）与 `allowScript`（是否允许执行任意页面脚本）。**
+  动机：默认配置对模型是「什么都能做」，而用户想要「只能看、不能点」时没有开关；更麻烦的是，
+  单靠「只让读工具可用」并不够——`browser_evaluate` 能在页面里跑任意 JS，等于把点击、输入、
+  改页面全都绕过去，所以它必须是独立的一项。
+  - 闸门只有一个位置：`BridgeController.execute()`，在命令**发给扩展之前**。被拒的命令零副作用，
+    错误码新增 `blocked_by_policy`（`effectState=not_started`），文案写明改哪个字段、并劝退原地重试。
+  - 只读白名单是「读页面 + 读扩展缓冲」的 11 条，其余**默认拒绝**：扩展以后新增命令不会自动放行。
+  - 默认值保持老行为（`readOnly: false`、`allowScript: true`）；两项都进 `Config` schema，宿主 0.1.7+
+    的设置页会自动列出。
+  - 与 `WRITE_COMMANDS`（`effectState` 用的写/读分类）**是两张故意不同的表**：那张判「重试会不会多造成
+    一次副作用」，所以 `tabs.group` / `tabs.ungroup` 算只读；这张判「会不会改变页面或浏览器状态」，
+    所以它们不算只读。理由写在 `src/policy.ts` 顶部，避免以后被「顺手合并」。
+- **新增 `verify/verify_policy.mjs`（29 项）**：用假 cordis 上下文跑真 `apply()`，7 个写工具在只读档下
+  全部 `blocked_by_policy`、4 个读工具照常走到链路（报 `extension_offline`，正是「闸门放行」的证据），
+  单独关脚本只拦 `browser_evaluate`、两个都限制时拒因取更具体的那个，另有扩展 `COMMANDS` **26 条逐条对账**
+  （每条要么在白名单、要么被拒；白名单不许留下改名后的幽灵条目）。
+- 两个台子合并进来后 `npm run verify` 385 → **440 项，exit 0**（硬锁 26 + 策略 29）；`lib/` 由本版重新构建，
+  与 `src/` 一致（重建后 `git diff` 为空）。
+- 合并后我自己复审抓到三处，另见下面三条 fix：**`browser_cleanup` 完全绕过了只读档**（它走
+  `controller.cleanup()` 不经过 `execute()`，只读档下仍能删文件）、**`cleanup` 从没进过写/读分类表**
+  （半路删除失败时报的是没有 code 的裸错误）、**硬锁的两个 fail-open 口子**（读 storage 失败就当没锁、
+  service worker 重启后第一条命令之前徽标还是绿色 ON）。
 
 ## v1.0.17 (2026-10-12)
 

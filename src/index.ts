@@ -26,7 +26,12 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-invariants'
 import type {} from '@deepseek-ai/dsh-settings'
 import { BridgeServer, cleanupArtifacts } from './server.ts'
-import { classify } from './errors.ts'
+import { BridgeError, classify } from './errors.ts'
+import { policyRefusal } from './policy.ts'
+
+// Re-exported so the policy tables stay testable from the published bundle
+// (verify/verify_policy.mjs reconciles them against the extension's COMMANDS).
+export { READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts'
 
 /**
  * Tool results are plain JSON. Declared locally rather than imported: dsh-tools
@@ -70,6 +75,21 @@ export interface Config {
 	 * Directory screenshots are written to and `cleanup` clears. Relative paths
 	 * resolve against the process working directory at resolve time.
 	 */	shotsDir?: string
+	/**
+	 * Read-only mode: refuse every command that would change the page or the
+	 * browser (click / input / press / nav / scroll / tabs.* / emulate / dialog /
+	 * network.clear …) while reads keep working. Off by default. Takes effect
+	 * live — the gate reads the current settings on every call.
+	 */
+	readOnly?: boolean
+	/**
+	 * Allow running arbitrary page scripts (`browser_evaluate`). On by default,
+	 * because that tool is the escape hatch when no dedicated command fits. Set
+	 * false to keep clicks and reads while forbidding arbitrary JS in the page:
+	 * `browser_evaluate` can do everything the other tools can, so "read-only"
+	 * alone does not take arbitrary code off the table.
+	 */
+	allowScript?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -77,6 +97,8 @@ export const Config: z<Config> = z.object({
 	port: z.number().step(1).min(1024).max(65_535).default(9777),
 	token: z.string().default('dsh-local'),
 	shotsDir: z.string().default('dsh-browser-shots'),
+	readOnly: z.boolean().default(false),
+	allowScript: z.boolean().default(true),
 })
 
 interface ResolvedConfig {
@@ -84,6 +106,8 @@ interface ResolvedConfig {
 	port: number
 	token: string
 	shotsDir: string
+	readOnly: boolean
+	allowScript: boolean
 }
 
 const SNAPSHOT_REF_SELECTOR_PATTERN = /^e\d+$/
@@ -168,6 +192,14 @@ class BridgeController {
 	 * @returns the extension's result payload verbatim.
 	 */
 	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number): Promise<unknown> {
+		// The policy gate sits above the link, not inside it: a refused command must
+		// never reach the extension, so it cannot leave a side effect behind. Reading
+		// `current` on every call is what makes a settings edit take effect live.
+		const refusal = policyRefusal(command, {
+			readOnly: this.current?.readOnly === true,
+			allowScript: this.current?.allowScript !== false,
+		})
+		if (refusal !== undefined) throw new BridgeError(command, 'blocked_by_policy', 'not_started', refusal)
 		const server = this.server
 		if (server === undefined) {
 			throw classify(command, new Error(
