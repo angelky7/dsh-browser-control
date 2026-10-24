@@ -1,6 +1,6 @@
 // 校验仓库所有 Markdown / txt 里的 release 下载链接，对照 GitHub Releases 资产清单。
 // Node 的 fetch 不走代理，所以资产清单先自己抓一份再喂进来：
-//   curl -s https://api.github.com/repos/caob23/dsh-browser-control/releases?per_page=100 -o releases.json
+//   curl -s https://api.github.com/repos/angelky7/dsh-browser-control/releases?per_page=100 -o releases.json
 //   node verify/verify_release_links.mjs releases.json
 import { readFile, readdir } from "node:fs/promises";
 

@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/caob23/dsh-browser-control/releases"><img src="https://img.shields.io/github/v/release/caob23/dsh-browser-control" alt="release"></a>
-  <a href="https://github.com/caob23/dsh-browser-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/caob23/dsh-browser-control" alt="license"></a>
+  <a href="https://github.com/angelky7/dsh-browser-control/releases"><img src="https://img.shields.io/github/v/release/angelky7/dsh-browser-control" alt="release"></a>
+  <a href="https://github.com/angelky7/dsh-browser-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/angelky7/dsh-browser-control" alt="license"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
   <a href="https://developer.chrome.com/docs/extensions/develop/migrate/mv2-deprecation-timeline"><img src="https://img.shields.io/badge/Chrome-MV3-yellow" alt="chrome mv3"></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-Plugin-purple" alt="dsh plugin"></a>
@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.0.19.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.19/DSH-Browser-Control-v1.0.19.zip) | Chrome 扩展（解压后加载；标准 zip 头，资源管理器可直接展开） |
-| [dsh-browser-control-plugin-v1.0.19.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.19/dsh-browser-control-plugin-v1.0.19.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.0.19.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.19/DSH-Browser-Control-v1.0.19.zip) | Chrome 扩展（解压后加载；标准 zip 头，资源管理器可直接展开） |
+| [dsh-browser-control-plugin-v1.0.19.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.19/dsh-browser-control-plugin-v1.0.19.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -96,7 +96,7 @@ npm install @caob23/dsh-browser-control
 >
 > 1. 这一次显式走官方源：`dsh plugin --profile web add @caob23/dsh-browser-control@<版本> --registry=https://registry.npmjs.org/`
 > 2. 用 Release 里的离线包 `dsh-browser-control-plugin-v<版本>.zip`，解压后 `dsh plugin --profile web add file:<解压目录>`
-> 3. 等镜像同步后重试原命令：`curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control`，看到该版本、且 `dist-tags.latest` 也跟上即可
+> 3. 等镜像同步后重试原命令：`curl -s https://registry.npmmirror.com/@angelky7%2Fdsh-browser-control`，看到该版本、且 `dist-tags.latest` 也跟上即可
 >
 > **另一种装不上长得像、原因完全不同，别改 registry。** dsh 的 profile 自带 24 小时「包龄」供应链闸门（`node_modules/.pnpm-workspace-state-v1.json` 里的 `minimumReleaseAge: 1440`）。发布未满 24 小时的版本被它拦下时报的是 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`，而且报文里会直接写 `was published at …, within the minimumReleaseAge cutoff (…)`——版本是**存在**的，只是太新。这种只有等满 cutoff 时刻这一条路（改 registry、离线包都不必）。两个码的判据：`NO_MATCHING_VERSION` = 你配置的源里没有这个版本；`NO_MATURE_MATCHING_VERSION` = 有，但没满 24 小时。
 
@@ -104,7 +104,7 @@ npm install @caob23/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.19"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.0.19"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -129,7 +129,7 @@ dsh plugin --profile web remove @caob23/dsh-browser-control
 ### 方式 C：复制进 harness 源码树（旧方式，v1.0.2 及以前）
 
 ```bash
-git clone https://github.com/caob23/dsh-browser-control.git
+git clone https://github.com/angelky7/dsh-browser-control.git
 cd dsh-browser-control
 git checkout v1.0.2   # 旧布局在 v1.0.2 tag
 ./install.sh /你的路径/deepseek-harness
@@ -137,7 +137,7 @@ git checkout v1.0.2   # 旧布局在 v1.0.2 tag
 
 脚本只负责把插件文件复制到位，**完成后仍需手动改三处配置**，改完重启 dsh 才会生效：
 
-下载 [`dsh-browser-bridge-plugin-v1.0.2.zip`](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.2/dsh-browser-bridge-plugin-v1.0.2.zip)，解压到 deepseek-harness 的 `packages/web/browser-bridge/`。
+下载 [`dsh-browser-bridge-plugin-v1.0.2.zip`](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.2/dsh-browser-bridge-plugin-v1.0.2.zip)，解压到 deepseek-harness 的 `packages/web/browser-bridge/`。
 
 然后补充三处配置：
 
@@ -306,6 +306,6 @@ Chrome 浏览器
 
 - **个人 / 学术 / 非商业用途**：完全免费，在遵守 AGPL-3.0 的前提下自由使用、修改、分发
 - **企业 / 商业用途**：AGPL-3.0 要求通过网络使用本软件也构成"分发"，必须公开衍生代码。若企业在闭源产品中嵌入、基于本项目构建 SaaS 服务而不愿开源，需要联系作者获取**商业许可**（另行协商授权条款）
-- **商业许可咨询**：[GitHub Issues](https://github.com/caob23/dsh-browser-control/issues) 或邮箱 **caob2333@outlook.com**
+- **商业许可咨询**：[GitHub Issues](https://github.com/angelky7/dsh-browser-control/issues) 或邮箱 **caob2333@outlook.com**
 
 完整许可证文本见 [LICENSE](LICENSE) 文件（AGPL-3.0）。

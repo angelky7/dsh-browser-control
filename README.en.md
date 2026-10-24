@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/caob23/dsh-browser-control/releases"><img src="https://img.shields.io/github/v/release/caob23/dsh-browser-control" alt="release"></a>
-  <a href="https://github.com/caob23/dsh-browser-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/caob23/dsh-browser-control" alt="license"></a>
+  <a href="https://github.com/angelky7/dsh-browser-control/releases"><img src="https://img.shields.io/github/v/release/angelky7/dsh-browser-control" alt="release"></a>
+  <a href="https://github.com/angelky7/dsh-browser-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/angelky7/dsh-browser-control" alt="license"></a>
   <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
   <a href="https://developer.chrome.com/docs/extensions/develop/migrate/mv2-deprecation-timeline"><img src="https://img.shields.io/badge/Chrome-MV3-yellow" alt="chrome mv3"></a>
   <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-Plugin-purple" alt="dsh plugin"></a>
@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.0.19.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.19/DSH-Browser-Control-v1.0.19.zip) | Chrome extension (unzip and load; standard zip header, Explorer can expand it directly) |
-| [dsh-browser-control-plugin-v1.0.19.zip](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.19/dsh-browser-control-plugin-v1.0.19.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.0.19.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.19/DSH-Browser-Control-v1.0.19.zip) | Chrome extension (unzip and load; standard zip header, Explorer can expand it directly) |
+| [dsh-browser-control-plugin-v1.0.19.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.19/dsh-browser-control-plugin-v1.0.19.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -96,7 +96,7 @@ npm install @caob23/dsh-browser-control
 >
 > 1. Use the official registry for this install: `dsh plugin --profile web add @caob23/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
 > 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then `dsh plugin --profile web add file:<the unzipped directory>`
-> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
+> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@angelky7%2Fdsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
 >
 > **A second failure looks similar but has the opposite cause — do not touch your registry for it.** dsh profiles ship a 24-hour package-age supply-chain gate (`minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)` — the version **does** exist, it is just too new. Waiting past the cutoff is the only fix. Discriminator: `NO_MATCHING_VERSION` = your registry does not have that version; `NO_MATURE_MATCHING_VERSION` = it has it, but the version is younger than 24h.
 
@@ -104,7 +104,7 @@ npm install @caob23/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:caob23/dsh-browser-control#v1.0.19"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.0.19"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -130,7 +130,7 @@ After installing and restarting, the bridge is on by default (v1.0.6+); no manua
 ### Option C: copy into the harness tree (legacy, v1.0.2 and earlier)
 
 ```bash
-git clone https://github.com/caob23/dsh-browser-control.git
+git clone https://github.com/angelky7/dsh-browser-control.git
 cd dsh-browser-control
 git checkout v1.0.2   # legacy layout lives at the v1.0.2 tag
 ./install.sh /path/to/deepseek-harness
@@ -138,7 +138,7 @@ git checkout v1.0.2   # legacy layout lives at the v1.0.2 tag
 
 The script only copies plugin files into place — **you still need the three manual config edits**, then restart dsh:
 
-Download [`dsh-browser-bridge-plugin-v1.0.2.zip`](https://github.com/caob23/dsh-browser-control/releases/download/v1.0.2/dsh-browser-bridge-plugin-v1.0.2.zip) and unzip into `deepseek-harness/packages/web/browser-bridge/`.
+Download [`dsh-browser-bridge-plugin-v1.0.2.zip`](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.2/dsh-browser-bridge-plugin-v1.0.2.zip) and unzip into `deepseek-harness/packages/web/browser-bridge/`.
 
 Then add three pieces of config:
 
@@ -312,6 +312,6 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 
 - **Personal / academic / non-commercial use**: completely free — use, modify, and distribute freely under AGPL-3.0 terms
 - **Enterprise / commercial use**: AGPL-3.0 treats networked use as distribution, requiring derivative code to be published. If you want to embed this project in closed-source products or build a SaaS on it without open-sourcing, contact the author for a **commercial license** (terms negotiated separately)
-- **Commercial licensing inquiries**: [GitHub Issues](https://github.com/caob23/dsh-browser-control/issues) or email **caob2333@outlook.com**
+- **Commercial licensing inquiries**: [GitHub Issues](https://github.com/angelky7/dsh-browser-control/issues) or email **caob2333@outlook.com**
 
 See the [LICENSE](LICENSE) file for the full license text (AGPL-3.0).
