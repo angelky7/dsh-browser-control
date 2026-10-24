@@ -61,6 +61,6 @@ Build it with Python `zipfile` or `tar`, and make sure the artifact **starts wit
 
 ## Reporting issues
 
-Include: dsh version, Chrome/Edge version, the status page output (`http://127.0.0.1:9777/`), `netstat -ano | findstr :9777`, and the installed package version (`npm ls @caob23/dsh-browser-control`).
+Include: dsh version, Chrome/Edge version, the status page output (`http://127.0.0.1:9777/`), `netstat -ano | findstr :9777`, and the installed package version (`npm ls dsh-browser-control`).
 
 More notes and recorded findings: [verify/README.md](verify/README.md).

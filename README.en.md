@@ -83,20 +83,20 @@ Prerequisite: `dsh plugin` forwards to pnpm, so pnpm must be on PATH; the target
 
 ```bash
 # Install from the npm registry and register it with the profile
-dsh plugin --profile web add @caob23/dsh-browser-control
+dsh plugin --profile web add dsh-real-browser
 ```
 
 If you manage the profile's node_modules yourself, plain npm works there too:
 
 ```bash
-npm install @caob23/dsh-browser-control
+npm install dsh-real-browser
 ```
 
 > **A version published minutes ago may not install yet, and that is not a broken package.** `dsh plugin add` pins the dependency to an **exact version**, while pnpm resolves it from **your configured registry** — for many users that is `registry.npmmirror.com`, which syncs from the official registry with a delay (measured: the official registry had 1.0.10 published while the mirror's `latest` still said 1.0.8). If you hit `ERR_PNPM_NO_MATCHING_VERSION ... while fetching it from https://registry.npmmirror.com/`, pick one:
 >
-> 1. Use the official registry for this install: `dsh plugin --profile web add @caob23/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
+> 1. Use the official registry for this install: `dsh plugin --profile web add dsh-real-browser@<version> --registry=https://registry.npmjs.org/`
 > 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then `dsh plugin --profile web add file:<the unzipped directory>`
-> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
+> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/dsh-real-browser` — once the version appears there and `dist-tags.latest` moved, the plain command works
 >
 > **A second failure looks similar but has the opposite cause — do not touch your registry for it.** dsh profiles ship a 24-hour package-age supply-chain gate (`minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)` — the version **does** exist, it is just too new. Waiting past the cutoff is the only fix. Discriminator: `NO_MATCHING_VERSION` = your registry does not have that version; `NO_MATURE_MATCHING_VERSION` = it has it, but the version is younger than 24h.
 
@@ -113,7 +113,7 @@ dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
 Restart DSH to load it. Uninstall:
 
 ```bash
-dsh plugin --profile web remove @caob23/dsh-browser-control
+dsh plugin --profile web remove dsh-real-browser
 ```
 
 > ⚠️ Always use the `file:` prefix for local directories. Bare / relative paths

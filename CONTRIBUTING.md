@@ -63,7 +63,7 @@ node verify/verify_release_links.mjs /tmp/releases.json
 
 ## 报告问题
 
-提 Issue 时请附上：dsh 版本、Chrome/Edge 版本、桥接状态页（`http://127.0.0.1:9777/`）的输出、`netstat -ano | findstr :9777` 的结果，以及 npm 包的版本号（`npm ls @caob23/dsh-browser-control`）。
+提 Issue 时请附上：dsh 版本、Chrome/Edge 版本、桥接状态页（`http://127.0.0.1:9777/`）的输出、`netstat -ano | findstr :9777` 的结果，以及 npm 包的版本号（`npm ls dsh-browser-control`）。
 
 更多实测台的坑与结论记录见 [verify/README.md](verify/README.md)。
 

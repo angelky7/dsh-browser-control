@@ -12,7 +12,7 @@
 ```yaml
 - insert:
     - id: browser-bridge
-      name: '@caob23/dsh-browser-control'
+      name: 'dsh-real-browser'
       config:
         enabled: true
         port: 9777
@@ -22,7 +22,7 @@
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `id` | `browser-bridge` | 插件实例 ID，勿改 |
-| `name` | `@caob23/dsh-browser-control` | npm 包名，即 Loader 的解析目标 |
+| `name` | `dsh-real-browser` | npm 包名，即 Loader 的解析目标 |
 | `config.enabled` | `true` | 默认开启，装好即监听（v1.0.6+）。这里写 `false` 会覆盖 schema 默认值，导致 9777 无监听（issue #4）；想关掉请用下面「覆盖默认值」里的 `merge` 写法 |
 | `config.port` | `9777` | 本地桥接服务端口（127.0.0.1，仅监听回环） |
 | `config.token` | `dsh-local` | 扩展与桥接的握手令牌；多用户环境建议改掉 |
@@ -35,7 +35,7 @@
 
 ```yaml
 - id: browser-bridge
-  name: '@caob23/dsh-browser-control'
+  name: 'dsh-real-browser'
   config:
     enabled: false
     port: 8888
@@ -49,7 +49,7 @@
 
 ```yaml
 - id: browser-bridge
-  name: '@caob23/dsh-browser-control'
+  name: 'dsh-real-browser'
   config:
     readOnly: true      # 只读档：只允许读页面/读日志
     allowScript: false  # 顺便把 browser_evaluate 关掉
