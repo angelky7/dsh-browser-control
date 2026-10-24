@@ -96,7 +96,7 @@ npm install @caob23/dsh-browser-control
 >
 > 1. 这一次显式走官方源：`dsh plugin --profile web add @caob23/dsh-browser-control@<版本> --registry=https://registry.npmjs.org/`
 > 2. 用 Release 里的离线包 `dsh-browser-control-plugin-v<版本>.zip`，解压后 `dsh plugin --profile web add file:<解压目录>`
-> 3. 等镜像同步后重试原命令：`curl -s https://registry.npmmirror.com/@angelky7%2Fdsh-browser-control`，看到该版本、且 `dist-tags.latest` 也跟上即可
+> 3. 等镜像同步后重试原命令：`curl -s https://registry.npmmirror.com/@caob23%2Fdsh-browser-control`，看到该版本、且 `dist-tags.latest` 也跟上即可
 >
 > **另一种装不上长得像、原因完全不同，别改 registry。** dsh 的 profile 自带 24 小时「包龄」供应链闸门（`node_modules/.pnpm-workspace-state-v1.json` 里的 `minimumReleaseAge: 1440`）。发布未满 24 小时的版本被它拦下时报的是 `ERR_PNPM_NO_MATURE_MATCHING_VERSION`，而且报文里会直接写 `was published at …, within the minimumReleaseAge cutoff (…)`——版本是**存在**的，只是太新。这种只有等满 cutoff 时刻这一条路（改 registry、离线包都不必）。两个码的判据：`NO_MATCHING_VERSION` = 你配置的源里没有这个版本；`NO_MATURE_MATCHING_VERSION` = 有，但没满 24 小时。
 
