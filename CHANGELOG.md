@@ -1,13 +1,14 @@
 # 更新日志
 
-## v1.1.0 (2026-10-24) — npm 包名去掉旧账号 scope
+## v1.1.0 (2026-10-24) — npm 包名改用新账号 scope
 
-**破坏性变更：包名 `@caob23/dsh-browser-control` → `dsh-real-browser`。** GitHub 账号已由 `caob23` 改名为 `angelky7`，旧 scope 不再使用。
+**破坏性变更：包名 `@caob23/dsh-browser-control` → `@angelky7/dsh-browser-control`。** GitHub 账号已由 `caob23` 改名为 `angelky7`，npm 上的用户名无法修改，因此新建同名组织 `angelky7` 承接 scope。
 
-- 新包名与姊妹插件 `dsh-origin-bridge` 保持一致：`dsh plugin --profile web add dsh-real-browser`
+- 安装命令：`dsh plugin --profile web add @angelky7/dsh-browser-control`
+- 中间试过去掉 scope 的 `dsh-browser-control`、`dsh-browser-bridge` 等名字，均已被他人占用，最终回到带 scope 的方案
 - 旧包 `@caob23/dsh-browser-control` 在 npm 上保留但已 deprecate，安装时会给出去向提示
 - 老用户升级：`dsh plugin --profile web remove @caob23/dsh-browser-control`，再装新包
-- `cordis.patch.yml` 的 `name` 同步改为 `dsh-real-browser`；profile 覆盖层里手写过 `name: '@caob23/dsh-browser-control'` 的配置需一并更新（宿主合并按 `id` 认，只写 `id` 的不受影响）
+- `cordis.patch.yml` 的 `name` 同步改为 `@angelky7/dsh-browser-control`；profile 覆盖层里手写过 `name: '@caob23/dsh-browser-control'` 的配置需一并更新（宿主合并按 `id` 认，只写 `id` 的不受影响）
 - 仓库、徽章、Release 链接与文档里的 GitHub 地址同步改为 `github.com/angelky7/...`
 
 ## v1.0.19 (2026-10-20)
@@ -256,7 +257,7 @@
 
 - 修复 #8：settings 接线改为特性探测。`sctx.settings.register` 只存在于 dsh-settings 0.1.2-rc.1 及更早（实测 `0.1.2-rc.1` 的 `lib/index.js:281` 有 `register`，`0.1.7-rc.2` 与 `0.2.0-rc.2` 只导出 `SettingsForms`，方法为 `configure/describe/update/replace/mutate`）。原代码在注入回调里直接调用它，新宿主上抛 `TypeError`，回调后半段的 `controller.reconcile()` 与 `scope.watch()` 一起被跳过。现在：没有 `register` 就走 profile 配置并把设置页交给宿主的自动投影（`configure({auto:true})`），`register` 抛错也有兜底，两条路径都保证桥接收敛。三种宿主形状实测（假 settings 服务）：legacy / register-throws / no-register 全部「回调不抛、9777 监听、16 个工具注册」，且 legacy 路径的实时开关回归仍成立（改 false 端口关闭、改回 true 重开）。
 - 兼容：`package.json` 的 peer/devDependencies 上界从 `<0.2.0-0` 放宽到 `<0.3.0-0`。dsh 的 `latest` 已经是 `0.2.0-rc.2`，旧上界会让新宿主装插件时 peer 解析不到；实测 `@deepseek-ai/dsh-tools@0.2.0-rc.2` 的导出面与 0.1.0-rc.8 完全一致（含 `defineTool`），放宽无运行时风险。
-- 修复（无人报告，自查发现）：`lib/` 构建产物落后于 `src/`。`0e0696c` 加完 v1.0.7 的 4 类新工具后没有重新打包，仓库里提交的 bundle 与 **npm 已发布的 `@caob23/dsh-real-browser@1.0.7` 都只注册 11 个 `browser_*` 工具**，而 README 工具表写的是 16 个——npm 安装的用户实际缺 `browser_console_log`、`browser_network_log`、`browser_network_clear`、`browser_pdf`、`browser_emulate`。已按 `src/` 重新构建，实测 `apply()` 注册满 16 个。
+- 修复（无人报告，自查发现）：`lib/` 构建产物落后于 `src/`。`0e0696c` 加完 v1.0.7 的 4 类新工具后没有重新打包，仓库里提交的 bundle 与 **npm 已发布的 `@caob23/dsh-browser-control@1.0.7` 都只注册 11 个 `browser_*` 工具**，而 README 工具表写的是 16 个——npm 安装的用户实际缺 `browser_console_log`、`browser_network_log`、`browser_network_clear`、`browser_pdf`、`browser_emulate`。已按 `src/` 重新构建，实测 `apply()` 注册满 16 个。
 - 修复 #2 收尾：README（中英）的扩展下载链接指向 release 上真实存在的 `DSH-Browser-Control-v1.0.7.zip`。原链接 `DSH-Browser-Control-1.0.7.zip` 已不存在（实测 404），用户只能拿到那份带 multipart 前缀的坏资产（头 4 字节 `2d2d2d2d`，`PK` 在第 162 字节），资源管理器因此拒绝展开。现链接的包实测：头 `504b0304`、全正斜杠条目、CRC 全过、sha256 `1836b20ea9b5d85291606fde2b3a809d87f88c60edd27922cc9c92e243694ad7`，内容与仓库 `extension/` 逐字节一致。
 - 修复 #4：`cordis.patch.yml` 里写死的 `enabled: false` 覆盖了 v1.0.6 的 schema 默认值 `true`，导致 `dsh plugin add` 装完后 9777 无人监听、扩展报 `ERR_CONNECTION_REFUSED`。包内 patch 改为 `enabled: true`，实测（`Config({enabled:false,…}) → false`、`Config({enabled:true,…}) → true`）确认显式值优先于默认值，即该字段就是根因。
 - 文档：`README.md` / `README.en.md` / `SECURITY.md` / `docs/en/SECURITY.en.md` / `dsh-config/README.md` 里「默认关闭、设置页手动开启」的旧口径统一为「默认开启」；关开关的正确写法改为 profile 覆盖层按 `id` 覆盖 config（原文的 `~/.dsh/settings.yml` 与 `- merge:` 均非实际生效路径）。

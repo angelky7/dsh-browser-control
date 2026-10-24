@@ -1,5 +1,5 @@
 {
-  "name": "dsh-real-browser",
+  "name": "@angelky7/dsh-browser-control",
   "description": "Local WebSocket bridge between dsh and the DSH Browser Control browser extension, with model-facing browser_* tools and a Settings-managed on/off switch",
   "version": "1.1.0",
   "type": "module",
