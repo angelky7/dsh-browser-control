@@ -1,6 +1,8 @@
 # 更新日志
 
-## Unreleased
+## v1.2.0 (2026-10-30)
+
+**这一版改了 `extension/`（新增 cookie 三条命令），扩展必须重装**；插件也要更新到 1.2.0。
 
 - **新增 `browser_cookies`（roadmap 1.1.0 第 3 条：读/设/删 cookie，零新权限）。** 扩展侧三条命令
   `cookies.get` / `cookies.set` / `cookies.remove`（拆三条而不是一条带 `action`，因为写/读分类与只读闸门

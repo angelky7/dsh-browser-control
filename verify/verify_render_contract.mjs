@@ -60,7 +60,7 @@ const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`);
 await new Promise((r) => {
   ws.onopen = () => {
     ws.send(JSON.stringify({
-      type: "hello", client: "fake-extension", version: "1.0.19", protocol: 1,
+      type: "hello", client: "fake-extension", version: "1.2.0", protocol: 1,
       browser: { name: "fake", version: "1", ua: "" },
     }));
     r();

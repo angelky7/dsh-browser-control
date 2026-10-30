@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.0.19.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.19/DSH-Browser-Control-v1.0.19.zip) | Chrome extension (unzip and load; standard zip header, Explorer can expand it directly). The extension itself has not changed since v1.0.19 — v1.1.0 is only a package-name migration, so keep using this build. |
-| [dsh-browser-control-plugin-v1.1.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.1.0/dsh-browser-control-plugin-v1.1.0.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.2.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.2.0/DSH-Browser-Control-v1.2.0.zip) | Chrome extension (unzip and load; this release adds the three cookie commands — reinstall required) |
+| [dsh-browser-control-plugin-v1.2.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.2.0/dsh-browser-control-plugin-v1.2.0.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -95,7 +95,7 @@ npm install @angelky7/dsh-browser-control
 > **A version published minutes ago may not install yet, and that is not a broken package.** `dsh plugin add` pins the dependency to an **exact version**, while pnpm resolves it from **your configured registry** — for many users that is `registry.npmmirror.com`, which syncs from the official registry with a delay (measured: the official registry had 1.0.10 published while the mirror's `latest` still said 1.0.8). If you hit `ERR_PNPM_NO_MATCHING_VERSION ... while fetching it from https://registry.npmmirror.com/`, pick one:
 >
 > 1. Use the official registry for this install: `dsh plugin --profile web add @angelky7/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
-> 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then point `dsh plugin --profile web add file:<…>` at **the layer that contains `package.json`** (the v1.1.0 zip wraps everything in an extra `dsh-browser-control/` folder — the extraction root itself will fail with "no package.json")
+> 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then point `dsh plugin --profile web add file:<…>` at **the layer that contains `package.json`** (some releases wrapped the entries in an extra folder — point at the layer that contains `package.json`)
 > 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@angelky7/dsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
 >
 > **A second failure looks similar but has the opposite cause — do not touch your registry for it.** dsh profiles ship a 24-hour package-age supply-chain gate (`minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)` — the version **does** exist, it is just too new. Waiting past the cutoff is the only fix. Discriminator: `NO_MATCHING_VERSION` = your registry does not have that version; `NO_MATURE_MATCHING_VERSION` = it has it, but the version is younger than 24h.
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.1.0"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.2.0"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
