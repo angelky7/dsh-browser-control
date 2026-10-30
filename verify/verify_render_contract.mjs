@@ -321,6 +321,12 @@ const GROUND_TRUTH = [
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
     ["covered", "error-page", "\"active\":false"]],
+  // cookie 的值就是这条工具的产出（复制登录态靠它）：名字与值都必须进模型可见文本，
+  // 不许只给个「N cookies」的计数——那是 render 只写摘要的那类老毛病。
+  ["browser_cookies", "cookies.get", { action: "get" },
+    { tabId: 3, url: "https://shop.test/", count: 1, total: 1,
+      cookies: [{ name: "sid", value: "s.3cr3t-value", domain: "shop.test", path: "/", expires: -1, size: 16, httpOnly: true, secure: true, sameSite: "Lax" }] },
+    ["\"sid\"", "s.3cr3t-value", "shop.test", "\"httpOnly\":true"]],
 ];
 
 // 封闭 schema 的工具里，任何 null 都会打穿调用：宿主 checkValue 只对 undefined 放行

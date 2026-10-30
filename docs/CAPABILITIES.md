@@ -32,7 +32,7 @@ BrowserSkill：alarms, activeTab, debugger, downloads, idle, notifications,
 | **语义快照** | `Accessibility.getFullAXTree` | 用 role + accessible name 定位元素（"提交按钮"），比 CSS 选择器稳得多，抗改版。BrowserSkill 的 VOM 语义树就是这条路 |
 | **跨域 iframe** | `Target.attachToTarget` + `flatten: true`、`Page.getFrameTree` | 直接解掉我们文档里写明的限制"cross-origin iframe: same-origin only"（`extension/background.js:714`） |
 | **请求拦截 / mock** | `Fetch.enable` + `Fetch.requestPaused` | 改包、挡掉第三方追踪、给页面喂假数据做测试。比 `Network.*` 强在能**改**而不只能看 |
-| **Cookie 读写** | `Network.getCookies` / `setCookies` / `deleteCookies` | 复制登录态、清理站点状态、跨标签共享会话。BrowserSkill 明确没有 |
+| **Cookie 读写** | `Network.getCookies` / `setCookies` / `deleteCookies` | ✅ **已落地**（`browser_cookies`，Unreleased）：复制登录态、清理站点状态、跨标签共享会话。BrowserSkill 明确没有 |
 | **性能指标** | `Performance.getMetrics`、`Tracing.start` | FCP/LCP/CLS、CPU profile——"这页为什么卡"这类问题能直接答 |
 | **拖拽** | `Input.dispatchDragEvent` | 我们和 BrowserSkill **都没有**；能自动化排序、文件拖放、画布操作 |
 | **实时画面流** | `Page.startScreencast` | 连续 JPEG 帧 → 侧栏缩略图 / 操作录像 / 失败时给 agent 看"当时屏幕上是什么" |

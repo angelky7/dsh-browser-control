@@ -25,6 +25,8 @@ export const READ_ONLY_ALLOWED: ReadonlySet<string> = new Set([
 	'content', 'find', 'snapshot', 'screenshot', 'pdf', 'wait',
 	// 读扩展采集到的缓冲
 	'tabs.list', 'console.log', 'network.log',
+	// 读浏览器自己的状态（cookie 是凭据，但 get 不改任何东西；set/remove 不在此列）
+	'cookies.get',
 ])
 
 /**

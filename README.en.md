@@ -255,6 +255,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
 | `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
 | `browser_hold` | Put or remove a cancellable take-over overlay on a tab (tells the user, stops mis-clicks); `covered:false` says why it could not cover the page. A soft layer, not a security boundary |
+| `browser_cookies` | Read/set/remove cookies visible to a tab (`action: get/set/remove`; get takes a `domain` filter, set/remove need a `url` or `domain` anchor, remove re-checks and reports `remaining`). **Cookie values are credentials** — a get puts them fully into the model-visible text; see SECURITY.md |
 | `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; see "What agent tabs look like") |
 | `browser_evaluate` | Run arbitrary JS |
 | `browser_screenshot` | Capture page screenshot |

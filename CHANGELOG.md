@@ -1,5 +1,23 @@
 # 更新日志
 
+## Unreleased
+
+- **新增 `browser_cookies`（roadmap 1.1.0 第 3 条：读/设/删 cookie，零新权限）。** 扩展侧三条命令
+  `cookies.get` / `cookies.set` / `cookies.remove`（拆三条而不是一条带 `action`，因为写/读分类与只读闸门
+  都按命令名判，对账台才盯得住），走 CDP `Network.*`。`get` 只回这一页可见域的 cookie、值**原样**进
+  模型可见文本（cookie 值 = 凭据，这条工具的定义就是「把凭据交给调用方」，SECURITY.md 已写明）；
+  `set` 需要 `url` 或 `domain` 锚点、`sameSite` 只收 Strict/Lax/None、浏览器拒绝（`success:false`）时
+  如实报错并给常见原因；`remove` 之后按同一片可见范围**复查**，`remaining` 如实报（CDP 的
+  deleteCookies 不回执删没删到，不复查就是装），复查失败报 `remainingChecked:false`。
+  - 分类按既定判据：`cookies.set` / `cookies.remove` 幂等（重设同一颗、重复删同一颗，结果不变）⇒
+    effectState 算只读；但它们**改浏览器状态** ⇒ 只读档拒。`cookies.get` 进只读白名单。
+  - 新台 `verify_cookies.mjs`（20 项）：假件按**真 CDP 响应形状**回（`Network.getCookies` 的 cookies
+    在顶层，不是 Runtime.evaluate 那种 `{result:{value}}` 信封），断言 CDP 参数逐字段透传、锚点缺失
+    零 CDP 派发、浏览器拒绝不假成功、同名多颗只删锚点匹配的那颗、复查失败不假报删干净。
+    `verify_render_contract` 铺到 22 条工具（cookie 的名字与值都必须出现在模型可见文本里），
+    `verify_policy` 补「get 放行 / set、remove 拒」的成对断言。`npm run verify` 548 → **575 项 exit 0**。
+  - 文档：README/README.en 工具表、llms.txt（信任边界加「cookie 值是凭据」）、BEHAVIOR.md 契约表、
+    SECURITY.md 中英各一条。
 ## v1.1.0 (2026-10-24) — npm 包名改用新账号 scope
 
 **破坏性变更：包名 `@caob23/dsh-browser-control` → `@angelky7/dsh-browser-control`。** GitHub 账号已由 `caob23` 改名为 `angelky7`，npm 上的用户名无法修改，因此新建同名组织 `angelky7` 承接 scope。

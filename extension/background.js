@@ -290,6 +290,121 @@ function hardLockRefusal(command) {
 		+ `解锁只能由用户在浏览器工具栏的扩展弹窗里点「已锁定」完成；在那之前请先与用户确认，不要重试。`;
 }
 
+/* ------------------------------------------------ cookies（roadmap 第 3 条） */
+
+/**
+ * Cookie 读/设/删（`cookies.get` / `cookies.set` / `cookies.remove`）：复制登录态、
+ * 清理站点状态、跨标签共享会话。走 CDP `Network.*`，不加任何新权限。
+ *
+ * cookie 的值就是凭据（session token 也在里面），所以 `get` 会把值**完整**放进
+ * 模型可见文本——这条工具的定义就是「把凭据交给调用方」，Security 须知里写明。
+ * 拆成三条命令而不是一条带 action：写/读分类与只读闸门都按命令名判，
+ * 三条各自有名字，对账台才盯得住（browser_hold 的教训）。
+ */
+
+/** CDP 回来的 cookie 归一成稳定形状；`expires: -1` 表示会话 cookie。 */
+function cookiesNormalize(c) {
+	return {
+		name: String(c.name ?? ''),
+		value: String(c.value ?? ''),
+		domain: String(c.domain ?? ''),
+		path: String(c.path ?? '/'),
+		expires: typeof c.expires === 'number' && Number.isFinite(c.expires) ? c.expires : -1,
+		size: Number(c.size ?? 0),
+		httpOnly: c.httpOnly === true,
+		secure: c.secure === true,
+		...(c.sameSite ? { sameSite: String(c.sameSite) } : {}),
+	};
+}
+
+/** set/remove 共用的锚点校验：Chrome 需要知道这颗 cookie 属于哪里。 */
+function cookiesAnchorOf(params) {
+	const url = typeof params.url === 'string' && params.url.length > 0 ? params.url : undefined;
+	const domain = typeof params.domain === 'string' && params.domain.length > 0 ? params.domain : undefined;
+	if (!url && !domain) {
+		throw new Error('cookie 需要锚点：传 url（Chrome 从它取 origin/secure 等）或 domain；两者都传时以 Chrome 的匹配规则为准。');
+	}
+	return { url, domain };
+}
+
+async function cmdCookiesGet(params) {
+	const tab = await resolveTab(params.tabId);
+	const domain = typeof params.domain === 'string' && params.domain.length > 0 ? params.domain.toLowerCase() : null;
+	return withCDP(tab.id, async (send) => {
+		await send('Network.enable').catch(() => {});
+		const res = await send('Network.getCookies', { urls: [tab.url] })
+			.catch((e) => { throw new Error(`Network.getCookies failed: ${e.message}`); });
+		const all = Array.isArray(res && res.cookies) ? res.cookies : [];
+		const cookies = (domain ? all.filter((c) => String(c.domain || '').toLowerCase().includes(domain)) : all)
+			.map(cookiesNormalize)
+			.sort((a, b) => a.name.localeCompare(b.name) || a.domain.localeCompare(b.domain));
+		return { tabId: tab.id, url: tab.url, count: cookies.length, total: all.length, cookies };
+	});
+}
+
+async function cmdCookiesSet(params) {
+	const tab = await resolveTab(params.tabId);
+	const name = typeof params.name === 'string' && params.name.length > 0 ? params.name : '';
+	if (!name) throw new Error('params.name is required');
+	if (params.value === undefined) throw new Error('params.value is required（清空请传空字符串，不是省略）');
+	const value = String(params.value);
+	const { url, domain } = cookiesAnchorOf(params);
+	const path = typeof params.path === 'string' && params.path.length > 0 ? params.path : undefined;
+	const sameSite = typeof params.sameSite === 'string' ? params.sameSite : undefined;
+	if (sameSite !== undefined && !['Strict', 'Lax', 'None'].includes(sameSite)) {
+		throw new Error(`invalid sameSite "${sameSite}". Use one of: Strict, Lax, None`);
+	}
+	const expiresNumber = Number(params.expires);
+	const expires = Number.isFinite(expiresNumber) && expiresNumber > 0 ? Math.floor(expiresNumber) : undefined;
+	return withCDP(tab.id, async (send) => {
+		await send('Network.enable').catch(() => {});
+		const res = await send('Network.setCookie', {
+			name, value,
+			...(url ? { url } : {}),
+			...(domain ? { domain } : {}),
+			...(path ? { path } : {}),
+			secure: params.secure === true,
+			httpOnly: params.httpOnly === true,
+			...(sameSite ? { sameSite } : {}),
+			...(expires !== undefined ? { expires } : {}),
+		}).catch((e) => { throw new Error(`Network.setCookie failed: ${e.message}`); });
+		if (!res || res.success !== true) {
+			throw new Error(`cookie "${name}" 被浏览器拒绝。常见原因：Secure cookie 配了非 https 的 url/domain；domain 与页面不同源；SameSite=None 但没开 secure。`);
+		}
+		return {
+			tabId: tab.id, set: true,
+			cookie: { name, path: path ?? '/', ...(domain ? { domain } : {}), ...(url ? { url } : {}), ...(expires !== undefined ? { expires } : {}) },
+		};
+	});
+}
+
+async function cmdCookiesRemove(params) {
+	const tab = await resolveTab(params.tabId);
+	const name = typeof params.name === 'string' && params.name.length > 0 ? params.name : '';
+	if (!name) throw new Error('params.name is required');
+	const { url, domain } = cookiesAnchorOf(params);
+	const path = typeof params.path === 'string' && params.path.length > 0 ? params.path : undefined;
+	return withCDP(tab.id, async (send) => {
+		await send('Network.enable').catch(() => {});
+		await send('Network.deleteCookies', {
+			name,
+			...(url ? { url } : {}),
+			...(domain ? { domain } : {}),
+			...(path ? { path } : {}),
+		}).catch((e) => { throw new Error(`Network.deleteCookies failed: ${e.message}`); });
+		// CDP 的 deleteCookies 不回执删没删到：按同一片可见范围复查一次，如实报 remaining。
+		const checkedUrl = url ?? tab.url;
+		const res = await send('Network.getCookies', { urls: [checkedUrl] }).catch(() => null);
+		const visible = res && Array.isArray(res.cookies) ? res.cookies : null;
+		const left = visible ? visible.filter((c) => c.name === name) : null;
+		return {
+			tabId: tab.id, removed: true, checkedUrl,
+			// visible===null = 复查失败，如实说「没查成」而不是假装删干净了
+			...(left ? { remaining: left.length, ...(left.length ? { left: left.map((c) => String(c.domain)) } : {}) } : { remainingChecked: false }),
+		};
+	});
+}
+
 /* --------------------------------------------------- 接管浮层（hold，软层） */
 
 /**
@@ -2052,6 +2167,7 @@ const COMMANDS = {
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
 	pdf: cmdPdf, emulate: cmdEmulate,
+	'cookies.get': cmdCookiesGet, 'cookies.set': cmdCookiesSet, 'cookies.remove': cmdCookiesRemove,
 	hold: cmdHold,
 };
 

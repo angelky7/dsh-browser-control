@@ -249,6 +249,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_find` | 按 CSS 选择器查元素，返回数量与位置尺寸（只读，v1.0.9+） |
 | `browser_dialog` | 读改原生弹窗应答策略 accept/dismiss/manual，并回最近弹窗记录（v1.0.9+） |
 | `browser_hold` | 在某个标签页上加/撤一层可取消的接管浮层（告知用户 + 防误触）；`covered:false` 时说明盖不住的原因。软层，不是安全边界 |
+| `browser_cookies` | 读/设/删某标签页可见的 cookie（`action: get/set/remove`；get 带 `domain` 过滤，set/remove 需要 `url` 或 `domain` 锚点，remove 复查并回报 `remaining`）。**cookie 的值是凭据**，get 会把值完整放进模型可见文本——见 SECURITY.md |
 | `browser_tabs` | 标签页管理（列表/新建/关闭/切换/归组/拆组；见「agent 开的标签长什么样」） |
 | `browser_evaluate` | 执行任意 JS |
 | `browser_screenshot` | 截取页面截图 |

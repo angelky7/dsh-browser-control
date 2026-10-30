@@ -100,6 +100,10 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
   const classifiedRead = new Set([
     'ping', 'browser.info', 'tabs.list', 'tabs.group', 'tabs.ungroup', // 分组是幂等的：重复归组是空操作
     'content', 'find', 'snapshot', 'screenshot', 'wait', 'console.log', 'network.log', 'network.clear', 'pdf',
+    // cookie 三条：set/remove 都是幂等的——重设同一颗、重复删同一颗，结果不变，
+    // 所以按本文件顶部的判据（「重试会不会造成额外损害」）算只读；改浏览器状态的那道
+    // 闸门在 policy.ts 的只读档里（set/remove 默认拒），两张表各管各的语义。
+    'cookies.get', 'cookies.set', 'cookies.remove',
   ]);
   const unclassified = commands.filter((c) => !isWriteCommand(c) && !classifiedRead.has(c));
   const wronglyMarked = commands.filter((c) => isWriteCommand(c) && classifiedRead.has(c));

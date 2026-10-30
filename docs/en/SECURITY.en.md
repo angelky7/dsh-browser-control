@@ -20,6 +20,7 @@ The extension requests these Chrome permissions:
 - **Upgrade origin checks** — the WebSocket handshake requires a loopback `Host` (blocking DNS rebinding) and refuses any web-page `Origin`; only the extension's own scheme and non-browser clients that send no Origin are accepted
 - **No cross-origin grant** — no HTTP response carries `Access-Control-Allow-Origin`; the status page and its own requests are same-origin
 - **Local-only communication** — extension and bridge talk over WebSocket on localhost
+- **`browser_cookies` hands cookie values to the model verbatim** — a get is defined as "give the credentials to the caller" (session reuse / login-state migration depends on it), so values land in the model-visible text and the conversation log; treat them like page passwords and do not point the tool at sites you do not control. `set` / `remove` require an anchor (url or domain) and are refused in read-only mode (`readOnly: true`)
 - **No data upload** — nothing is sent to any external server
 - **User control** — since v1.0.6 the plugin is on by default and binds only to 127.0.0.1; set `enabled: false` in your profile override layer to turn it off
 - **Visibility** — Chrome shows its "is being debugged" banner during control; every action is visible on screen

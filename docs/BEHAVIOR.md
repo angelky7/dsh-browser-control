@@ -119,6 +119,17 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 观察面 | 浮层是**注入物**，所以 `content`（含 html 模式）/ `find` / `snapshot`（DOM 与 **AX** 两种模式）都排除带 `data-dsh-hold` 的子树；AX 模式下它不占 ref、也不计入 `total`。`verify_hold` / `verify_snapshot_ax` 两向断言（浮层文字与「中止模型操作」按钮不出现在模型可见文本里 + 页面上同名 class 的正常元素不被误伤） |
 | 失败分类 | `hold` 算写操作：超时/在途掉线报 `unknown`（重试可能多留一层），不许报「没动到页面，重试安全」 |
 
+## Cookie（`browser_cookies`，凭据面）
+
+| 维度 | 行为 |
+|---|---|
+| 命令 | 三条：`cookies.get` / `cookies.set` / `cookies.remove`。拆三条而不是一条带 `action`，是因为写/读分类与只读闸门都按命令名判——三条各有名字，对账台才盯得住 |
+| get | `Network.getCookies(urls:[tab.url])`：只回这一页可见域的 cookie（`count === total`）；`domain` 参数做子串过滤、大小写不敏感。**值原样进模型可见文本**——这是工具的定义（复制登录态靠它），不是副作用；cookie 值 = 凭据，见 SECURITY.md |
+| set | 需要 `url` 或 `domain` 锚点（都缺直接报错，一次 CDP 都不发）；`sameSite` 只收 Strict/Lax/None；`expires` 是 Unix 秒、省略即会话 cookie。浏览器拒绝（`success:false`）时如实报错并给常见原因，不假装成功 |
+| remove | CDP 的 deleteCookies 不回执删没删到：按同一片可见范围复查一次，`remaining` 如实报（>0 时 `left` 列出还剩哪颗在哪个域）；复查失败报 `remainingChecked:false`，不假装删干净 |
+| effectState | set/remove 都是幂等的（重设同一颗、重复删同一颗，结果不变），按「重试会不会造成额外损害」的判据算只读；但它们**改浏览器状态**，只读档拒——两张表各管各的语义 |
+| 只读档 | `cookies.get` 放行；`set` / `remove` 默认拒（不在白名单里，拒因走通用文案） |
+
 ## 本地硬锁（扩展弹窗的「锁定」）
 
 用户在扩展弹窗里单击「锁定」后，本机进入冻结状态，契约如下：

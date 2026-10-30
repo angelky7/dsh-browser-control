@@ -140,6 +140,16 @@ const READ_TOOLS = [
   const holdOff = await call(tools, 'browser_hold', { action: 'off' })
   check('readOnly：hold off 仍被拒（它要改页面 DOM，和 on 同一类）',
     holdOff.ok === false && holdOff.code === 'blocked_by_policy', `${holdOff.code}`)
+  // cookie：get 是读（值是凭据但不改任何东西），set/remove 改浏览器状态 → 默认拒
+  const cookiesGet = await call(tools, 'browser_cookies', { action: 'get' })
+  check('readOnly：cookies.get 放行（读浏览器状态；值是凭据但读取本身无副作用）',
+    cookiesGet.ok === false && cookiesGet.code === 'extension_offline', `${cookiesGet.code}`)
+  const cookiesSet = await call(tools, 'browser_cookies', { action: 'set', name: 'sid', value: 'v' })
+  check('readOnly：cookies.set 被拒（改浏览器状态，默认拒）',
+    cookiesSet.ok === false && cookiesSet.code === 'blocked_by_policy', `${cookiesSet.code}`)
+  const cookiesRemove = await call(tools, 'browser_cookies', { action: 'remove', name: 'sid' })
+  check('readOnly：cookies.remove 被拒（同上）',
+    cookiesRemove.ok === false && cookiesRemove.code === 'blocked_by_policy', `${cookiesRemove.code}`)
   for (const [name, args] of READ_TOOLS) {
     const r = await call(tools, name, args)
     check(`readOnly：${name} 放行（走到链路，报 extension_offline 而不是被拦）`,
