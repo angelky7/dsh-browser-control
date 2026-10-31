@@ -29,6 +29,16 @@ import { BridgeServer, cleanupArtifacts } from './server.ts'
 import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
 
+/** Navigation wait ceiling (same as browser_wait); the bridge gets this plus BRIDGE_MARGIN_MS. */
+const NAV_MAX_MS = 120_000
+/**
+ * Extra time handed to the bridge on top of the navigation budget. Without it a
+ * caller-requested budget longer than the bridge default (60s) would be beaten by
+ * the bridge, and the model would get `command_timeout` (effect unknown) instead
+ * of a navigation timeout (nothing was touched) - two very different next steps.
+ */
+const BRIDGE_MARGIN_MS = 2_000
+
 // Re-exported so the policy tables stay testable from the published bundle
 // (verify/verify_policy.mjs reconciles them against the extension's COMMANDS).
 export { LOCAL_DESTRUCTIVE_COMMANDS, PAGE_MUTATING_COMMANDS, READ_ONLY_ALLOWED, SCRIPT_COMMANDS, policyRefusal } from './policy.ts'
@@ -461,6 +471,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		parameters: {
 			url: { type: 'string', required: true, description: 'Absolute URL to open in the tab.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
+			timeoutMs: { type: 'number', description: `How long to wait for the page load to settle: defaults to 15000, capped at ${NAV_MAX_MS}. Raise it for slow pages instead of retrying; drop it to 3000-5000 when you do not need the page to finish loading and will read/wait afterwards.` },
 		},
 		output: {
 			schema: {
@@ -499,7 +510,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { url: args.url }
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			const raw = await controller.execute('nav', params, exec.signal) as {
+			const budgetMs = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
+				? Math.min(NAV_MAX_MS, Math.max(100, Math.trunc(args.timeoutMs)))
+				: 15_000
+			params.timeoutMs = budgetMs
+			const raw = await controller.execute('nav', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as {
 				tabId: number
 				title?: string
 				url?: string
