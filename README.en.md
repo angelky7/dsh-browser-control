@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.2.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.2.0/DSH-Browser-Control-v1.2.0.zip) | Chrome extension (unzip and load; this release adds the three cookie commands — reinstall required) |
-| [dsh-browser-control-plugin-v1.2.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.2.0/dsh-browser-control-plugin-v1.2.0.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.3.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.3.0/DSH-Browser-Control-v1.3.0.zip) | Chrome extension (unzip and load; extension code is unchanged since 1.2.0 — no reinstall needed) |
+| [dsh-browser-control-plugin-v1.3.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.3.0/dsh-browser-control-plugin-v1.3.0.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.2.0"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.3.0"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
