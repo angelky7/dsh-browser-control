@@ -33,6 +33,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_http.mjs` | 起真实 `BridgeServer` + 假扩展 WebSocket 客户端：所有响应无 `Access-Control-Allow-*`；无 token / 错 token 的 `/api/command`、`/api/cleanup` 一律 401；带 token 仍能真正驱动扩展；`Host` 非回环与网页 `Origin` 的升级握手被 403，扩展来源与无 Origin 的 101 | #3、#6 |
 | `verify_bundle_http.mjs` | 同样的鉴权，但跑的是 **发布产物 `lib/index.js`**（npm 用户实际拿到的那份），并确认默认 token 会在日志告警、`/api/status` 报 `insecureToken` | #3、#6、#8 |
 | `verify_release_links.mjs` | README 里每个 `releases/download/...` 都对应一个真实存在的资产，防「文档指向 404 的包」复发（需先抓一份 releases JSON，脚本头部有命令） | #2 |
+| `verify_nav_timeout.mjs` | `browser_navigate` 的 `timeoutMs` 真的在参数表里、真的传到扩展（默认 15000、显式优先、上限 120000），且**桥的命令超时 = 导航预算 + 2s**：预算 300ms 时桥在 2303ms 处超时（而不是撑到默认 60s），文案里带的是 2300ms | 超时文案里那句「raise timeoutMs」过去是空头承诺（参数表里没有这个键） |
 
 两处已知副作用：`verify_http.mjs` 会带 token 调一次 `/api/cleanup`，因此会在仓库根的 `dsh-browser-shots/` 建目录并清空它（该目录已进 `.gitignore`）；`verify_plugin.mjs legacy` 会短时关开一次 9777。
 
