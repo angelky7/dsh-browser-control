@@ -62,18 +62,23 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
       /** 调用顺序记录，用来断言「先清了旧 ref 再取 AX 树」这类顺序要求。 */
       log: [],
     },
-    /** 页面本身的样子（title / url），以及「真实 DOM 节点」集合。 */
-    page: { title: "Fake page", url: "https://fake.test/" },
+    /** 页面本身的样子（title / url / readyState），以及「真实 DOM 节点」集合。 */
+    page: { title: "Fake page", url: "https://fake.test/", readyState: "complete" },
     /**
      * 导航剧本：`'stale'` = 请求的文档永远不提交（标签还停在旧页面上），
-     * `'load'` = 走一遍 loading→complete，`'instant'` = 直接完成。
+     * `'load'` = 走一遍 loading→complete，`'instant'` = 直接完成，
+     * `'hang'` = 一直 loading、永不提交也不发事件（测「预算耗尽」而不是「宽限期」）。
      * `createNav` 管新建标签：`'blip'` 模拟真 Chrome 的「出生在 about:blank 且已是
-     * complete，随后才开始加载」。
+     * complete，随后才开始加载」。两步创建（先 about:blank 再 update）让这个坑在
+     * tabs.open 上结构性消失——create('about:blank') 走的是安静出生，见 create 桩。
      */
     nav: "load",
     createNav: "load",
     loadDelayMs: 240,
     slowStartMs: 400,
+    /** 提交之后 dcl / load 事件各自再等多久（真实 Chrome 里 dcl 先于 load）。 */
+    dclDelayMs: 50,
+    loadEventDelayMs: 120,
     updatedListeners: [],
     axNodes: [],
     elements: new Map(),
@@ -118,6 +123,10 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
       this.dbg.attached.delete(tabId);
       for (const fn of this.dbg.listeners.onDetach) fn({ tabId, targetType: "page" }, reason);
     },
+    /** 手动驱动 CDP 事件（同站重定向回同一地址这类 tabs API 演不出的剧本）。 */
+    fireCDP(tabId, method, params) {
+      for (const fn of this.dbg.listeners.onEvent) fn({ tabId }, method, params);
+    },
   };
 }
 
@@ -136,6 +145,7 @@ function cdpResult(model, method, params) {
       const expression = String(params?.expression ?? "");
       if (expression.includes("document.title")) return { result: { value: model.page.title } };
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
+      if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };
       return { result: { value: null } };
     }
     case "DOM.resolveNode": {
@@ -200,23 +210,48 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
   const fireUpdated = (m, tab, info) => {
     for (const fn of m.updatedListeners) { try { fn(tab.id, info, { ...tab }); } catch { /* 监听器炸了不该影响假浏览器 */ } }
   };
+  // 每个标签在飞的导航剧本计时器。新导航开始时把旧的清掉——真实 Chrome 不会把
+  // 被取消的那次导航提交出来，假件不顶替就会让「上一次的 commit/load 事件」冒领。
+  const pendingNavTimers = new Map();
+  const cancelPendingNav = (m, id) => {
+    const t = pendingNavTimers.get(id);
+    if (t === undefined) return;
+    if (t.commit !== undefined) clearTimeout(t.commit);
+    for (const h of t.events) clearTimeout(h);
+    pendingNavTimers.delete(id);
+  };
   const beginLoad = (m, id, url) => {
     const tab = m.tabs.get(id);
     if (tab === undefined) return;
+    cancelPendingNav(m, id);
     tab.status = "loading";
     tab.pendingUrl = url ?? "";
     fireUpdated(m, tab, { status: "loading" });
-    setTimeout(() => commitLoad(m, id, url), m.loadDelayMs);
+    pendingNavTimers.set(id, { commit: setTimeout(() => commitLoad(m, id, url), m.loadDelayMs), events: [] });
   };
   const commitLoad = (m, id, url) => {
     const tab = m.tabs.get(id);
     if (tab === undefined) return;
+    cancelPendingNav(m, id);
     tab.url = url ?? tab.url;
     tab.pendingUrl = "";
     tab.status = "complete";
     m.page.url = tab.url;
     m.page.title = `Loaded: ${tab.url}`;
     fireUpdated(m, tab, { status: "complete" });
+    // 提交后按真实 Chrome 的样子发 CDP 事件——只有 attach 着的会话收得到。
+    // frameNavigated 在提交那一刻；dcl / load 各自稍后（dcl 先于 load）。
+    if (m.dbg.attached.has(id)) {
+      for (const fn of m.dbg.listeners.onEvent) fn({ tabId: id }, "Page.frameNavigated", { frame: { url: tab.url, parentId: undefined } });
+      pendingNavTimers.set(id, { commit: undefined, events: [
+        setTimeout(() => {
+          if (m.dbg.attached.has(id)) for (const fn of m.dbg.listeners.onEvent) fn({ tabId: id }, "Page.domContentEventFired", {});
+        }, m.dclDelayMs ?? 50),
+        setTimeout(() => {
+          if (m.dbg.attached.has(id)) for (const fn of m.dbg.listeners.onEvent) fn({ tabId: id }, "Page.loadEventFired", {});
+        }, m.loadEventDelayMs ?? 120),
+      ] });
+    }
   };
 
   const dropEmptyGroups = () => {
@@ -239,6 +274,15 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       const id = model.addTab(windowId ?? 1, url ?? "");
       const tab = model.tabs.get(id);
       tab.active = active;
+      // 两步创建的落位（tabs.open 先生 about:blank、attach 完再 update 真正的
+      // URL）：安静出生，不带任何导航剧本——真 Chrome 的 about:blank 也没有
+      // 事件值得发，随后的 update 才是那条被等待的导航。
+      if (url === "about:blank") {
+        tab.url = "about:blank";
+        tab.status = "complete";
+        tab.pendingUrl = "";
+        return resolve({ ...tab });
+      }
       // 默认按真 Chrome：新建的标签先进 loading。'blip' 专门造那个坑——
       // 它出生在 about:blank 并且立刻就是 complete，requested URL 还没开始。
       if (model.createNav === "blip") {
@@ -259,6 +303,10 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       if (props.url !== undefined) {
         if (model.nav === "stale") {
           // 请求的文档始终不提交：URL 不变、状态仍是 complete —— 就是「导航没到位」
+        } else if (model.nav === "hang") {
+          // 一直 loading、永不提交、不发事件：专测「预算耗尽」而不是「宽限期」
+          tab.status = "loading"; tab.pendingUrl = props.url;
+          fireUpdated(model, tab, { status: "loading" });
         } else if (model.nav === "instant") {
           commitLoad(model, tab.id, props.url);
         } else if (model.nav === "slowstart") {

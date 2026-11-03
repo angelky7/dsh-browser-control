@@ -10,9 +10,12 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 
 ## 自动等待
 
-- `browser_navigate` 等待新文档落地（默认 15s，`timeoutMs` 可调，上限 120s）后才返回；`tabs.open` 走同一套等待，等待预算由扩展侧控制（15s）；15s 内没等到时结果带 `loadPending: true` 与 `pendingUrl`，`browser_navigate` 的文案会说「仍在加载」而不是「已显示」，模型不该把没落地的导航当成功。
-- **不保证** SPA 路由或懒渲染内容就绪——导航返回后再用 `browser_wait` 显式等目标元素。
-- 「压根没发生」的导航也不算到位：如果整个等待期间从没观察到 `loading`，宽限期后会拿标签**真正落到的 URL** 与请求的目标比对（忽略 hash 片段与末尾斜杠），不等就报 `loadPending`。所以「点了变成下载」「目标被 Chrome 拒载」不会 0ms 伪装成成功；而**导航到已经开着的那个地址**仍然算成功（不误报）。实测台：`verify/verify_nav_landing.mjs`。
+- `browser_navigate` 的「到达」按 `waitUntil` 四档判定：`load`（默认，等整页 load 事件，预算 15s）、`domcontentloaded`（DOM 解析完即回，预算 4s——异步组件可能还没挂上，缺元素时接 `browser_wait`）、`commit`（新文档地址落地即回，预算 4s）、`none`（不等待不判定，立即返回，附 `pendingUrl` 说明去向；此刻连错误页探针都不跑——评估的还是旧文档）。显式 `timeoutMs` 永远优先（钳制 [100,120000]）。
+- **到达是事件判定的**：`Page.frameNavigated`（仅主框架）= 提交、`Page.domContentEventFired` / `Page.loadEventFired` = 相应时点。**「地址变了」不能当判据**——同站往返（www.bing.com → cn.bing.com → 回原地址）会让「变了」永远为假，只能干等满预算；事件没有这个盲区。dcl/load 事件必须发生在已认领的 commit 之后才算数（旧文档迟到的 load 不是新文档完成）；`tabs.open` 先把标签生在 about:blank、attach 完成后再发起真正的导航（否则快页的 commit 事件在 attach 前就没了），出生那次提交发生在发起标志置真之前，冒领不了。
+- 轮询兜底只兜事件看不见的两种情况：**压根不会提交**的导航（链接变成下载、目标被 Chrome 拒载——宽限 1.2s 后拿标签**真正落到的 URL** 与请求的目标比对（忽略 hash 片段与末尾斜杠），不等就报 `loadPending`，不许 0ms 伪装成成功）；和本来就停在目的地的同文档跳转（hash 变化走 `navigatedWithinDocument` 事件，以 sameDocument 到达）。**导航到已经开着的那个地址**仍然算成功（不误报）。
+- 预算耗尽时结果带 `loadPending: true` 与 `pendingUrl`，文案会说「仍在加载」而不是「已显示」，模型不该把没落地的导航当成功；回执 `waitUntil` / `waitedMs` / `readyState` 如实回报（探测失败就不带 readyState——宁可少说也不猜）。
+- `tabs.open` 走**同一份**到达等待器；旧开关 `wait:false` 等价 `waitUntil:'none'`。等待期间 debugger 会附着到该标签（「正受控制」横幅出现）——事件判定的代价，`none` 档不附着。
+- **不保证** SPA 路由或懒渲染内容就绪——导航返回后再用 `browser_wait` 显式等目标元素。实测台：`verify/verify_nav_landing.mjs`（落地诚实性）+ `verify/verify_nav_waituntil.mjs`（分档/事件/回执）。
 
 ## 原生弹窗（alert / confirm / prompt）
 
@@ -43,7 +46,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 
 ## 超时
 
-- 所有涉及页面交互的命令接受 `timeoutMs`（毫秒）：`browser_navigate` 默认 15000、上限 120000（桥侧另加 2s 余量，保证「导航超时」先于「桥超时」发生——前者没动过页面，后者结果未知，处置不同），wait 默认 15000 上限 120000（桥侧余量 10s），evaluate 默认 60000、显式上限 120000（桥侧余量 2s；不传时由桥接默认 60s 兜底，桥接层硬上限 300000）；`tabs.open` 的等待预算在扩展侧固定 15000。
+- 所有涉及页面交互的命令接受 `timeoutMs`（毫秒）：`browser_navigate` 预算按 `waitUntil` 档位（load 15000 / commit·domcontentloaded 4000 / none 0），显式值优先、上限 120000（桥侧另加 2s 余量，保证「导航超时」先于「桥超时」发生——前者没动过页面，后者结果未知，处置不同），wait 默认 15000 上限 120000（桥侧余量 10s），evaluate 默认 60000、显式上限 120000（桥侧余量 2s；不传时由桥接默认 60s 兜底，桥接层硬上限 300000）；`tabs.open` 的预算同 `browser_navigate` 档位，在同一份等待器里生效。
 
 ## 后台标签页节流
 

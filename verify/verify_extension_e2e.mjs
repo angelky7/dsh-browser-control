@@ -65,7 +65,11 @@ check("HTTP 下发 tabs.open → 扩展真的建了标签并归组",
   opened.status === 200 && typeof group.tabId === "number" && group.grouped === true && group.created === true,
   JSON.stringify(opened.json).slice(0, 200));
 check("桥没有改写结果载荷（tabId/group 原样回来）",
-  model.tabs.get(group.tabId)?.url === "https://e2e.test" && model.groups.get(group.groupId)?.title === "DSH",
+  (model.tabs.get(group.tabId)?.url === "https://e2e.test"
+    // 两步创建后 wait:false 立即返回：标签可能还停在 about:blank、目的地在
+    // pendingUrl 里（真 Chrome 的样子，旧假件在 create 时预填 url 是乐观的）
+    || (model.tabs.get(group.tabId)?.url === "about:blank" && model.tabs.get(group.tabId)?.pendingUrl === "https://e2e.test"))
+  && model.groups.get(group.groupId)?.title === "DSH",
   `tab=${JSON.stringify(model.tabs.get(group.tabId))} group=${JSON.stringify(model.groups.get(group.groupId))}`);
 
 const looseId = model.addTab(1, "https://loose.test");

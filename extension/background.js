@@ -800,27 +800,103 @@ function landsAt(tabUrl, expectedUrl) {
 	return norm(tabUrl) === norm(expectedUrl);
 }
 
-function waitForNavigationComplete(tabId, timeoutMs, expectedUrl) {
+/** 等待口径分档：显式 `timeoutMs` 永远优先；`load` 档保持旧默认 15s，轻档 4s，none 0。 */
+const NAV_TIERS = { none: 0, commit: 4_000, domcontentloaded: 4_000, load: 15_000 };
+
+function navTierOf(params) {
+	if (params.wait === false) return 'none'; // 旧开关，语义并进 none
+	const tier = params.waitUntil === undefined ? 'load' : String(params.waitUntil);
+	if (!(tier in NAV_TIERS)) {
+		throw new Error(`params.waitUntil must be one of none, commit, domcontentloaded, load — got "${tier}"`);
+	}
+	return tier;
+}
+
+function navBudgetOf(params, tier) {
+	if (tier === 'none') return 0;
+	if (params.timeoutMs !== undefined) {
+		return Math.min(120_000, Math.max(100, Number(params.timeoutMs) || 0)) || NAV_TIERS[tier];
+	}
+	return NAV_TIERS[tier];
+}
+
+/** 每个标签页在等的到达等待器；唯一的 chrome.debugger.onEvent 监听器把 CDP 事件分发到这里。 */
+const arrivalWaiters = new Map();
+
+function dispatchArrival(tabId, kind, url) {
+	const set = arrivalWaiters.get(tabId);
+	if (set === undefined) return;
+	for (const waiter of [...set]) waiter(kind, url);
+}
+
+/**
+ * 「新文档到达」的共用等待器——nav 与 tabs.open 共用这一份，别在两个命令里各写一套。
+ *
+ * 事件是权威来源：`Page.frameNavigated`（主框架）才是「提交」的可靠判据。**不能拿
+ * 「地址变了」当判据**——同站往返（www.bing.com → cn.bing.com → 回到原地址）会让
+ * 「变了」永远为假，只能干等满预算；事件没有这个盲区。dcl/load 事件不带 URL，必须
+ * 发生在已认领的 commit 之后才算数，否则旧文档迟到的 load 会被当成新文档完成
+ * （PR #12 修过的那个竞态在 CDP 层的样子）。`startedFlag` 在**发起导航**那一刻才置真：
+ * tabs.open 先把标签生在 about:blank、attach 完再发起真导航，出生那次提交发生在
+ * 置真之前，冒领不了。
+ *
+ * 轮询兜底只兜事件看不见的两件事：压根不会提交的导航（链接变下载、目标被拒——什么
+ * 事件都不会来，宽限 1.2s 后拿真正落到的 URL 与目的地比一次，不许 0ms 伪装成功），
+ * 和本来就停在目的地的同文档空转（hash 目标走 navigatedWithinDocument 事件，以
+ * sameDocument 到达；完全无变化的则靠 landsAt 收尾，见 verify_nav_landing 的来历）。
+ */
+function waitForArrival(tabId, tier, timeoutMs, expectedUrl, startedFlag) {
 	const started = Date.now();
+	if (tier === 'none') return Promise.resolve(true);
 	return new Promise((resolve) => {
+		let done = false;
+		let committed = false;
 		let sawLoading = false;
+		const waiter = (kind, url) => {
+			if (done) return;
+			if (kind === 'commit') {
+				if (!startedFlag.value) return; // 发起导航之前的提交不是这次导航的
+				// about:blank 是 tabs.open 两步创建的出生落位——它迟到的提交冒领不了
+				// 这次导航（除非目的地本来就是 about:blank）。真实 Chrome 在被顶掉的
+				// 导航上通常不发提交事件，但「通常」不是判据。
+				if (url === 'about:blank' && !landsAt(url, expectedUrl)) return;
+				committed = true;
+				if (tier === 'commit') finish(true);
+				return;
+			}
+			if (kind === 'sameDocument') {
+				// hash 跳转：请求的地址已经在文档栏里了，任何档位都算到达
+				if (startedFlag.value) finish(true);
+				return;
+			}
+			if (!committed) return; // dcl/load 不带 URL，旧文档的迟到事件不算数
+			if (tier === 'domcontentloaded' && kind === 'domcontentloaded') finish(true);
+			else if (tier === 'load' && kind === 'load') finish(true);
+		};
+		const finish = (ok) => {
+			if (done) return;
+			done = true;
+			const set = arrivalWaiters.get(tabId);
+			if (set !== undefined) {
+				set.delete(waiter);
+				if (set.size === 0) arrivalWaiters.delete(tabId);
+			}
+			resolve(ok);
+		};
+		let set = arrivalWaiters.get(tabId);
+		if (set === undefined) { set = new Set(); arrivalWaiters.set(tabId, set); }
+		set.add(waiter);
 		const tick = async () => {
+			if (done) return;
 			const tab = await chrome.tabs.get(tabId).catch(() => null);
 			if (tab) {
 				if (tab.status === 'loading') sawLoading = true;
-				else if (tab.status === 'complete') {
-					if (sawLoading) return resolve(true);
-					// No loading phase observed at all. Two very different things look
-					// like this: the new document committed so fast we never polled a
-					// loading state, and a navigation that never happened (a link that
-					// turned into a download, a target Chrome refuses, a same-URL
-					// no-op). The URL separates them — if the tab is not where we asked
-					// it to be, nothing arrived and the caller must not say otherwise.
-					if (Date.now() - started > 1200) return resolve(landsAt(tab.url, expectedUrl));
+				else if (tab.status === 'complete' && startedFlag.value && !committed && !sawLoading) {
+					if (Date.now() - started > 1200) return finish(landsAt(tab.url, expectedUrl));
 				}
 			}
-			if (Date.now() - started >= timeoutMs) return resolve(false);
-			setTimeout(tick, 120);
+			if (Date.now() - started >= timeoutMs) return finish(false);
+			setTimeout(tick, 200);
 		};
 		void tick();
 	});
@@ -838,6 +914,16 @@ function withBudget(promise, ms, fallback) {
 		promise.catch(() => fallback),
 		new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
 	]);
+}
+
+/** 回执里的 `document.readyState`。探针与其它导航后探针一样带预算：提交前卡死的
+ *  导航会让 CDP 闭嘴，不设上限的 await 会活过命令自己的超时。探测失败就不带这个
+ *  字段——宁可少说也不猜。 */
+async function probeReadyState(tabId) {
+	const value = await withBudget(withCDP(tabId, (send) => send('Runtime.evaluate', {
+		expression: 'document.readyState', awaitPromise: false, returnByValue: true, userGesture: true,
+	}).then((r) => String(r.result?.value ?? ''))), 2000, '');
+	return value === '' ? undefined : value;
 }
 
 /** Bring the tab and its window forward so real input can land, WITHOUT
@@ -902,6 +988,15 @@ async function ensureAttached(tabId) {
 chrome.debugger.onEvent.addListener((source, method, params) => {
 	const tabId = source?.tabId;
 	if (tabId === undefined) return;
+	// 导航到达事件（#19 ②）：只有主框架的提交才算「这次导航的到达」，iframe 的提交
+	// 与本次导航无关。等待器自己再按档位与 startedFlag 过滤，这里只做分发。
+	if (method === 'Page.frameNavigated') {
+		if (params.frame?.parentId === undefined) dispatchArrival(tabId, 'commit', params.frame?.url);
+		return;
+	}
+	if (method === 'Page.navigatedWithinDocument') { dispatchArrival(tabId, 'sameDocument', params.url); return; }
+	if (method === 'Page.domContentEventFired') { dispatchArrival(tabId, 'domcontentloaded'); return; }
+	if (method === 'Page.loadEventFired') { dispatchArrival(tabId, 'load'); return; }
 	if (method === 'Page.javascriptDialogOpening') {
 		const entry = {
 			tabId, type: params.type, message: params.message,
@@ -1373,20 +1468,33 @@ async function cmdTabUngroup(params) {
 
 async function cmdTabsOpen(params) {
 	if (!params.url) throw new Error('params.url is required');
+	const tier = navTierOf(params);
+	const budget = navBudgetOf(params, tier);
+	// 两步创建：先把标签生在 about:blank、attach 完、布好等待器，再发起真正的导航。
+	// 直接 create(url) 的话新标签立刻开始加载，快页会在 attach 完成前就提交——
+	// commit 事件没了，事件驱动在 tabs.open 上就瞎了。出生那次提交发生在 startedFlag
+	// 置真之前，也冒领不了。
 	const created = await chrome.tabs.create({
-		url: params.url,
+		url: 'about:blank',
 		active: params.active !== undefined ? Boolean(params.active) : true,
 	});
-	const timeoutMs = Number(params.timeoutMs) || 15_000;
-	// Arm the waiter before the tab starts loading: a created tab is born on
-	// about:blank and reports `complete` immediately, so a waiter armed
-	// afterwards can conclude "already settled" while the requested URL has not
-	// even started.
-	const settled = params.wait === false ? true : await waitForNavigationComplete(created.id, timeoutMs, params.url);
+	const started = Date.now();
+	const startedFlag = { value: false };
+	let settling = Promise.resolve(true);
+	if (tier !== 'none') {
+		await ensureAttached(created.id);
+		settling = waitForArrival(created.id, tier, budget, params.url, startedFlag);
+	}
+	const updating = chrome.tabs.update(created.id, { url: params.url });
+	startedFlag.value = true;
+	await updating;
+	const settled = await settling;
+	const waitedMs = Date.now() - started;
 	const fresh = await chrome.tabs.get(created.id).catch(() => null);
-// A pending navigation is not visible in `url` (a tab that has not committed
+	// A pending navigation is not visible in `url` (a tab that has not committed
 	// anything yet reports an empty url); `pendingUrl` is where it is heading.
 	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh.url ? fresh.pendingUrl : undefined;
+	const readyState = tier === 'none' ? undefined : await probeReadyState(created.id);
 	// 归组失败不该让「打开标签」这件事失败，只把结果带回去。
 	const group = params.group === false ? { grouped: false, reason: 'group:false' } : await addToAgentGroup(created.id);
 	return {
@@ -1395,6 +1503,9 @@ async function cmdTabsOpen(params) {
 		title: fresh?.title,
 		...(pendingUrl === undefined ? {} : { pendingUrl }),
 		...(settled === true ? {} : { loadPending: true }),
+		waitUntil: tier,
+		waitedMs,
+		...(readyState === undefined ? {} : { readyState }),
 		...group,
 	};
 }
@@ -1470,13 +1581,38 @@ async function cmdTabsActivate(params) {
 async function cmdNav(params) {
 	if (!params.url) throw new Error('params.url is required');
 	const tab = await resolveTab(params.tabId);
-	const timeoutMs = Number(params.timeoutMs) || 15_000;
-	// Arm the waiter BEFORE triggering the navigation — see
-	// waitForNavigationComplete for why the order decides the answer.
-	const settling = params.wait === false ? Promise.resolve(true) : waitForNavigationComplete(tab.id, timeoutMs, params.url);
-	await chrome.tabs.update(tab.id, { url: params.url });
+	const tier = navTierOf(params);
+	const budget = navBudgetOf(params, tier);
+	const started = Date.now();
+	// Arm the waiter BEFORE triggering the navigation — the order decides the
+	// answer. 事件驱动依赖 debugger 附着：ensureAttached 先落位（Page.enable 在里面
+	// 已经开了），frameNavigated 才到得了。startedFlag 在**发起**导航那一刻置真，
+	// 之前的提交（不存在，但防御性留闸）冒领不了。
+	const startedFlag = { value: false };
+	let settling = Promise.resolve(true);
+	if (tier !== 'none') {
+		await ensureAttached(tab.id);
+		settling = waitForArrival(tab.id, tier, budget, params.url, startedFlag);
+	}
+	const updating = chrome.tabs.update(tab.id, { url: params.url });
+	startedFlag.value = true;
+	await updating;
 	const settled = await settling;
+	const waitedMs = Date.now() - started;
 	const fresh = await chrome.tabs.get(tab.id).catch(() => null);
+	// waitUntil:'none' = 发起后立刻回报，不做任何到达判定（连错误页探针都不跑——
+	// 此刻评估的还是旧文档，跑了只会撒谎）；要不要等内容由调用方用 browser_wait 接管。
+	if (tier === 'none') {
+		const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
+		return {
+			tabId: tab.id,
+			url: fresh?.url ?? params.url,
+			title: fresh?.title,
+			...(pendingUrl === undefined ? {} : { pendingUrl }),
+			waitUntil: tier,
+			waitedMs,
+		};
+	}
 	// Chrome lands dead navigations on an internal error page, but tabs.get()
 	// keeps reporting the ORIGINAL url — only in-page location.href reveals
 	// chrome-error://. Probe it so callers can react structurally. Both probes
@@ -1502,6 +1638,7 @@ async function cmdNav(params) {
 	// a tab that has not committed anything yet) and the destination only exists
 	// in `pendingUrl` — report it so "still going to X" is visible.
 	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
+	const readyState = await probeReadyState(tab.id);
 	return {
 		tabId: tab.id,
 		url: siteUnreachable ? params.url : (fresh?.url ?? params.url),
@@ -1511,6 +1648,9 @@ async function cmdNav(params) {
 		// A timed-out wait must never read as "the page is there": loadPending
 		// says the new document was still not in place when the budget ran out.
 		...(siteUnreachable === undefined && settled !== true ? { loadPending: true } : {}),
+		waitUntil: tier,
+		waitedMs,
+		...(readyState === undefined ? {} : { readyState }),
 	};
 }
 
