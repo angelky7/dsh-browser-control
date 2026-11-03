@@ -1,5 +1,34 @@
 # 更新日志
 
+## v1.4.0 (2026-11-03)
+
+**这一版改了 `extension/`（导航等待换成事件驱动，`tabs.open` 改两步创建）——扩展必须重装**；插件也要更新到 1.4.0。
+
+- **`browser_navigate` / `browser_tabs open` 增加四档 `waitUntil`（#19 ②，issue #19 关闭）。**
+  `load`（默认，等整页 load，预算 15s）、`domcontentloaded`（DOM 解析完即回，4s——异步组件
+  可能还没挂上，缺元素时接 `browser_wait`）、`commit`（新文档地址落地即回，4s）、`none`
+  （不等待不判定，立即返回，附 `pendingUrl`）。显式 `timeoutMs` 永远优先（钳制 [100,120000]）。
+  默认保持 `load`——现有调用行为不变，要快由调用方换档。
+- **「到达」换成事件判定，零新权限**：`Page.frameNavigated`（仅主框架）= 提交，
+  `Page.domContentEventFired` / `Page.loadEventFired` = 后续时点。**「地址变了」不能当判据**——
+  同站往返（www.bing.com → cn.bing.com → 回原地址）会让它永远为假；事件没有这个盲区
+  （台内对照：事件桩 93ms 通过 vs 判「变了」干等满预算）。
+- **nav 与 tabs.open 共用同一份到达等待器**：dcl/load 事件必须发生在已认领的 commit 之后
+  （旧文档迟到的 load 不是新文档完成——PR #12 竞态在 CDP 层的样子，变异可抓）；tabs.open
+  两步创建（about:blank 落位 → attach → 发真导航），快页的 commit 事件不再在 attach 前
+  丢失；about:blank 迟到的出生提交同样冒领不了。等待期 debugger 附着（「正受控制」横幅），
+  `none` 档不附着。
+- 轮询兜底保留给事件看不见的两件事：压根不会提交的导航（1.2s 宽限 + landsAt，不许 0ms
+  伪装成功）、已停在目的地的同文档跳转；**导航到已开着的地址仍算成功**（nav_landing 台
+  五案原样全过）。旧开关 `wait:false` 并进 `none`。
+- 回执 `waitUntil` / `waitedMs` / `readyState` 进 output schema 并如实透传（readyState
+  探测失败就不带，不猜）。
+- 新台 `verify_nav_waituntil.mjs`（33 项：同站重定向事件桩、预算分档、显式优先、none 零附着、
+  dcl 不等 load、两个「冒领」守卫、轮询兜底回归、两步创建、桥余量 6s、两侧 NAV_TIERS 字面量
+  对账）。`npm run verify` 591 → **624 项 exit 0**；四组变异（committed 闸 / about:blank
+  守卫 / 档位表 / 桥余量）各被不相交断言抓住。扩展台 ext_harness 升级：CDP 事件按 attach
+  门控分发、新导航顶替在飞剧本、about:blank 安静出生、hang 剧本、readyState 探针。
+
 ## v1.3.0 (2026-11-03)
 
 **这一版只改 `src/`＋`lib/` 与文档，`extension/` 代码无改动——已装 1.2.0 扩展的用户不必重装，插件更新即可。**
