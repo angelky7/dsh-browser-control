@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.7.0 (2026-11-04)
+
+**这一版改了 `extension/`（新增 `tabs.back` / `tabs.forward` 命令）——扩展必须重装**；插件也要更新到 1.7.0。两个零新权限的基本功：历史导航与「看得见的截图」。
+
+- **`browser_tabs` 新增 `back` / `forward`**：目的地从 `Page.getNavigationHistory` **读**出来，不猜——到达判据与 navigate 完全同一套（`frameNavigated` 是提交判据、dcl/load 要在认领之后才算、hash 跳转走 `navigatedWithinDocument`、1.2s 宽限期比落点；bfcache 恢复就算不发事件，宽限期拿落点与读出来的目的地比对也接得住）。回执带 `targetUrl`（这次去的是哪条历史）与 `waitUntil`/`waitedMs`。
+- **三种「没动」分得清楚，不装成功**：历史尽头**当场**回 `unchanged:true` + 原因（什么都不发射，不浪费 1.2s）；历史读不到（CDP 被占）退化成「任何提交都算」并如实标 `historyUnknown:true`；预算耗尽报 `loadPending:true`。`waitUntil:"none"` 与 navigate 同义（发起后立即回报）。
+- **分类**：back/forward 重试会**多跳一条历史**（第一次其实已经落地）⇒ 写命令（与 nav 同族），超时报 `effectState=unknown`；只读档拒；接管浮层中止态同样拦（进 `HOLD_BLOCKED_COMMANDS`）。
+- **截图回执带真实像素尺寸**（v1.7.0 起）：从 PNG 的 IHDR 解出宽高写进回执与模型可见文本——fullPage 一张能有三五个视口高，光看字节数分不出来。`fullPage` 参数其实早就端到端支持，这一版补的是「看得见」。**`selector`（只截一个元素）这版才暴露**：扩展侧一直支持、工具面却从没传过——又一条「实现了但拿不到」的漂移，rect 四舍五入进回执与 render。
+- **对账**：`verify_errors` 三处登记（COMMANDS / WRITE_COMMANDS / 分类台）全部就位；`verify_surface` 的字面量分发对账要求 back/forward 各写一个字面量调用点（模板拼名字是防的那类缺陷，差点又写出来）。台子 `verify_history_nav.mjs` 18 项（扩展侧行为 + 插件侧分发 + 截图尺寸 + 分类）；render 契约新增 tabs.back / tabs.forward / selector 截图三个形状。`npm run verify` 670 → **707 项 exit 0**；三处变异（吞历史边界预读 / 吞 PNG 尺寸解析 / 漂移 back 分发字面量）各被不相交断言抓住（第一处一杀三）。
+- **顺手修了一个测试台竞态**：`verify_extension_e2e` 的 waitConnected 只等「WS 连上」，协议字段要等 hello 帧解析完——机器一忙就会在两者之间采样出 `extension=0` 的假红（full-chain 实测翻过一次车）。现在连协议一起等。
+
 ## v1.6.0 (2026-11-04)
 
 **这一版改了 `extension/`（新增 5 条 `windows.*` 命令）——扩展必须重装**；插件也要更新到 1.6.0。
