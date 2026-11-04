@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.7.1 (2026-11-04)
+
+**这一版改了 `extension/`（新增 `metrics` 命令 + `emulate` 节流参数）——扩展必须重装**；插件也要更新到 1.7.1。两个零新权限的测速基本功（从这一版起版本号在 patch 位递增）。
+
+- **新工具 `browser_metrics`：性能计数器**（`Performance.getMetrics`，只读，进只读白名单）。DOM 节点数、JS 堆（回执换算成 MB）、布局/样式重算次数、脚本/任务耗时——「这页面很重」从此有数字说话，动作前后各读一次就能对比。指标名是 CDP 固定那批，扩展**只透传已知名字**（CDP 将来新增指标不会打穿封闭 schema），回空如实报错，不拿空对象装成功。工具面 24 → **25 条**。
+- **`browser_emulate` 新增弱网 / CPU 限速**：`network` 预设 slow3g（400ms RTT，双向 ~50KB/s）/ fast3g（150ms，~200KB/s 下 / ~94KB/s 上）/ offline / reset；`cpuThrottlingRate` 1–20（1 = 不限，4 ≈ 中端手机）。**数值是本工具自己定的**（对齐 DevTools/Lighthouse 数量级，不冒充其同名预设——那两个随 Chrome 版本漂），写进工具描述。`Network.emulateNetworkConditions` + `Emulation.setCPUThrottlingRate`，零新权限。
+- **回执与 render 写明生效数值**（latency / 吞吐 / 倍率）——模型只看那句话，看不见 params；节流挂在 debugger 会话上（detach 即失效）也写进了描述。**`device:"reset"` 是「全部还原」**：连网络与 CPU 节流一起清——只清设备形状的话，模型以为回到了真实环境，页面其实还在慢速网上爬。
+- 分类：`metrics` 纯读（重试只是再读一遍计数器）⇒ 进只读白名单 + classifiedRead；节流让 emulate 改页面加载行为 ⇒ emulate 维持写命令，只读档照拒。三处登记对账全过。
+- 台子 `verify_metrics_throttle.mjs`（26 项）：CDP 参数**逐字对上**（-1 = CDP 的「不节流」）、预设超界报错并列合法值、reset 清节流、只过节流不动设备形状、插件侧字面量分发与 render 数字。render 契约 +2 形状（节流回执 / metrics）。`npm run verify` 707 → **742 项 exit 0**；三处变异（吞指标名过滤 / 改 slow3g 数值 / 漂移 metrics 分发字面量）各被不相交断言抓住。
+
 ## v1.7.0 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `tabs.back` / `tabs.forward` 命令）——扩展必须重装**；插件也要更新到 1.7.0。两个零新权限的基本功：历史导航与「看得见的截图」。
