@@ -454,6 +454,31 @@ async function savePdf(
 	}
 }
 
+/** Write one MHTML archive payload to `path` (absolute or under `controller.shotsDir`).
+ *  Mirrors savePdf's contract; MHTML is text, so it is written verbatim as UTF-8. */
+async function saveMhtml(
+	controller: BridgeController,
+	payload: { mhtml: string; tabId: number },
+	requestedPath?: string,
+): Promise<{ file: string; bytes: number; tabId: number }> {
+	const dir = controller.shotsDir
+	if (dir === undefined) throw new Error('browser-bridge is not configured yet')
+	let file: string
+	if (requestedPath && path.isAbsolute(requestedPath)) {
+		file = requestedPath
+		await mkdir(path.dirname(file), { recursive: true })
+	} else {
+		await mkdir(dir, { recursive: true })
+		const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+		const random = Math.random().toString(36).slice(2, 6)
+		const name = requestedPath ? path.basename(requestedPath) : `${stamp}-${random}.mhtml`
+		file = path.join(dir, name)
+	}
+	const buffer = Buffer.from(payload.mhtml, 'utf8')
+	await writeFile(file, buffer)
+	return { file, bytes: buffer.length, tabId: payload.tabId }
+}
+
 /** Register every `browser_*` tool; each is a thin adapter over one extension command. */
 function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 	ctx.systemPrompt.section({
@@ -1348,6 +1373,37 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.pageRanges === 'string') params.pageRanges = args.pageRanges
 			const payload = await controller.execute('pdf', params, exec.signal) as { base64: string; tabId: number }
 			return await savePdf(controller, payload, typeof args.path === 'string' ? args.path : undefined)
+		},
+	}))
+
+	ctx.tools.register(defineTool({
+		name: 'browser_archive',
+		description: 'Save the whole page as a single-file MHTML archive (text, images and styles inline; no network needed to reopen it). Returns the absolute path. The archive is a snapshot of when it was taken — scripts inside do not run and later page changes are not reflected; read it back with file tools or grep it like text.',
+		parameters: {
+			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
+			path: { type: 'string', description: 'Absolute path. Omit to save under the configured shotsDir with a timestamped .mhtml name.' },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					file: { type: 'string', required: true },
+					bytes: { type: 'number', required: true },
+					tabId: { type: 'number', required: true },
+				},
+			},
+			render: (_args, value) => [{
+				type: 'text',
+				text: `MHTML archive written to ${value.file} (${(value.bytes / 1024).toFixed(1)} KB)`,
+			}],
+		},
+		presentCall: args => ({ card: 'generic', title: `Save page archive${args.path ? ' → ' + args.path : ''}`, kind: 'other' as const }),
+		async execute(args, exec) {
+			const params: Record<string, unknown> = {}
+			if (args.tabId !== undefined) params.tabId = args.tabId
+			const payload = await controller.execute('archive', params, exec.signal) as { mhtml: string; tabId: number }
+			return await saveMhtml(controller, payload, typeof args.path === 'string' ? args.path : undefined)
 		},
 	}))
 

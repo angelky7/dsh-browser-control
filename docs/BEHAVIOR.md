@@ -42,6 +42,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 ## 截图与坐标
 
 - 视口截图坐标为 CSS 像素；元素截图用 CDP `clip`，DPR 由 Chrome 内部处理，无需外部换算。
+- **整页存档（`browser_archive`）**：`Page.captureSnapshot(MHTML)`，正文/图片/样式全内联成单文件，扩展回原始载荷、插件写 `.mhtml`（`path` 可指定绝对路径，否则落 shotsDir，与 pdf/screenshot 同约定）。**它是快照，不是活页**：内嵌脚本不会运行、存档之后的页面变化不反映；可以当文本 grep。只读档拒绝（写本地文件，与 pdf/screenshot 同类）。实测台：`verify/verify_archive.mjs`。
 - 点击结果包含实际命中点 `clicked.x/y` 与 `hitVerified`（命中元素是否等于目标元素）。`hitVerified: false` 时附 `hitInstead` 字段指明实际命中的元素——典型场景是 sticky 头部/广告遮挡。
 
 ## 超时

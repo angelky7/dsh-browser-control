@@ -263,11 +263,12 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_network_log` | Captured HTTP requests, listed with method/status/URL (v1.0.7+) |
 | `browser_network_clear` | Clear the network log buffer on its own (v1.0.7+) |
 | `browser_pdf` | Export the current page as PDF (v1.0.7+) |
+| `browser_archive` | Save the whole page as a single-file MHTML (text/images/styles inline; a greppable offline evidence snapshot — embedded scripts do not run, v1.5.0+) |
 | `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+) |
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-21 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+23 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

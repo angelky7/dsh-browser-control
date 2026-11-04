@@ -315,6 +315,9 @@ const GROUND_TRUTH = [
     { tabId: 3, cleared: true }, ["cleared"]],
   ["browser_pdf", "pdf", {},
     { tabId: 3, base64: PDF_B64 }, ["PDF written to", ".pdf"]],
+  // MHTML 存档：路径与大小必须出现在模型可见文本里（只报「已保存」是 render 只写摘要的老毛病）
+  ["browser_archive", "archive", {},
+    { tabId: 3, mhtml: "MIME-Version: 1.0\r\nContent-Type: multipart/related\r\n\r\n------=_NextPart\r\n" }, ["MHTML archive written to", ".mhtml", "KB"]],
   ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
     { tabId: 3, width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7)" }, ["412", "915", "mobile=true", "UA="]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
@@ -335,7 +338,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_emulate",
+  "browser_pdf", "browser_archive", "browser_emulate",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

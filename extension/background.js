@@ -1305,6 +1305,22 @@ async function cmdPdf(params) {
 }
 
 /**
+ * Page.captureSnapshot(MHTML) returns the whole document — text, images,
+ * styles — inline as one multipart string. Like pdf/screenshot the MV3 SW
+ * cannot write host files; hand the raw MHTML to the bridge, which saves it
+ * under shotsDir (or an absolute `path`). An archive is a snapshot, not a
+ * live page: scripts inside it do not run when it is opened later.
+ */
+async function cmdArchive(params) {
+	const tab = await resolveTab(params.tabId);
+	return withCDP(tab.id, async (send) => {
+		const res = await send('Page.captureSnapshot', { format: 'mhtml' });
+		if (!res || !res.data) throw new Error('Page.captureSnapshot returned no data');
+		return { tabId: tab.id, mhtml: res.data };
+	});
+}
+
+/**
  * Apply `Emulation.setDeviceMetricsOverride` + `setUserAgentOverride` +
  * `setTouchEmulationEnabled` to switch how the page renders. Presets cover
  * the common shapes (desktop / iphone / ipad / pixel); a custom object
@@ -2306,7 +2322,7 @@ const COMMANDS = {
 	snapshot: cmdSnapshot, screenshot: cmdScreenshot,
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
-	pdf: cmdPdf, emulate: cmdEmulate,
+	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive,
 	'cookies.get': cmdCookiesGet, 'cookies.set': cmdCookiesSet, 'cookies.remove': cmdCookiesRemove,
 	hold: cmdHold,
 };
