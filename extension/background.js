@@ -926,12 +926,12 @@ async function probeReadyState(tabId) {
 	return value === '' ? undefined : value;
 }
 
-/** Bring the tab and its window forward so real input can land, WITHOUT
- *  touching window geometry: `focused` only raises the window; tab activation
- *  never moves or resizes anything. The user's window size/position/state
- *  (maximized included) is never modified. A minimized window keeps its 0x0
- *  viewport where real input cannot land — report that instead of
- *  force-restoring it (state:'normal' would also un-maximize the window). */
+/** Bring the tab and its window forward so real input can land. This path only
+ *  FOCUSES — it never touches geometry or window state; explicit window control
+ *  is the browser_windows tool's job and nothing else. A minimized window keeps
+ *  its 0x0 viewport where real input cannot land — report that and let the
+ *  agent restore it explicitly with browser_windows (focused:true restores
+ *  without un-maximizing; state:'normal' would also un-maximize). */
 async function activateTabWindow(tabId) {
 	let win;
 	try {
@@ -941,7 +941,7 @@ async function activateTabWindow(tabId) {
 		return; // tab or window is closing; the command reports it downstream
 	}
 	if (win.state === 'minimized') {
-		const err = new Error('browser window is minimized — real keyboard/mouse input cannot reach a 0x0 viewport; restore the window manually (automation never changes window size or position)');
+		const err = new Error('browser window is minimized — real keyboard/mouse input cannot reach a 0x0 viewport. Restore it first: browser_windows action:"update" with windowId and focused:true (restores without un-maximizing), or ask the user.');
 		err.code = 'window_minimized';
 		throw err;
 	}
@@ -1469,6 +1469,127 @@ async function dissolveAgentGroups(windowId) {
 	}
 	agentGroupsByWindow.clear();
 	return { ungrouped, groups: groups.length };
+}
+
+/* ---------------------------------------------------------- windows —— 窗口控制 */
+
+/** 窗口回执的公共形状：几何字段只在 Chrome 真的给了数值时才带上。 */
+function windowReceipt(w) {
+	if (!w) return undefined;
+	return {
+		id: w.id, focused: !!w.focused, type: w.type, incognito: !!w.incognito,
+		state: w.state, alwaysOnTop: !!w.alwaysOnTop,
+		...(typeof w.left === 'number' ? { left: w.left, top: w.top, width: w.width, height: w.height } : {}),
+	};
+}
+
+async function cmdWindowsList() {
+	const wins = await chrome.windows.getAll({ populate: false });
+	const tabs = await chrome.tabs.query({});
+	const byWin = new Map();
+	for (const t of tabs) {
+		if (t.windowId === undefined) continue;
+		if (!byWin.has(t.windowId)) byWin.set(t.windowId, []);
+		byWin.get(t.windowId).push(t.id);
+	}
+	return {
+		windows: wins.map((w) => ({
+			...windowReceipt(w),
+			tabIds: byWin.get(w.id) ?? [],
+			tabCount: byWin.get(w.id)?.length ?? 0,
+		})),
+	};
+}
+
+const WINDOW_STATES = new Set(['normal', 'minimized', 'maximized', 'fullscreen']);
+
+function windowStateOf(params) {
+	if (params.state === undefined) return undefined;
+	if (!WINDOW_STATES.has(params.state)) {
+		throw new Error(`params.state must be one of normal, minimized, maximized, fullscreen — got "${params.state}"`);
+	}
+	return params.state;
+}
+
+async function cmdWindowsOpen(params) {
+	const createProps = {};
+	if (typeof params.url === 'string' && params.url.length > 0) createProps.url = params.url;
+	else if (Array.isArray(params.url)) {
+		const urls = params.url.map(String).filter((u) => u.length > 0);
+		if (urls.length > 0) createProps.url = urls;
+	}
+	for (const k of ['left', 'top', 'width', 'height']) {
+		if (typeof params[k] === 'number') createProps[k] = Math.round(params[k]);
+	}
+	if (params.focused !== undefined) createProps.focused = Boolean(params.focused);
+	const state = windowStateOf(params);
+	if (state !== undefined) createProps.state = state;
+	// 未给扩展开隐身权限时 Chrome 自己会拒——错误原样上报，不假装开了普通窗
+	if (params.incognito === true) createProps.incognito = true;
+	const win = await chrome.windows.create(createProps);
+	const tabs = await chrome.tabs.query({ windowId: win.id });
+	return { ...windowReceipt(win), tabIds: tabs.map((t) => t.id), tabCount: tabs.length };
+}
+
+async function cmdWindowsUpdate(params) {
+	if (params.windowId === undefined) throw new Error('params.windowId is required');
+	const props = {};
+	const state = windowStateOf(params);
+	if (state !== undefined) props.state = state;
+	for (const k of ['left', 'top', 'width', 'height']) {
+		if (typeof params[k] === 'number') props[k] = Math.round(params[k]);
+	}
+	if (params.focused !== undefined) props.focused = Boolean(params.focused);
+	if (params.alwaysOnTop !== undefined) props.alwaysOnTop = Boolean(params.alwaysOnTop);
+	if (params.drawAttention === true) props.drawAttention = true;
+	if (Object.keys(props).length === 0) {
+		throw new Error('nothing to update: pass state, left/top/width/height, focused, alwaysOnTop or drawAttention');
+	}
+	const win = await chrome.windows.update(Number(params.windowId), props);
+	// 回执带的是 Chrome 给出的**实际**结果——超界几何会被钳到屏幕，请求值不是回执。
+	return windowReceipt(win);
+}
+
+async function cmdWindowsClose(params) {
+	if (params.windowId === undefined) throw new Error('params.windowId is required');
+	const winId = Number(params.windowId);
+	// tabs.closeMany 同一条诚实线：关之前问一次在不在，关之后再问一次真的没了。
+	// windows.remove 对不存在的窗口是抛错——把「已经没了」拆成幂等成功，重试才安全。
+	try { await chrome.windows.get(winId); }
+	catch { return { windowId: winId, closed: false, alreadyGone: true }; }
+	try {
+		await chrome.windows.remove(winId);
+	} catch (error) {
+		throw new Error(`windows.remove failed: ${failureText(error)}`);
+	}
+	let gone = false;
+	try { await chrome.windows.get(winId); } catch { gone = true; }
+	if (!gone) throw new Error(`windows.remove resolved but window ${winId} still exists`);
+	return { windowId: winId, closed: true, alreadyGone: false };
+}
+
+async function cmdWindowsMoveTab(params) {
+	if (params.windowId === undefined) throw new Error('params.windowId is required');
+	const raw = Array.isArray(params.tabIds) ? params.tabIds : (params.tabId !== undefined ? [params.tabId] : []);
+	const ids = [...new Set(raw.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+	if (ids.length === 0) throw new Error('params.tabId or params.tabIds must name at least one tab');
+	const winId = Number(params.windowId);
+	// 预检查目标窗口：把「窗口没了」说清楚，而不是丢一句裸的 move failed
+	try { await chrome.windows.get(winId); }
+	catch { throw new Error(`no window with id ${winId}`); }
+	const moveProps = { windowId: winId };
+	if (params.index !== undefined) moveProps.index = Math.max(0, Math.round(Number(params.index) || 0));
+	const moved = [];
+	const failed = [];
+	for (const id of ids) {
+		try {
+			const tab = await chrome.tabs.move(id, moveProps);
+			moved.push({ tabId: id, windowId: tab.windowId, index: tab.index });
+		} catch (error) {
+			failed.push({ tabId: id, error: failureText(error) });
+		}
+	}
+	return { windowId: winId, moved, failed };
 }
 
 async function cmdTabGroup(params) {
@@ -2323,6 +2444,8 @@ const COMMANDS = {
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
 	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive,
+	'windows.list': cmdWindowsList, 'windows.open': cmdWindowsOpen, 'windows.update': cmdWindowsUpdate,
+	'windows.close': cmdWindowsClose, 'windows.moveTab': cmdWindowsMoveTab,
 	'cookies.get': cmdCookiesGet, 'cookies.set': cmdCookiesSet, 'cookies.remove': cmdCookiesRemove,
 	hold: cmdHold,
 };

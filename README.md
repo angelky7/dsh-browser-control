@@ -259,10 +259,11 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_pdf` | 当前页导出 PDF（v1.0.7+） |
 | `browser_archive` | 整页存成单文件 MHTML（正文/图片/样式全内联，可当文本 grep 的离线证据；是快照，内嵌脚本不会跑，v1.5.0+） |
 | `browser_emulate` | 切设备视口（移动 / 桌面 / 自定义，v1.0.7+） |
+| `browser_windows` | 窗口控制：清单/开窗/改状态与几何/关整窗/跨窗挪标签（唯一能碰窗口几何的工具，v1.6.0+） |
 | `browser_cleanup` | 清理临时文件 |
 | `browser_info` | 报告实际连上的浏览器与扩展版本（排障先跑它，v1.0.9+） |
 
-共 23 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
+共 24 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
 
 ## 架构
 

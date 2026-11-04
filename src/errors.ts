@@ -73,6 +73,10 @@ const WRITE_COMMANDS = new Set<string>([
 	// 往页面里插一个宿主元素 = 改页面 DOM。超时/掉线之后重试，可能多留一层浮层
 	//（旧的那层还挂着），所以报 unknown 而不是「没动过页面」。
 	'hold',
+	// 开窗不是幂等的：超时/掉线后重试可能真的开出第二个窗口——必须报 unknown。
+	// update/close/moveTab 是幂等的（重设同一几何、关已关的窗、挪到同一位置），
+	// 按判据算读，登记在 verify_errors 的 classifiedRead 里。
+	'windows.open',
 ]);
 
 /** 该命令是否可能留下副作用。 */

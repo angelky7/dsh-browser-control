@@ -36,6 +36,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_nav_timeout.mjs` | `browser_navigate` 的 `timeoutMs` 真的在参数表里、真的传到扩展（默认 15000、显式优先、上限 120000），且**桥的命令超时 = 导航预算 + 2s**：预算 300ms 时桥在 2303ms 处超时（而不是撑到默认 60s），文案里带的是 2300ms；`browser_evaluate` 的同款旋钮也在这里对账（默认不带、显式钳到 [100,120000]、桥 +2s） | 超时文案里那句「raise timeoutMs」过去是空头承诺（参数表里没有这个键）；evaluate 的扩展侧竞速同理，工具面从不传 budget，等于死代码 |
 | `verify_nav_waituntil.mjs` | #19 ② 三组：**同站重定向回同一地址**（`Page.frameNavigated` 事件桩驱动——判「地址变了」永远等不到，判事件 93ms 通过）、**预算分档**（commit 档默认 4s 上限不是 15s、显式 timeoutMs 优先、none 0 秒且零 debugger 附着、dcl 不等 load 事件）、**回执如实**（waitUntil/waitedMs/readyState 进 output schema 并透传）；另加轮询兜底回归闸（永不提交的导航仍 1.2s 报 loadPending）、tabs.open 两步创建、`wait:false`→none、桥余量（commit 档 6s 不是 60s）、两侧 NAV_TIERS 字面量逐字对账 | 「到达」过去只能表达「等整页」一档（轮询 tabs.status），commit/dcl 这两种更有用的时点表达不出来；事件的权威性正是 #19 里那次 4s 干等踩出来的 |
 | `verify_archive.mjs` | `browser_archive` 三段：扩展侧 `Page.captureSnapshot` 逐字透传（假件按真 CDP 形状回 `{data}`，回空如实报错）、插件侧**逐字节落盘**（utf8 原样、bytes 是真实字节数、绝对 path 被尊重）、策略机制级断言（readOnly 拒 / 正常档放行 / 不进只读白名单） | 「整页存档」是截图/PDF 家族的最后一块：截图不可搜索、PDF 不可还原；MHTML 两个都是 |
+| `verify_windows.mjs` | `browser_windows` 两面：扩展侧契约（清单带 tabIds、开窗几何与 active 标签、**update 回执 = 实际几何**、`focused:true` 对最小化窗口「还原不压扁」、close 幂等 alreadyGone 且假成功逃不过复查、moveTab 逐个报告、最小化窗口输入报错指向恢复出口）、插件侧五 action 字面量分发 + 分类（`windows.open` 唯一写命令）+ 只读档（list 放行、其余拒） | 窗口控制是用户显式解禁的能力面；「请求值当成功回显」与「resolve 了 = 关掉了」两个坑都有专门断言 |
 
 两处已知副作用：`verify_http.mjs` 会带 token 调一次 `/api/cleanup`，因此会在仓库根的 `dsh-browser-shots/` 建目录并清空它（该目录已进 `.gitignore`）；`verify_plugin.mjs legacy` 会短时关开一次 9777。
 

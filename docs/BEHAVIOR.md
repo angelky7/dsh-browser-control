@@ -5,7 +5,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 ## 窗口几何不可侵犯
 
 - 自动化**绝不**修改窗口尺寸、位置或状态（最大化/还原/最小化一律不动）。真实输入所需的窗口聚焦（`focused: true`）与标签页激活不改变任何几何属性。
-- 浏览器窗口处于**最小化**状态时，视口为 0×0，真实键鼠事件无法送达。此时 `type` 模式 / `press` / `click` 返回结构化错误 `window_minimized`，提示用户手动还原窗口——绝不自动还原（自动还原会把最大化窗口压成小窗）。
+- 浏览器窗口处于**最小化**状态时，视口为 0×0，真实键鼠事件无法送达。此时 `type` 模式 / `press` / `click` 返回结构化错误 `window_minimized`，并指向 `browser_windows` 的恢复出口（`focused:true` 还原不压扁）——输入路径绝不自己改窗口。
 - `fill` 模式、`eval`、`content`、`wait` 不需要窗口前台，最小化下照常工作。
 
 ## 自动等待
@@ -40,6 +40,10 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - `frameSelector` 参数支持同源 iframe（contentDocument 穿透）；跨源帧明确报错，不做静默降级。
 
 ## 截图与坐标
+
+- **窗口控制（`browser_windows`）**：窗口几何与状态的改变**只**发生在这个工具里——其它一切工具（含输入路径）只聚焦、永不缩放，用户看到的每一次窗口变化都对应一次显式调用。`list` 读清单（几何/状态/tabIds，只读白名单）；`open`/`update`/`close`/`moveTab` 改窗口。
+- `open` 是唯一**非幂等**动作：超时/掉线报 unknown（重试可能开出第二个窗口），出口是先 `action:"list"` 对账再决定。`update`/`close`/`moveTab` 幂等（重设同一几何是空操作、关已关的窗报 `alreadyGone`、挪到同一位置是空操作）⇒ 算读；但它们改浏览器状态，只读档照拒，只有 `list` 放行。
+- `update` 的回执带 Chrome 给出的**实际**结果：超界几何会被钳到屏幕，请求值不是回执。`focused:true` 对最小化窗口是「还原到最小化前状态」，不会把最大化窗口压成小窗（`state:"normal"` 会）。`close` 关整窗（所有标签一起走）：关前问一次在不在、关后复查一次真的没了。实测台：`verify/verify_windows.mjs`。
 
 - 视口截图坐标为 CSS 像素；元素截图用 CDP `clip`，DPR 由 Chrome 内部处理，无需外部换算。
 - **整页存档（`browser_archive`）**：`Page.captureSnapshot(MHTML)`，正文/图片/样式全内联成单文件，扩展回原始载荷、插件写 `.mhtml`（`path` 可指定绝对路径，否则落 shotsDir，与 pdf/screenshot 同约定）。**它是快照，不是活页**：内嵌脚本不会运行、存档之后的页面变化不反映；可以当文本 grep。只读档拒绝（写本地文件，与 pdf/screenshot 同类）。实测台：`verify/verify_archive.mjs`。

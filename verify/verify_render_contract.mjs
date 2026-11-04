@@ -318,6 +318,9 @@ const GROUND_TRUTH = [
   // MHTML 存档：路径与大小必须出现在模型可见文本里（只报「已保存」是 render 只写摘要的老毛病）
   ["browser_archive", "archive", {},
     { tabId: 3, mhtml: "MIME-Version: 1.0\r\nContent-Type: multipart/related\r\n\r\n------=_NextPart\r\n" }, ["MHTML archive written to", ".mhtml", "KB"]],
+  // 窗口控制：几何与状态必须原样进模型可见文本（update 回执 = 实际值，不是请求值复读）
+  ["browser_windows", "windows.update", { action: "update", windowId: 1, width: 800 },
+    { id: 1, state: "normal", focused: true, width: 800, height: 600 }, ["800", "600", "normal"]],
   ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
     { tabId: 3, width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7)" }, ["412", "915", "mobile=true", "UA="]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）

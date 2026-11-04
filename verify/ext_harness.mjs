@@ -25,6 +25,11 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
   return {
     tabs: new Map(),
     groups: new Map(),
+    /** 窗口表：browser_windows 的被测对象。窗口 1 默认存在（addTab 的默认 windowId）。 */
+    windows: new Map([[1, { id: 1, focused: true, type: "normal", incognito: false, state: "normal", alwaysOnTop: false, left: 0, top: 0, width: 1280, height: 900, preMinimized: null }]]),
+    nextWindowId: 2,
+    /** >0 时 windows.remove 假装成功但窗口还在——专治「resolve 了 = 关掉了」的假实现。 */
+    winRemoveGhost: 0,
     nextTabId: 100,
     nextGroupId: 500,
     calls: { group: 0, ungroup: 0, create: 0, remove: 0 },
@@ -269,6 +274,23 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
     onActivated: listener(),
     onCreated: listener(),
     onMoved: listener(),
+    // 窗口控制（browser_windows）用的移动：真 Chrome 对不存在的 tab/窗口抛错；
+    // index 省略时挪到目标窗口末尾。
+    move: (ids, props = {}) => {
+      const list = (Array.isArray(ids) ? ids : [ids]).map(Number);
+      for (const id of list) {
+        if (!model.tabs.has(id)) return reject(`No tab with id: ${id}`);
+      }
+      if (!model.windows.has(Number(props.windowId))) return reject(`No window with id: ${props.windowId}`);
+      const results = [];
+      for (const id of list) {
+        const tab = model.tabs.get(id);
+        tab.windowId = Number(props.windowId);
+        tab.index = props.index === undefined ? 9999 : Number(props.index);
+        results.push({ id: tab.id, windowId: tab.windowId, index: tab.index });
+      }
+      return resolve(list.length === 1 ? results[0] : results);
+    },
     create: ({ url, active = true, windowId }) => {
       model.calls.create++;
       const id = model.addTab(windowId ?? 1, url ?? "");
@@ -386,6 +408,80 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       for (const id of list) model.tabs.delete(id);
       return resolve();
     },
+  };
+
+  const windowsApi = {
+    get: (id) => {
+      const w = model.windows.get(Number(id));
+      if (w === undefined) return reject(`No window with id: ${Number(id)}.`);
+      return resolve({ ...w });
+    },
+    getAll: () => resolve([...model.windows.values()].map((w) => ({ ...w }))),
+    getLastFocused: () => {
+      const focused = [...model.windows.values()].find((w) => w.focused);
+      return focused ? resolve({ ...focused }) : reject('No last-focused window');
+    },
+    create: (props = {}) => {
+      const id = model.nextWindowId++;
+      const urls = Array.isArray(props.url) ? props.url : (props.url !== undefined ? [props.url] : []);
+      const win = {
+        id,
+        focused: props.focused ?? true,
+        type: 'normal',
+        incognito: props.incognito === true,
+        state: props.state ?? 'normal',
+        alwaysOnTop: false,
+        left: props.left ?? 0, top: props.top ?? 0,
+        width: props.width ?? 1280, height: props.height ?? 900,
+        preMinimized: null,
+      };
+      if (win.state === 'minimized') win.preMinimized = 'normal';
+      model.windows.set(id, win);
+      const created = urls.length > 0 ? urls.map((u) => String(u)) : ['about:blank'];
+      created.forEach((u, i) => {
+        const tid = model.addTab(id, u);
+        model.tabs.get(tid).active = i === 0;
+      });
+      return resolve({ ...win });
+    },
+    update: (id, props = {}) => {
+      const w = model.windows.get(Number(id));
+      if (w === undefined) return reject(`No window with id: ${Number(id)}.`);
+      if (props.state !== undefined) {
+        if (props.state === 'minimized') {
+          if (w.state !== 'minimized') w.preMinimized = w.state;
+          w.state = 'minimized';
+        } else {
+          w.state = props.state;
+          w.preMinimized = null;
+        }
+      }
+      // 真 Chrome 语义：focused:true 让最小化的窗口回到最小化前的状态（不压成小窗）
+      if (props.focused === true && w.state === 'minimized') {
+        w.state = w.preMinimized ?? 'normal';
+        w.preMinimized = null;
+      }
+      if (props.focused !== undefined) {
+        w.focused = props.focused;
+        if (w.focused) for (const o of model.windows.values()) if (o.id !== w.id) o.focused = false;
+      }
+      for (const k of ['left', 'top', 'width', 'height']) if (typeof props[k] === 'number') w[k] = props[k];
+      if (props.alwaysOnTop !== undefined) w.alwaysOnTop = !!props.alwaysOnTop;
+      return resolve({ ...w });
+    },
+    remove: (id) => {
+      const wid = Number(id);
+      const w = model.windows.get(wid);
+      if (w === undefined) return reject(`No window with id: ${wid}.`);
+      if (model.winRemoveGhost > 0) {
+        model.winRemoveGhost--;
+        return resolve();
+      }
+      model.windows.delete(wid);
+      for (const [tid, t] of [...model.tabs]) if (t.windowId === wid) model.tabs.delete(tid);
+      return resolve();
+    },
+    onCreated: listener(), onRemoved: listener(), onFocusChanged: listener(),
   };
 
   const tabGroups = {
@@ -550,6 +646,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
     runtime: withFallback(runtime, "chrome.runtime"),
     debugger: withFallback(debuggerApi, "chrome.debugger"),
     action: withFallback(action, "chrome.action"),
+    windows: withFallback(windowsApi, "chrome.windows"),
     storage: withFallback({
       local: storageArea, session: sessionArea, onChanged: storageArea.onChanged,
     }, "chrome.storage"),
