@@ -399,6 +399,7 @@ interface ScreenshotPayload {
 	base64: string
 	tabTitle?: string
 	tabUrl?: string
+	elementRect?: { x: number, y: number, w: number, h: number }
 }
 
 interface ScreenshotResult {
@@ -407,6 +408,18 @@ interface ScreenshotResult {
 	tabId: number
 	title?: string
 	url?: string
+	width?: number
+	height?: number
+	elementRect?: { x: number, y: number, w: number, h: number }
+}
+
+/** Actual pixel dimensions straight from the PNG's IHDR chunk (width/height are
+ *  big-endian at offsets 16/20 after the 8-byte signature + 4-byte length + 4-byte
+ *  type). The receipt should say how big the picture IS — fullPage captures are
+ *  often 3-5 viewports tall and the model cannot tell from the byte count. */
+function pngDimensions(buffer: Buffer): { width?: number, height?: number } {
+	if (buffer.length < 24 || buffer.toString('latin1', 12, 16) !== 'IHDR') return {}
+	return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
 }
 
 /** Write one screenshot payload to the shots directory and return its durable location. */
@@ -419,12 +432,15 @@ async function saveScreenshot(controller: BridgeController, payload: ScreenshotP
 	const file = path.join(dir, `${stamp}-${random}.${payload.format === 'jpeg' ? 'jpg' : 'png'}`)
 	const buffer = Buffer.from(payload.base64, 'base64')
 	await writeFile(file, buffer)
+	const dims = payload.format === 'png' ? pngDimensions(buffer) : {}
 	return {
 		file,
 		bytes: buffer.length,
 		tabId: payload.tabId,
 		title: payload.tabTitle,
 		url: payload.tabUrl,
+		...dims,
+		...(payload.elementRect === undefined ? {} : { elementRect: payload.elementRect }),
 	}
 }
 
@@ -986,16 +1002,16 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_tabs',
-		description: 'List tabs, or open/close/activate/group/ungroup. `close` takes one tab (`tabId`) or several (`tabIds`); the result accounts for every id, so a retry is safe.',
+		description: 'List tabs, or open/close/activate/group/ungroup, or go back/forward in the tab\'s history. `close` takes one tab (`tabId`) or several (`tabIds`); the result accounts for every id, so a retry is safe.',
 		parameters: {
-			action: { type: 'string', required: true, description: 'One of: list, open, close, activate, group, ungroup.' },
+			action: { type: 'string', required: true, description: 'One of: list, open, close, activate, group, ungroup, back, forward.' },
 			url: { type: 'string', description: 'URL for the open action.' },
-			tabId: { type: 'number', description: 'Target tab for close/activate/group.' },
+			tabId: { type: 'number', description: 'Target tab for close/activate/group/back/forward; defaults to the active tab for back/forward.' },
 			tabIds: { type: 'array', items: { type: 'number' }, description: 'For close: every tab to close in one call. The result reports each id (closed / alreadyGone / failed) instead of stopping at the first failure.' },
 			active: { type: 'boolean', description: 'Whether a newly opened tab becomes active; defaults to true.' },
 			group: { type: 'boolean', description: 'For open: put the new tab in the DSH tab group. Defaults to true; pass false to keep it loose.' },
-			waitUntil: { type: 'string', description: 'For open: when the new tab counts as arrived — same tiers as browser_navigate (load default / domcontentloaded / commit / none).' },
-			timeoutMs: { type: 'number', description: 'For open: wait budget, overriding the waitUntil tier (load 15000, commit/domcontentloaded 4000).' },
+			waitUntil: { type: 'string', description: 'For open/back/forward: when the navigation counts as arrived — same tiers as browser_navigate (load default / domcontentloaded / commit / none). back/forward report unchanged:true + a reason when the tab is already at the oldest/newest history entry.' },
+			timeoutMs: { type: 'number', description: 'For open/back/forward: wait budget, overriding the waitUntil tier (load 15000, commit/domcontentloaded 4000).' },
 			windowId: { type: 'number', description: 'For ungroup: only dissolve that window’s DSH group; omit to clear every window.' },
 		},
 		output: {
@@ -1036,6 +1052,27 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				}
 				case 'activate':
 					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal) as Record<string, JsonValue>
+				case 'back':
+				case 'forward': {
+					// Same wait-shape as open: tier default load, explicit budget, bridge
+					// margin so the reply can outlive the tier without the bridge timing out.
+					// 两条各写一个字面量调用点（surface 台对账 execute 字面量，拼名字会瞎）。
+					const waitUntil = args.waitUntil === undefined ? 'load' : String(args.waitUntil)
+					if (!(waitUntil in NAV_TIERS)) {
+						throw new Error(`browser_tabs ${args.action}: waitUntil must be one of none, commit, domcontentloaded, load — got "${waitUntil}"`)
+					}
+					const params: Record<string, unknown> = { waitUntil }
+					if (args.tabId !== undefined) params.tabId = args.tabId
+					let budgetMs = NAV_TIERS[waitUntil]
+					if (typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)) {
+						budgetMs = Math.min(NAV_MAX_MS, Math.max(100, Math.trunc(args.timeoutMs)))
+					}
+					params.timeoutMs = budgetMs
+					if (args.action === 'back') {
+						return await controller.execute('tabs.back', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
+					}
+					return await controller.execute('tabs.forward', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
+				}
 				case 'group':
 					return await controller.execute('tabs.group', { tabId: requireTabId(args, 'group') }, exec.signal) as Record<string, JsonValue>
 				case 'ungroup': {
@@ -1172,10 +1209,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_screenshot',
-		description: 'Capture the tab as PNG/JPEG, save it under the configured shots directory, and return the absolute file path.',
+		description: 'Capture the tab as PNG/JPEG, save it under the configured shots directory, and return the absolute file path plus the image\'s real pixel size. fullPage captures the whole scrollable page in one shot (sticky/fixed headers may repeat); selector captures one element.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
-			fullPage: { type: 'boolean', description: 'Capture beyond the viewport.' },
+			fullPage: { type: 'boolean', description: 'Capture the entire scrollable page instead of just the viewport. The receipt\'s width/height show the real size.' },
+			selector: { type: 'string', description: 'CSS selector: capture just that element (scrolled into view); the receipt carries its rect.' },
 			format: { type: 'string', description: '"png" (default) or "jpeg".' },
 		},
 		output: {
@@ -1188,9 +1226,24 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					tabId: { type: 'number', required: true },
 					title: { type: 'string' },
 					url: { type: 'string' },
+					width: { type: 'number' },
+					height: { type: 'number' },
+					elementRect: {
+						type: 'object',
+						additionalProperties: false,
+						properties: {
+							x: { type: 'number', required: true },
+							y: { type: 'number', required: true },
+							w: { type: 'number', required: true },
+							h: { type: 'number', required: true },
+						},
+					},
 				},
 			},
-			render: (_args, value) => [{ type: 'text', text: `Saved ${value.file} (${value.bytes} bytes)` }],
+			render: (_args, value) => [{
+				type: 'text',
+				text: `Saved ${value.file} (${value.bytes} bytes${value.width !== undefined && value.height !== undefined ? `, ${value.width}×${value.height}` : ''}${value.elementRect !== undefined ? `, element at ${value.elementRect.x},${value.elementRect.y} size ${value.elementRect.w}×${value.elementRect.h}` : ''})`,
+			}],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Browser screenshot', kind: 'other' as const }),
 		async execute(args, exec) {
@@ -1198,6 +1251,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { format }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (args.fullPage !== undefined) params.fullPage = args.fullPage
+			if (args.selector !== undefined) params.selector = args.selector
 			const payload = await controller.execute('screenshot', params, exec.signal) as ScreenshotPayload
 			return saveScreenshot(controller, payload)
 		},

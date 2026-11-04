@@ -250,9 +250,9 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_dialog` | 读改原生弹窗应答策略 accept/dismiss/manual，并回最近弹窗记录（v1.0.9+） |
 | `browser_hold` | 在某个标签页上加/撤一层可取消的接管浮层（告知用户 + 防误触）；`covered:false` 时说明盖不住的原因。软层，不是安全边界 |
 | `browser_cookies` | 读/设/删某标签页可见的 cookie（`action: get/set/remove`；get 带 `domain` 过滤，set/remove 需要 `url` 或 `domain` 锚点，remove 复查并回报 `remaining`）。**cookie 的值是凭据**，get 会把值完整放进模型可见文本——见 SECURITY.md |
-| `browser_tabs` | 标签页管理（列表/新建/关闭/切换/归组/拆组；见「agent 开的标签长什么样」） |
+| `browser_tabs` | 标签页管理（列表/新建/关闭/切换/归组/拆组；v1.7.0 起支持历史 back/forward——落地判据与 navigate 同一套，历史尽头如实报 unchanged） |
 | `browser_evaluate` | 执行任意 JS |
-| `browser_screenshot` | 截取页面截图 |
+| `browser_screenshot` | 截取页面截图（v1.7.0 起回执带**真实像素尺寸**；fullPage 一张截全页、selector 只截一个元素） |
 | `browser_console_log` | 抓取页面 console 日志并逐条给出正文（v1.0.7+） |
 | `browser_network_log` | 抓取 HTTP 请求/响应并逐条给出方法/状态/URL（v1.0.7+） |
 | `browser_network_clear` | 单独清空网络日志缓冲（v1.0.7+） |

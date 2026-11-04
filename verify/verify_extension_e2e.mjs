@@ -28,10 +28,13 @@ const { ctx } = await bootBackground({
   storage: { port: PORT, token: TOKEN, autoConnect: true },
 });
 
-// 扩展顶层就跑 init()→loadConfig()→connect()，等它把 hello 发过来
+// 扩展顶层就跑 init()→loadConfig()→connect()，等它把 hello 发过来。
+// 「连接上」和「hello 解析完」是两个时刻：extensionConnected 在 WS 握手就置真，
+// 协议字段要等 hello 帧处理完（之前的默认值是 0）——只等前者，机器一忙就会在
+// 两者之间采样出 extension=0 的假红（full-chain 实测翻过车），所以连协议一起等。
 const waitConnected = async () => {
   for (let i = 0; i < 100; i++) {
-    if (server.status.extensionConnected) return true;
+    if (server.status.extensionConnected && (server.status.extensionProtocol ?? 0) > 0) return true;
     await new Promise((r) => setTimeout(r, 50));
   }
   return false;

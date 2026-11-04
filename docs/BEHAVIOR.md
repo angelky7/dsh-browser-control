@@ -45,9 +45,10 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - `open` 是唯一**非幂等**动作：超时/掉线报 unknown（重试可能开出第二个窗口），出口是先 `action:"list"` 对账再决定。`update`/`close`/`moveTab` 幂等（重设同一几何是空操作、关已关的窗报 `alreadyGone`、挪到同一位置是空操作）⇒ 算读；但它们改浏览器状态，只读档照拒，只有 `list` 放行。
 - `update` 的回执带 Chrome 给出的**实际**结果：超界几何会被钳到屏幕，请求值不是回执。`focused:true` 对最小化窗口是「还原到最小化前状态」，不会把最大化窗口压成小窗（`state:"normal"` 会）。`close` 关整窗（所有标签一起走）：关前问一次在不在、关后复查一次真的没了。实测台：`verify/verify_windows.mjs`。
 
-- 视口截图坐标为 CSS 像素；元素截图用 CDP `clip`，DPR 由 Chrome 内部处理，无需外部换算。
+- 视口截图坐标为 CSS 像素；元素截图用 CDP `clip`，DPR 由 Chrome 内部处理，无需外部换算。**截图回执带真实像素尺寸**（v1.7.0 起：从 PNG IHDR 解出，不是猜的——fullPage 一张能有三五个视口高，光看字节数分不出来）；`selector` 只截一个元素，回执带元素 rect。`fullPage` 截整个可滚动页（sticky/fixed 元素可能重复出现）。
 - **整页存档（`browser_archive`）**：`Page.captureSnapshot(MHTML)`，正文/图片/样式全内联成单文件，扩展回原始载荷、插件写 `.mhtml`（`path` 可指定绝对路径，否则落 shotsDir，与 pdf/screenshot 同约定）。**它是快照，不是活页**：内嵌脚本不会运行、存档之后的页面变化不反映；可以当文本 grep。只读档拒绝（写本地文件，与 pdf/screenshot 同类）。实测台：`verify/verify_archive.mjs`。
 - 点击结果包含实际命中点 `clicked.x/y` 与 `hitVerified`（命中元素是否等于目标元素）。`hitVerified: false` 时附 `hitInstead` 字段指明实际命中的元素——典型场景是 sticky 头部/广告遮挡。
+- **历史导航（`browser_tabs action:"back"/"forward"`，v1.7.0）**：目的地从 `Page.getNavigationHistory` **读**出来，不猜——到达判据与 navigate 同一套（`frameNavigated` 提交 + dcl/load 在认领之后才算 + 1.2s 宽限期比落点）。三种「没动」分得清楚：历史尽头当场回 `unchanged:true` + 原因（什么都不发射，不浪费预算）；历史读不到时退化成「任何提交都算」并标 `historyUnknown:true`；预算耗尽报 `loadPending:true`。回执带 `targetUrl`（这次去的是哪条）。**重试会多跳一条历史** ⇒ 写命令（与 nav 同族），只读档拒；接管浮层中止态同样拦（`HOLD_BLOCKED_COMMANDS`）。实测台：`verify/verify_history_nav.mjs`。
 
 ## 超时
 

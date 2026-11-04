@@ -91,7 +91,11 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
     nextObjectId: 1,
     addTab(windowId, url) {
       const id = this.nextTabId++;
-      this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false, status: "complete", pendingUrl: "" });
+      this.tabs.set(id, { id, windowId, groupId: -1, url, title: url, active: false, status: "complete", pendingUrl: "",
+        // 会话历史（tabs.back/forward 的剧本）：初始条目就是出生 URL。
+        // pendingNavTarget 记「update 发起的导航想去的地址」——commit 时才落历史，
+        // 所以 'stale' 剧本（永不提交）不会把历史推歪。
+        history: { entries: [url], index: 0 }, pendingNavTarget: undefined });
       return id;
     },
     /**
@@ -141,7 +145,7 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
  * 找 objectId、`Runtime.callFunctionOn` **实际执行**扩展传进来的那段页面函数。
  * 测试可以用 `model.dbg.results[method]` 覆盖任意一个。
  */
-function cdpResult(model, method, params) {
+function cdpResult(model, method, params, tabId) {
   const custom = model.dbg.results[method];
   if (typeof custom === "function") return custom(params, model);
   if (custom !== undefined) return custom;
@@ -152,6 +156,14 @@ function cdpResult(model, method, params) {
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
       if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };
       return { result: { value: null } };
+    }
+    case "Page.getNavigationHistory": {
+      const tab = model.tabs.get(tabId);
+      if (tab === undefined || tab.history === undefined) return { currentIndex: 0, entries: [] };
+      return {
+        currentIndex: tab.history.index,
+        entries: tab.history.entries.map((url, i) => ({ id: i + 1, url })),
+      };
     }
     case "DOM.resolveNode": {
       const objectId = model.byBackend.get(params?.backendNodeId);
@@ -241,6 +253,15 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
     tab.url = url ?? tab.url;
     tab.pendingUrl = "";
     tab.status = "complete";
+    // update 发起的导航在**提交**这一刻落历史（真 Chrome 的时序）：截掉前方分叉、
+    // 推入新条目。goBack/goForward 的回放不走这里（pendingNavTarget 没置）。
+    if (tab.pendingNavTarget !== undefined && (url ?? tab.url) === tab.pendingNavTarget) {
+      const h = tab.history;
+      h.entries = h.entries.slice(0, h.index + 1);
+      h.entries.push(tab.pendingNavTarget);
+      h.index++;
+      tab.pendingNavTarget = undefined;
+    }
     m.page.url = tab.url;
     m.page.title = `Loaded: ${tab.url}`;
     fireUpdated(m, tab, { status: "complete" });
@@ -263,6 +284,22 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
     for (const [gid, group] of model.groups) {
       if (![...model.tabs.values()].some((t) => t.groupId === gid)) model.groups.delete(gid);
     }
+  };
+
+  // tabs.back/forward 的假件：条目存在就按「一次导航」演（beginLoad 走到 commitLoad，
+  // CDP 事件只在 attach 着时发）；没有条目就无声 resolve——扩展侧的边界判断要靠
+  // Page.getNavigationHistory 预读，这里不替它圆谎。
+  const historyStep = (m, id, delta) => {
+    const tab = m.tabs.get(Number(id));
+    if (tab === undefined) return reject(`No tab with id: ${id}`);
+    const h = tab.history;
+    if (h === undefined) return resolve({ ...tab });
+    const next = h.index + delta;
+    if (next < 0 || next >= h.entries.length) return resolve({ ...tab });
+    h.index = next;
+    tab.pendingNavTarget = undefined;
+    beginLoad(m, id, h.entries[next]);
+    return resolve({ ...tab });
   };
 
   const tabs = {
@@ -323,6 +360,9 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       const tab = model.tabs.get(Number(id));
       if (tab === undefined) return reject(`No tab with id: ${id}`);
       if (props.url !== undefined) {
+        // 记下这条导航想去的地址；commitLoad 只在真的提交时才落历史
+        //（'stale' 永不提交 → 历史不动，与真 Chrome 一致）。
+        tab.pendingNavTarget = props.url;
         if (model.nav === "stale") {
           // 请求的文档始终不提交：URL 不变、状态仍是 complete —— 就是「导航没到位」
         } else if (model.nav === "hang") {
@@ -348,6 +388,10 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       if (props.active !== undefined) tab.active = props.active;
       return resolve({ ...tab });
     },
+    // 历史回放：真 Chrome 在没有可去的条目时**无声地不动作**（resolve、无事件、
+    // 状态不变）；有条目时就是一次导航——走完整的 loading→commit→CDP 事件链。
+    goBack: (id) => historyStep(model, Number(id), -1),
+    goForward: (id) => historyStep(model, Number(id), +1),
     get: (id) => (model.tabs.has(id) ? resolve({ ...model.tabs.get(id) }) : reject(`No tab with id: ${id}`)),
     query: (info = {}) => {
       let list = [...model.tabs.values()];
@@ -533,7 +577,7 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       else if (typeof dbg.failPlan === "function") message = dbg.failPlan(method, nth, tabId);
       state.lastError = message ? { message } : undefined;
       // 失败时 CDP 不回结果，扩展就是靠 lastError 判的
-      const value = message ? undefined : cdpResult(model, method, params);
+      const value = message ? undefined : cdpResult(model, method, params, tabId);
       if (done) { done(message ? undefined : value); return undefined; }
       return message ? Promise.reject(new Error(message)) : Promise.resolve(value);
     },

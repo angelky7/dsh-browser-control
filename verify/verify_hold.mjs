@@ -197,7 +197,7 @@ let sharedPageForRecycle;
   await ctx.runCommand("hold", { action: "on", note: "改档中" });
   page.aborted = true;
 
-  for (const command of ["click", "input", "press", "nav"]) {
+  for (const command of ["click", "input", "press", "nav", "tabs.back", "tabs.forward"]) {
     const before = actionSends(model);
     const err = await errOf(ctx.runCommand(command, { selector: "#q", value: "x", key: "a", url: "https://fake.test/next" }));
     check(`中止后 ${command} 被拦下`, err !== null && err.includes("浏览器", 0) !== false, String(err)?.slice(0, 80));

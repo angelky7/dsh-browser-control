@@ -256,9 +256,9 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
 | `browser_hold` | Put or remove a cancellable take-over overlay on a tab (tells the user, stops mis-clicks); `covered:false` says why it could not cover the page. A soft layer, not a security boundary |
 | `browser_cookies` | Read/set/remove cookies visible to a tab (`action: get/set/remove`; get takes a `domain` filter, set/remove need a `url` or `domain` anchor, remove re-checks and reports `remaining`). **Cookie values are credentials** — a get puts them fully into the model-visible text; see SECURITY.md |
-| `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; see "What agent tabs look like") |
+| `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; v1.7.0+ history back/forward — same arrival judging as navigate, reports unchanged at the history edge) |
 | `browser_evaluate` | Run arbitrary JS |
-| `browser_screenshot` | Capture page screenshot |
+| `browser_screenshot` | Capture page screenshot (v1.7.0+ receipt carries the real pixel size; fullPage captures the whole scrollable page, selector captures one element) |
 | `browser_console_log` | Captured console entries, listed with their text (v1.0.7+) |
 | `browser_network_log` | Captured HTTP requests, listed with method/status/URL (v1.0.7+) |
 | `browser_network_clear` | Clear the network log buffer on its own (v1.0.7+) |

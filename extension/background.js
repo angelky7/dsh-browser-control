@@ -432,7 +432,7 @@ const HOLD_FIXED_TITLE = 'DSH Browser Control'
 /** 正文上限：模型给的话头再长也不会把卡片撑爆；换行压平成空格。 */
 const HOLD_NOTE_MAX = 400
 /** 中止态下直接拒绝的扩展命令（与 #17 里列的那四条一致）。 */
-const HOLD_BLOCKED_COMMANDS = new Set(['click', 'input', 'press', 'nav'])
+const HOLD_BLOCKED_COMMANDS = new Set(['click', 'input', 'press', 'nav', 'tabs.back', 'tabs.forward'])
 /** 拒绝文案前缀：与 src/errors.ts 里的同名常量对账（verify_errors 会检查两边一致）。 */
 const HOLD_ABORTED_MARKER = 'browser-hold-aborted:'
 
@@ -1715,6 +1715,99 @@ async function cmdTabsActivate(params) {
 	return { activated: Number(params.tabId) };
 }
 
+/**
+ * Read where `Page.getNavigationHistory` says the neighboring history entry goes.
+ * Three outcomes, deliberately distinct:
+ *   - a URL string: we know the destination, arrival can be judged against it;
+ *   - `null`: the history read succeeded and says there IS no entry that way —
+ *     fire nothing and say so, instead of waiting a grace period for nothing;
+ *   - `undefined`: the read failed (CDP busy / detached) — degrade to
+ *     "any commit counts" rather than pretending to know the destination.
+ */
+async function historyNeighborUrl(tabId, direction) {
+	try {
+		const hist = await withCDP(tabId, (send) => send('Page.getNavigationHistory'));
+		const idx = Number(hist?.currentIndex);
+		const entries = Array.isArray(hist?.entries) ? hist.entries : [];
+		const next = direction === 'back' ? idx - 1 : idx + 1;
+		if (!Number.isInteger(idx) || next < 0 || next >= entries.length) return null;
+		const url = entries[next]?.url;
+		return typeof url === 'string' && url.length > 0 ? url : null;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * History navigation (tabs.back / tabs.forward). Same arrival machinery as
+ * `nav` — `Page.frameNavigated` is the commit judge, hash-only history jumps
+ * arrive via `navigatedWithinDocument`, and bfcache restores that skip visible
+ * loading are still caught by the landsAt grace check because the destination
+ * URL comes from the history read, not from guesswork.
+ *
+ * Retrying a timeout can jump TWO entries (the first back already landed) —
+ * this is a write command in errors.ts, same family as `nav`.
+ */
+async function cmdTabsHistory(params, direction) {
+	const tab = await resolveTab(params.tabId);
+	const tier = navTierOf(params);
+	const budget = navBudgetOf(params, tier);
+	const started = Date.now();
+	const urlBefore = tab.url;
+	if (tier === 'none') {
+		if (direction === 'back') await chrome.tabs.goBack(tab.id);
+		else await chrome.tabs.goForward(tab.id);
+		const fresh = await chrome.tabs.get(tab.id).catch(() => null);
+		const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
+		return {
+			tabId: tab.id, action: direction,
+			url: fresh?.url ?? urlBefore,
+			title: fresh?.title,
+			...(pendingUrl === undefined ? {} : { pendingUrl }),
+			waitUntil: tier, waitedMs: Date.now() - started,
+		};
+	}
+	await ensureAttached(tab.id);
+	const targetUrl = await historyNeighborUrl(tab.id, direction);
+	if (targetUrl === null) {
+		return {
+			tabId: tab.id, action: direction,
+			url: urlBefore, title: tab.title,
+			unchanged: true, reason: `no history entry to go ${direction} to (already at the ${direction === 'back' ? 'oldest' : 'newest'} entry)`,
+			waitUntil: tier, waitedMs: Date.now() - started,
+		};
+	}
+	const startedFlag = { value: false };
+	const settling = waitForArrival(tab.id, tier, budget, targetUrl ?? '', startedFlag);
+	if (direction === 'back') await chrome.tabs.goBack(tab.id);
+	else await chrome.tabs.goForward(tab.id);
+	startedFlag.value = true;
+	const settled = await settling;
+	const waitedMs = Date.now() - started;
+	const fresh = await chrome.tabs.get(tab.id).catch(() => null);
+	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
+	return {
+		tabId: tab.id, action: direction,
+		url: fresh?.url ?? urlBefore,
+		title: fresh?.title,
+		...(targetUrl !== undefined ? { targetUrl } : {}),
+		...(targetUrl === undefined ? { historyUnknown: true } : {}),
+		...(pendingUrl === undefined ? {} : { pendingUrl }),
+		// 没等到到达不许装成功；「什么都没发生」（历史边界、读不到历史时的原地不动）
+		// 也不是 pending——unchanged 把这两种「没动」和「还在路上」分开。
+		...(settled !== true ? { loadPending: true } : {}),
+		waitUntil: tier, waitedMs,
+	};
+}
+
+async function cmdTabsBack(params) {
+	return cmdTabsHistory(params, 'back');
+}
+
+async function cmdTabsForward(params) {
+	return cmdTabsHistory(params, 'forward');
+}
+
 async function cmdNav(params) {
 	if (!params.url) throw new Error('params.url is required');
 	const tab = await resolveTab(params.tabId);
@@ -2437,6 +2530,7 @@ async function cmdSnapshot(params) {
 const COMMANDS = {
 	ping: cmdPing, 'browser.info': cmdBrowserInfo,
 	'tabs.list': cmdTabsList, 'tabs.open': cmdTabsOpen, 'tabs.close': cmdTabsClose, 'tabs.closeMany': cmdTabsCloseMany, 'tabs.activate': cmdTabsActivate,
+	'tabs.back': cmdTabsBack, 'tabs.forward': cmdTabsForward,
 	'tabs.group': cmdTabGroup, 'tabs.ungroup': cmdTabUngroup,
 	nav: cmdNav, eval: cmdEval, content: cmdContent, find: cmdFind,
 	click: cmdClick, input: cmdInput, press: cmdPress, scroll: cmdScroll,
