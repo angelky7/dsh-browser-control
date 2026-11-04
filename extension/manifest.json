@@ -1,33 +1,33 @@
 {
-	"manifest_version": 3,
-	"name": "DSH Browser Control",
-	"short_name": "DSH Bridge",
-	"version": "1.7.1",
-	"description": "让 DeepSeek Harness (dsh) 通过本地桥接服务控制浏览器：导航、读内容、执行 JS、点击、输入、按键、截图。",
-	"minimum_chrome_version": "116",
-	"permissions": [
-		"debugger",
-		"tabs",
-		"tabGroups",
-		"storage",
-		"alarms"
-	],
-	"background": {
-		"service_worker": "background.js"
-	},
-	"action": {
-		"default_title": "DSH Browser Control",
-		"default_popup": "popup.html",
-		"default_icon": {
-			"16": "icons/icon16.png",
-			"48": "icons/icon48.png",
-			"128": "icons/icon128.png"
-		}
-	},
-	"icons": {
-		"16": "icons/icon16.png",
-		"48": "icons/icon48.png",
-		"128": "icons/icon128.png"
-	},
-	"incognito": "not_allowed"
+  "manifest_version": 3,
+  "name": "DSH Browser Control",
+  "short_name": "DSH Bridge",
+  "version": "1.7.2",
+  "description": "让 DeepSeek Harness (dsh) 通过本地桥接服务控制浏览器：导航、读内容、执行 JS、点击、输入、按键、截图。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "DSH Browser Control",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "incognito": "not_allowed"
 }

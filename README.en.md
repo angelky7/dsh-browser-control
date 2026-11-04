@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.7.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.1/DSH-Browser-Control-v1.7.1.zip) | Chrome extension (unzip and load; this release adds the metrics command and emulate throttling — reinstall required) |
-| [dsh-browser-control-plugin-v1.7.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.1/dsh-browser-control-plugin-v1.7.1.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; this release adds the cdp channel and capabilities handshake — **reinstall required, and the last one a feature update will ever ask for**: CDP-level features now ship plugin-side) |
+| [dsh-browser-control-plugin-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/dsh-browser-control-plugin-v1.7.2.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.1"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.2"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -288,6 +288,7 @@ Chrome browser
 - Persistent debugger attachment — banner stays visible during control
 - Listens on 127.0.0.1 only; the command surface (WebSocket and HTTP) shares one token, and no cross-origin access is granted
 - The wire protocol has its own version, bumped only when the frame contract changes; a mismatch is named on the status page
+- **Plugin upgrades never regress old extensions** (iron rule: plugin x + extension x-n ≥ plugin x-n + extension x-n): from v1.7.2 the hello frame carries capabilities for an exact handshake, old extensions fall back to the version map, and a missing command is refused pre-flight with an actionable reinstall pointer instead of a raw unknown command — CDP-level features now ship plugin-side
 
 ## Verified
 
@@ -301,6 +302,7 @@ Chrome browser
 | `verify_extension_e2e` harness: real bridge + real extension code + real WebSocket end to end (frame contract, command reachability, error classification) | ✅ 2026-10-11 — only `chrome.*` is faked; visuals and real CDP behaviour still need a live browser |
 | `verify_cdp_retry` harness: session recovery after Chrome steals the attach, replay must not re-run side effects, bounded retries (6 scenarios) | ✅ 2026-10-11, real `background.js` against a stateful fake `chrome.debugger`; cross-checked on a merge-preview build |
 | `verify_render_contract` harness: every tool's real return value goes through the host's own output validator **and** its own `render`, asserting the model-facing text actually contains the data the call asked for | ✅ 2026-10-12, real bridge + fake extension + host `validateJsonSchemaValue`; this layer had **zero coverage** before, which is how two defect classes survived 12 / 5 released versions |
+| `verify_compat_matrix` harness: materializes **real historical extension code from git tags** (v1.2.0–v1.7.1) and runs 27 probes per surface against the current plugin, cell-by-cell asserting “≥ the matched pair from that era”; newer tools must fail with the actionable extension-outdated pointer, never a raw unknown command; append-only command surface (extension upgrades are pure gains for old plugins too) | ✅ 2026-11-04, 5 surfaces × 150 checks; exercises the version-map fallback path real old hellos take |
 | **Real host × real browser**: local dsh `0.2.0-rc.2` mounted this plugin from an isolated `DSH_HOME`, the user's actual Chrome attached to the bridge, and 9 read-only tools ran through the real code path | ✅ 2026-10-12, Chrome 153 + extension 1.0.10: `browser_read` returned 1,341 chars of real page text, `browser_snapshot` returned 14 ref-bearing lines, zero output-schema violations; **this is also the run that exposed an older extension silently ignoring `mode:"ax"`** (local extension was 1.0.10, predating the 1.0.11 AX snapshot) — the plugin now reports `axFallback` explicitly |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 

@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.7.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.1/DSH-Browser-Control-v1.7.1.zip) | Chrome 扩展（解压后加载；这一版扩展新增 metrics 命令与 emulate 节流参数，**必须重装**） |
-| [dsh-browser-control-plugin-v1.7.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.1/dsh-browser-control-plugin-v1.7.1.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；这一版新增 cdp 通道与 capabilities 握手，**必须重装——也是最后一次因功能更新而重装**，此后 CDP 层新能力只更 dsh 插件） |
+| [dsh-browser-control-plugin-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/dsh-browser-control-plugin-v1.7.2.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.1"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.2"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -282,6 +282,7 @@ Chrome 浏览器
 - 持久 debugger 附着——控制期间横幅始终显示
 - 仅监听 127.0.0.1；命令面（WS 与 HTTP）共用同一个 Token，跨源一律不放行
 - 协议版本独立于版本号：帧契约变了才升，不匹配时状态页直接写出该升级哪一侧
+- **插件升级对旧扩展零倒退**（铁律：插件 x + 扩展 x-n ≥ 插件 x-n + 扩展 x-n）：v1.7.2 起 hello 带 capabilities 精确握手，老扩展走版本映射兜底；缺命令的动作在发送前拦下，给可执行的重装指引而不是裸 unknown command——CDP 层新能力此后只更插件
 
 ## 已验证
 
@@ -295,6 +296,7 @@ Chrome 浏览器
 | 实测台 `verify_extension_e2e`：真桥 + 真扩展代码 + 真 WebSocket 端到端（帧契约、命令可达、错误分类） | ✅ 2026-10-11，只有 `chrome.*` 是假的；视觉与真实 CDP 行为仍需实机确认 |
 | 实测台 `verify_cdp_retry`：CDP 会话被抢走后的恢复 / 重放不许把副作用做两遍 / 重试有界（6 场景） | ✅ 2026-10-11，真实 `background.js` + 有状态假 `chrome.debugger`；另用合并预览文件交叉验证过 |
 | 实测台 `verify_render_contract`：每条工具的真实返回值同时喂给宿主的输出校验器与它自己的 `render`，断言「模型可见文本里有这次调用真正要的数据」 | ✅ 2026-10-12，真桥 + 假扩展 + 宿主 `validateJsonSchemaValue`；这一层此前**零覆盖**，所以两类缺陷活了 12 / 5 个版本 |
+| 实测台 `verify_compat_matrix`：兼容矩阵——从 git 标签物化**真实历史扩展代码**（v1.2.0–v1.7.1），当前插件对每个面跑 27 个探针逐格验收「≥ 当年组合」；新工具报带重装指引的 extension-outdated、绝不许 unknown command 冒充；命令面 append-only（扩展升级对旧插件也纯增益） | ✅ 2026-11-04，5 面 × 150 项；老 hello 无 capabilities ⇒ 版本映射兜底路径的实测 |
 | **真实宿主 × 真实浏览器**：本机 dsh `0.2.0-rc.2` 用隔离 `DSH_HOME` 挂载本插件，用户的真实 Chrome 连上桥，9 条只读工具全部走真实代码路径 | ✅ 2026-10-12，Chrome 153 + 扩展 1.0.10：`browser_read` 交出 1341 字符真实正文、`browser_snapshot` 交出 14 条带 ref 的清单、输出 schema 零违规；**也正是这一跑发现了旧扩展会静默忽略 `mode:"ax"`**（本机扩展是 1.0.10，早于 AX 快照的 1.0.11）——已改成插件侧显式回报 `axFallback` |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 

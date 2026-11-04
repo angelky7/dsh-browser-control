@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.7.2 (2026-11-04)
+
+**这一版改了 `extension/`（新增 `cdp` 命令 + hello 带 capabilities）——扩展必须重装；这也是最后一次「功能更新要求重装」**：从这一版起握手让插件知道扩展有什么，CDP 层的新能力（路线图上的拖拽 / mock / iframe / screencast……）此后全部只更插件。同时把用户定的铁律钉成机器可查的台子：**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**，逐条功能比，从此不许倒退。
+
+- **capabilities 握手**：扩展的 hello 帧现在带 `capabilities`（`COMMANDS` 键列表，v1.7.2+）。插件优先按这份清单精确判断「这条命令扩展有没有」；老扩展的 hello 不带这个字段 ⇒ 退回**版本映射**（`EXTENSION_COMMANDS_BY_VERSION`，1.5.0 起的逐版命令增量）从报上来的版本推算。不在表里的命令按基线假定在场、比所有条目都新的版本假定什么都有——扩展从不删命令，乐观方向是安全的。
+- **`extension_outdated` 结构化错误**：插件比扩展新时不再让老扩展报裸 `unknown command`——9 条闸门（`requireExtensionCommand`）在发送前拦下，错误带版本现状、缺的命令、引入版本与一条**可执行的**重装指引（releases/latest → 解压 → chrome://extensions 替换旧目录），`code=extension_outdated`。升级插件对旧扩展从此是纯增益。
+- **兼容矩阵台 `verify_compat_matrix.mjs`（150 项）**：从 git 标签物化**真实的历史扩展代码**（v1.2.0 / 1.5.0 / 1.6.0 / 1.7.0 / 1.7.1 五个面，不是模拟），当前插件对每面跑 27 个探针逐格验收：当年就有的工具**照常工作（≥ 当年组合）**；比扩展新的必须报带指引的 extension-outdated；错误里绝不允许 `unknown command` 冒充契约性失败；反向 **append-only**（历史命令面 ⊆ 当前命令面，扩展升级对旧插件同样纯增益）。老 hello 无 capabilities ⇒ 版本映射兜底这条路径第一次有了实测。铁律从此机器可查，不靠自觉。
+- **`cdp` 透传命令（扩展内部原语，不进模型工具面）**：任意 `Domain.method` 直达 CDP——「以后只更插件」的机械基础：插件侧新功能经这条预埋通道驱动扩展里已有的 CDP 会话，不用改扩展代码。登记三处（COMMANDS / WRITE_COMMANDS / surface 的 INTERNAL_OK）+ 闸门 '1.7.2'。模型工具面维持 **25 条**不变。
+- **对账升级**：`verify_surface` 新增两条（每条闸门都有版本映射兜底 / 映射里的命令都真实存在于扩展命令面）；`verify_extension_e2e` 新增两条（当前扩展 hello 的 capabilities 被桥原样收下 / capabilities 在场 ⇒ 闸门按能力放行、不走映射）。`npm run verify` 742 → **896 项 exit 0**；四处变异（吞 1.7.0 映射条目 / 吞 capabilities 解析 / 摘掉 windows.list 闸门 / 破坏重装指引 URL）各被不相交断言抓住——第一处被两个台同时抓住（对账台 + 矩阵 6 行）。
+
 ## v1.7.1 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `metrics` 命令 + `emulate` 节流参数）——扩展必须重装**；插件也要更新到 1.7.1。两个零新权限的测速基本功（从这一版起版本号在 patch 位递增）。

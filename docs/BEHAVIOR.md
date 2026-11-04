@@ -160,3 +160,15 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 之所以放在客户端而不是桥接侧：桥的唯一实际边界是回环地址 + token，而 token 明写在 profile 的
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，
 才是模型够不到的那一层。
+
+## 兼容契约（插件升级 × 旧扩展）
+
+铁律：**dsh 插件 x + 扩展 x-n 的体验 ≥ dsh 插件 x-n + 扩展 x-n**——升级插件永远不许比「那个年代的配套组合」差，逐条功能比。实现与验证：
+
+| 维度 | 行为 |
+|---|---|
+| capabilities 握手 | v1.7.2+ 扩展的 hello 帧带 `capabilities`（扩展 `COMMANDS` 表的键列表）。桥原样收下，插件按这份清单**精确**判断「这条命令扩展有没有」 |
+| 版本映射兜底 | 老扩展的 hello 不带 capabilities ⇒ 插件按 `EXTENSION_COMMANDS_BY_VERSION`（1.5.0 起的逐版命令增量）从报上来的版本推算命令面。不在表里的命令按基线假定在场；比所有条目都新的版本假定什么都有。方向性依据：扩展从不删命令（矩阵台的 append-only 断言守着），乐观放行只会撞上真实的 unknown command，不会冤枉好命令 |
+| extension_outdated | 插件比扩展新时，9 条闸门（`requireExtensionCommand`）在命令发出**之前**拦下：`code=extension_outdated`，点名缺的命令、引入版本、以及一条可执行的重装指引（releases/latest → 解压 → chrome://extensions 替换旧目录）。绝不发出去吃裸 `unknown command`，更不静默假成功 |
+| 矩阵台 | `verify_compat_matrix.mjs` 从 git 标签物化**真实的历史扩展代码**（v1.2.0 / 1.5.0 / 1.6.0 / 1.7.0 / 1.7.1），当前插件对每面跑 27 个探针：旧工具照常工作（≥ 当年组合）、新工具必须报带指引的 outdated、错误里绝不允许 unknown command 冒充契约性失败、命令面 append-only。老 hello 无 capabilities ⇒ 版本映射兜底路径的实测也在这张台上 |
+| 扩展预埋 `cdp` | 1.7.2 起扩展带一条 `cdp` 透传（`Domain.method` 直达 CDP，**不进模型工具面**）。这是「以后只更插件」的机械基础：插件侧新功能经这条预埋通道驱动扩展里已有的 CDP 会话；CDP 层的新能力（拖拽 / mock / iframe / screencast……）从此只发插件。走 `cdp` 的新功能对老扩展（<1.7.2）同样被闸门拦下并给重装指引 |
