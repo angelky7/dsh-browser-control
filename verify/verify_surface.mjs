@@ -43,7 +43,7 @@ const ghost = [...pluginCommands].filter((c) => !extCommands.has(c));
 check("插件调用的命令都在扩展表里", ghost.length === 0, ghost.length ? `扩展没有：${ghost.join(", ")}` : `${pluginCommands.size} 个全部命中`);
 
 // 3) 扩展实现了但插件没暴露（ping 是链路保活，允许内部使用）
-const INTERNAL_OK = new Set(["ping"]);
+const INTERNAL_OK = new Set(["ping", "cdp"]);
 const unexposed = [...extCommands].filter((c) => !pluginCommands.has(c) && !INTERNAL_OK.has(c));
 check("扩展没有「实现了但 agent 拿不到」的命令", unexposed.length === 0, unexposed.length ? unexposed.join(", ") : "全部已暴露");
 
@@ -78,6 +78,25 @@ const claimed = [...llms.matchAll(/(\d+)\s*个\s?\`?browser_\*`?/g)].map((m) => 
 const countWrong = claimed.filter((c) => c !== srcTools.size);
 check("llms.txt 写的工具数量与源码一致", claimed.length === 0 ? true : countWrong.length === 0,
   claimed.length ? `写的是 ${claimed.join("/")}，实际 ${srcTools.size}` : "没写数量");
+
+// 8) 版本映射 ↔ 闸门对账（v1.7.2 capabilities 握手的兜底路径）：老扩展的 hello 不带
+//    capabilities，插件只能靠「命令 → 引入版本」的表回答「它有没有」。闸门写了
+//    requireExtensionCommand 而映射表里没有对应条目的话，老扩展侧会静默放行到
+//    unknown command；映射表里有扩展从来没有过的命令也一样是坏的。
+const mapStart = lib.indexOf("const EXTENSION_COMMANDS_BY_VERSION");
+const mapBlock = lib.slice(mapStart, lib.indexOf("];", mapStart));
+const chunks = mapBlock.split(/since: "([\d.]+)"/);
+const byVersion = new Map();
+for (let i = 1; i < chunks.length; i += 2) {
+  byVersion.set(chunks[i], [...chunks[i + 1].matchAll(/"([a-zA-Z_.]+)"/g)].map((c) => c[1]));
+}
+const gates = [...lib.matchAll(/requireExtensionCommand\("([a-zA-Z_.]+)", "([\d.]+)"\)/g)].map((m) => [m[1], m[2]]);
+const mapMisses = gates.filter(([cmd, since]) => !(byVersion.get(since)?.includes(cmd)));
+check("每条 requireExtensionCommand 闸门都有版本映射兜底", mapMisses.length === 0,
+  mapMisses.length ? mapMisses.map(([c, s]) => `${c}@${s}`).join(", ") : `${gates.length} 条闸门全覆盖`);
+const ghostMap = [...byVersion.values()].flat().filter((c) => !extCommands.has(c));
+check("版本映射里的命令都真实存在于扩展命令面", ghostMap.length === 0,
+  ghostMap.length ? `映射吹了：${ghostMap.join(", ")}` : `${byVersion.size} 个版本条目全部对得上`);
 
 console.log(`\n结论：${fails === 0 ? "三层一致" : fails + " 项不一致"}`);
 process.exit(fails === 0 ? 0 : 1);

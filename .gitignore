@@ -6,3 +6,6 @@ lib/tsconfig.tsbuildinfo
 .DS_Store
 *.tmp
 dsh-browser-shots/
+
+# 兼容矩阵台从 git 标签物化的历史扩展代码（verify_compat_matrix.mjs 生成）
+.compat-cache/

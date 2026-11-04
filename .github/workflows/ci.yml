@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # verify_compat_matrix 用 `git show <tag>:extension/background.js` 物化
+          # 历史扩展代码；默认 checkout 不带标签，矩阵台会在 CI 上假红
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -94,6 +98,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:

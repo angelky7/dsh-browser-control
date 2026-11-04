@@ -155,6 +155,9 @@ function cdpResult(model, method, params, tabId) {
       if (expression.includes("document.title")) return { result: { value: model.page.title } };
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
       if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };
+      // cmdWait 的轮询条件固定包一层 `(() => { const f = (...); return typeof f ===
+      // 'function' ? ... })()`：按「谓词在页里为真」演，否则 wait 在默认假件下永远超时。
+      if (expression.includes("typeof f === 'function'")) return { result: { value: true } };
       return { result: { value: null } };
     }
     case "Page.getNavigationHistory": {
@@ -728,13 +731,16 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
  * @param options.realWebSocket 注入 Node 的全局 WebSocket，让它真的去连本地 BridgeServer
  * @param options.backgroundPath 换一份扩展代码来跑（评审外部补丁 / 合并预览用），默认仓库的 extension/background.js
  */
-export async function bootBackground({ model, withTabGroups = true, storage = {}, sessionStorage, realWebSocket = false, backgroundPath, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
+export async function bootBackground({ model, withTabGroups = true, storage = {}, sessionStorage, realWebSocket = false, backgroundPath, manifest, userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" } = {}) {
   const code = backgroundPath
     ? await readFile(new URL(backgroundPath, import.meta.url), "utf8")
     : (bgCode ??= await readFile(BG_PATH, "utf8"));
   // 扩展在加载期就读 getManifest().version 并把它报给桥，所以喂真的 manifest.json，
-  // 免得一发布版本号就和一个写死在测试台里的字符串悄悄分家
-  realManifest ??= JSON.parse(await readFile(MANIFEST_PATH, "utf8"));
+  // 免得一发布版本号就和一个写死在测试台里的字符串悄悄分家。
+  // manifest 覆盖给兼容矩阵台用：历史版本的 background.js 配历史版本的 manifest，
+  // hello 里的版本号才是那个年代真正的版本号（插件按它做能力映射兜底）。
+  // 注意 manifest 覆盖必须**每次生效**——模块级缓存只服务默认路径。
+  realManifest = manifest ?? (realManifest ?? JSON.parse(await readFile(MANIFEST_PATH, "utf8")));
   const browser = model ?? makeModel();
   const sandbox = {
     console: { log: () => {}, warn: () => {}, error: () => {}, debug: () => {} },

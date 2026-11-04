@@ -51,6 +51,12 @@ const manifestVersion = JSON.parse(await readFile(new URL("../extension/manifest
 check("扩展上报的版本与 manifest.json 一致", server.status.hello?.version === manifestVersion,
   `hello=${server.status.hello?.version} manifest=${manifestVersion}`);
 
+// v1.7.2 capabilities 握手：当前扩展把 COMMANDS 键列表放进 hello，插件据此放行新命令
+const helloCaps = server.status.hello?.capabilities;
+check("hello 帧带来的 capabilities 被桥原样收下（当前扩展 ≥1.7.2）",
+  Array.isArray(helloCaps) && helloCaps.includes("cdp") && helloCaps.includes("metrics") && helloCaps.includes("tabs.back"),
+  JSON.stringify(helloCaps ?? null));
+
 const call = async (command, params = {}, timeoutMs = 4000) => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/command`, {
     method: "POST",
@@ -89,6 +95,12 @@ const dissolved = await call("tabs.ungroup", {});
 check("HTTP 下发 tabs.ungroup → 组确实被拆了",
   dissolved.json.result?.ungrouped >= 2 && model.groups.size === 0,
   JSON.stringify(dissolved.json.result));
+
+/* capabilities 在场 ⇒ 闸门按能力放行（同一条 hello，不走版本映射兜底） */
+const capsBack = await call("tabs.back", { tabId: group.tabId });
+check("capabilities 在场 ⇒ 新命令闸门放行（不走版本映射兜底）",
+  capsBack.status === 200 && capsBack.json?.ok !== false,
+  JSON.stringify(capsBack.json).slice(0, 160));
 
 /* 错误也要走完整条链路：扩展抛错 → 桥分类 → HTTP 结构化 */
 const bad = await call("no.such-command", {});

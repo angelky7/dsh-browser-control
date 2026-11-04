@@ -54,6 +54,11 @@ export interface BridgeHello {
   /** Frame-contract revision the extension declared; 0 when it predates versioning. */
   readonly protocol: number
   readonly browser: { readonly name: string; readonly version: string; readonly ua: string }
+  /**
+   * Command names the extension implements (v1.7.2+). Absent when the extension
+   * predates the capability handshake — callers fall back to a version map.
+   */
+  readonly capabilities?: readonly string[]
 }
 
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
@@ -553,7 +558,7 @@ export class BridgeServer {
     const full = this.continuationRemainder
     this.continuationRemainder = ''
     this.continuationOpen = false
-    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown }
+    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown; capabilities?: unknown }
     try {
       msg = JSON.parse(full) as typeof msg
     } catch {
@@ -562,13 +567,17 @@ export class BridgeServer {
     }
     if (msg.type === 'hello') {
       const declared = typeof msg.protocol === 'number' ? msg.protocol : 0
+      const capabilities = Array.isArray(msg.capabilities)
+        ? msg.capabilities.filter((c): c is string => typeof c === 'string')
+        : undefined
       this.hello = {
         client: typeof msg.client === 'string' ? msg.client : 'unknown',
         version: typeof msg.version === 'string' ? msg.version : 'unknown',
         protocol: declared,
         browser: (msg.browser ?? { name: 'unknown', version: 'unknown', ua: '' }) as BridgeHello['browser'],
+        ...(capabilities !== undefined ? { capabilities } : {}),
       }
-      this.log(`hello: client=${this.hello.client} v${this.hello.version} protocol=v${declared || '?'} browser=${this.hello.browser.name} ${this.hello.browser.version}`)
+      this.log(`hello: client=${this.hello.client} v${this.hello.version} protocol=v${declared || '?'} browser=${this.hello.browser.name} ${this.hello.browser.version}${capabilities ? ` capabilities=${capabilities.length}` : ''}`)
       const note = this.protocolNote
       if (note !== null) this.log(`protocol mismatch: ${note}`)
       return

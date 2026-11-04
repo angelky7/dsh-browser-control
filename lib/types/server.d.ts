@@ -42,6 +42,11 @@ export interface BridgeHello {
         readonly version: string;
         readonly ua: string;
     };
+    /**
+     * Command names the extension implements (v1.7.2+). Absent when the extension
+     * predates the capability handshake — callers fall back to a version map.
+     */
+    readonly capabilities?: readonly string[];
 }
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
 export interface BridgeServerStatus {

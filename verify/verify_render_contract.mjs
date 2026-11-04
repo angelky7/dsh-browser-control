@@ -54,14 +54,24 @@ apply(ctx, config);
 await new Promise((r) => setTimeout(r, 400));
 
 // ---- 假扩展：按命令名回话，命令名 → 载荷 ----
+// v1.7.2 起插件按 hello 的 capabilities（或版本映射）预检命令面：假扩展要扮一个
+// 1.7.2+ 的扩展 —— capabilities 取自扩展 COMMANDS 表原文，版本取自 manifest，
+// 不然 tabs.back/windows.* 这些闸门会把这个台子当成「老扩展」拦在门外。
+import { readFile } from "node:fs/promises";
+const bgText = await readFile(new URL("../extension/background.js", import.meta.url), "utf8");
+const cmdTableAt = bgText.indexOf("const COMMANDS = {");
+const cmdTable = bgText.slice(cmdTableAt, bgText.indexOf("}", cmdTableAt));
+const COMMAND_KEYS = [...cmdTable.matchAll(/(?:^|[{,\s])'?([a-zA-Z_.]+)'?\s*:\s*cmd[A-Z]\w*/gm)].map((m) => m[1]);
+const manifest = JSON.parse(await readFile(new URL("../extension/manifest.json", import.meta.url), "utf8"));
 let answers = {};
 const seen = [];
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`);
 await new Promise((r) => {
   ws.onopen = () => {
     ws.send(JSON.stringify({
-      type: "hello", client: "fake-extension", version: "1.2.0", protocol: 1,
+      type: "hello", client: "fake-extension", version: manifest.version, protocol: 1,
       browser: { name: "fake", version: "1", ua: "" },
+      capabilities: COMMAND_KEYS,
     }));
     r();
   };

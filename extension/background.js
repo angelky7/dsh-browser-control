@@ -207,7 +207,10 @@ function sendHello() {
 	const name = /Edg\//.test(ua) ? 'edge' : /Chrome\//.test(ua) ? 'chrome' : 'chromium';
 	const versionMatch = ua.match(/(?:Edg|Chrome)\/([\d.]+)/);
 	helloInfo = { name, version: versionMatch ? versionMatch[1] : 'unknown', ua };
-	send({ type: 'hello', client: 'dsh-browser-extension', version: EXT_VERSION, protocol: PROTOCOL_VERSION, browser: helloInfo });
+	// 能力清单（v1.7.2）：把命令面原样报给桥，插件据此做能力对账——
+	// 缺什么、要不要重装扩展，由系统说话而不是让调用撞上 unknown command 再猜。
+	// 老插件不认识这个字段会直接忽略；本字段缺失时插件按版本静态映射兜底。
+	send({ type: 'hello', client: 'dsh-browser-extension', version: EXT_VERSION, protocol: PROTOCOL_VERSION, browser: helloInfo, capabilities: Object.keys(COMMANDS) });
 }
 
 /* Alarm keeps the SW alive for reconnect even without user events. */
@@ -432,7 +435,7 @@ const HOLD_FIXED_TITLE = 'DSH Browser Control'
 /** 正文上限：模型给的话头再长也不会把卡片撑爆；换行压平成空格。 */
 const HOLD_NOTE_MAX = 400
 /** 中止态下直接拒绝的扩展命令（与 #17 里列的那四条一致）。 */
-const HOLD_BLOCKED_COMMANDS = new Set(['click', 'input', 'press', 'nav', 'tabs.back', 'tabs.forward'])
+const HOLD_BLOCKED_COMMANDS = new Set(['click', 'input', 'press', 'nav', 'tabs.back', 'tabs.forward', 'cdp'])
 /** 拒绝文案前缀：与 src/errors.ts 里的同名常量对账（verify_errors 会检查两边一致）。 */
 const HOLD_ABORTED_MARKER = 'browser-hold-aborted:'
 
@@ -1428,6 +1431,21 @@ const PRESETS = {
 	'mobile-pixel-7': { width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36' },
 	'tablet-ipad': { width: 768, height: 1024, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1' },
 };
+
+/**
+ * CDP 透传（v1.7.2，扩展驱动层定型）：把 `{method, params}` 原样发给该标签页
+ * 已附着的调试会话、原样返回结果。这是**内部原语**——不注册成模型工具；之后
+ * 拖拽/画面流/iframe/mock 等路线图项全部由插件基于它实现，扩展不再因 CDP 类
+ * 功能发版。它的原始能力不大于已有的 `eval`（页面内任意 JS），闸门照旧：
+ * 写命令、不进只读白名单、接管中止态与硬锁都在入口拦。诚实口径：透传返回
+ * CDP 原始载荷，回执整形是插件侧的职责。
+ */
+async function cmdCdp(params) {
+	if (!params.method || typeof params.method !== 'string') throw new Error('params.method is required');
+	if (!/^[A-Z][A-Za-z]+\.[A-Za-z]+$/.test(params.method)) throw new Error(`params.method must look like "Domain.method" — got ${JSON.stringify(params.method)}`);
+	const tab = await resolveTab(params.tabId);
+	return withCDP(tab.id, (send) => send(params.method, params.params ?? {}));
+}
 
 async function cmdBrowserInfo() {
 	return { client: 'dsh-browser-extension', version: EXT_VERSION, browser: helloInfo };
@@ -2622,7 +2640,7 @@ const COMMANDS = {
 	snapshot: cmdSnapshot, screenshot: cmdScreenshot,
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
-	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive, metrics: cmdMetrics,
+	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive, metrics: cmdMetrics, cdp: cmdCdp,
 	'windows.list': cmdWindowsList, 'windows.open': cmdWindowsOpen, 'windows.update': cmdWindowsUpdate,
 	'windows.close': cmdWindowsClose, 'windows.moveTab': cmdWindowsMoveTab,
 	'cookies.get': cmdCookiesGet, 'cookies.set': cmdCookiesSet, 'cookies.remove': cmdCookiesRemove,
