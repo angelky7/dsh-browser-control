@@ -29,6 +29,9 @@ export const READ_ONLY_ALLOWED: ReadonlySet<string> = new Set([
 	'windows.list',
 	// 读浏览器自己的状态（cookie 是凭据，但 get 不改任何东西；set/remove 不在此列）
 	'cookies.get',
+	// 读性能计数器（Performance.getMetrics）：纯粹读，重试无损害；节流（emulate
+	// 的 network/cpu 参数）改页面加载行为，emulate 整体仍是写命令，不在此列。
+	'metrics',
 ])
 
 /**

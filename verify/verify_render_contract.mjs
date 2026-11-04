@@ -330,6 +330,12 @@ const GROUND_TRUTH = [
     { id: 1, state: "normal", focused: true, width: 800, height: 600 }, ["800", "600", "normal"]],
   ["browser_emulate", "emulate", { device: "mobile-pixel-7" },
     { tabId: 3, width: 412, height: 915, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7)" }, ["412", "915", "mobile=true", "UA="]],
+  // 节流回执：哪档网络/几倍 CPU 在生效必须进模型可见文本（v1.7.1）
+  ["browser_emulate", "emulate", { device: "desktop", network: "slow3g", cpuThrottlingRate: 4 },
+    { tabId: 3, width: 1280, height: 800, deviceScaleFactor: 1, isMobile: false, hasTouch: false, network: "slow3g", latency: 400, downloadThroughput: 51200, uploadThroughput: 51200, cpuThrottlingRate: 4 }, ["slow3g(400ms", "cpu×4"]],
+  // 性能指标：数字本身就是产出（v1.7.1）
+  ["browser_metrics", "metrics", {},
+    { tabId: 3, metrics: { Nodes: 456, JSHeapUsedSize: 10_485_760, JSHeapTotalSize: 20_971_520, LayoutCount: 7, ScriptDuration: 2.5, TaskDuration: 4 } }, ["nodes=456", "heap=10.0/20.0MB", "layouts=7"]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
@@ -348,7 +354,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

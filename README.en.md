@@ -265,11 +265,12 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_pdf` | Export the current page as PDF (v1.0.7+) |
 | `browser_archive` | Save the whole page as a single-file MHTML (text/images/styles inline; a greppable offline evidence snapshot — embedded scripts do not run, v1.5.0+) |
 | `browser_windows` | Window control: list / open / update state & geometry / close a whole window / move tabs across windows (the only tool that may touch window geometry, v1.6.0+) |
-| `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+) |
+| `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+); v1.7.1+ adds throttling: `network` slow3g/fast3g/offline/reset + `cpuThrottlingRate` (1–20), the receipt states the applied numbers, `device:"reset"` clears them too |
+| `browser_metrics` | Read performance counters (DOM nodes / JS heap / layout & script durations, Performance.getMetrics, read-only; puts numbers behind "this page is heavy", v1.7.1+) |
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-24 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+25 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

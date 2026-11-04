@@ -165,6 +165,20 @@ function cdpResult(model, method, params, tabId) {
         entries: tab.history.entries.map((url, i) => ({ id: i + 1, url })),
       };
     }
+    case "Performance.getMetrics": {
+      // 默认给一份带**未知名字**的清单：cmdMetrics 只透传已知指标（封闭 schema 的
+      // 前提），这个坑让默认假件替实现守着。
+      const list = model.metrics ?? [
+        { name: "Timestamp", value: 1_760_000_000_000 },
+        { name: "Nodes", value: 123 },
+        { name: "JSHeapUsedSize", value: 4_404_019 },
+        { name: "JSHeapTotalSize", value: 8_388_608 },
+        { name: "LayoutCount", value: 5 },
+        { name: "ScriptDuration", value: 1.25 },
+        { name: "MysteryFutureMetric", value: 42 },
+      ];
+      return { metrics: list };
+    }
     case "DOM.resolveNode": {
       const objectId = model.byBackend.get(params?.backendNodeId);
       return objectId ? { object: { objectId } } : {};

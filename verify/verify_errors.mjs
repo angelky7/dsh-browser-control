@@ -109,6 +109,9 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
     // 也是空操作——都按「重试会不会造成额外损害」算读；但它们改浏览器状态，
     // 只读档照拒（不在 READ_ONLY_ALLOWED，只有 windows.list 在）。
     'windows.list', 'windows.update', 'windows.close', 'windows.moveTab',
+    // 性能计数器纯读（metrics 也进了 READ_ONLY_ALLOWED）；弱网/CPU 节流挂在
+    // emulate 上，emulate 本来就在写命令表里，这里不用另登记。
+    'metrics',
     // cookie 三条：set/remove 都是幂等的——重设同一颗、重复删同一颗，结果不变，
     // 所以按本文件顶部的判据（「重试会不会造成额外损害」）算只读；改浏览器状态的那道
     // 闸门在 policy.ts 的只读档里（set/remove 默认拒），两张表各管各的语义。

@@ -49,6 +49,8 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - **整页存档（`browser_archive`）**：`Page.captureSnapshot(MHTML)`，正文/图片/样式全内联成单文件，扩展回原始载荷、插件写 `.mhtml`（`path` 可指定绝对路径，否则落 shotsDir，与 pdf/screenshot 同约定）。**它是快照，不是活页**：内嵌脚本不会运行、存档之后的页面变化不反映；可以当文本 grep。只读档拒绝（写本地文件，与 pdf/screenshot 同类）。实测台：`verify/verify_archive.mjs`。
 - 点击结果包含实际命中点 `clicked.x/y` 与 `hitVerified`（命中元素是否等于目标元素）。`hitVerified: false` 时附 `hitInstead` 字段指明实际命中的元素——典型场景是 sticky 头部/广告遮挡。
 - **历史导航（`browser_tabs action:"back"/"forward"`，v1.7.0）**：目的地从 `Page.getNavigationHistory` **读**出来，不猜——到达判据与 navigate 同一套（`frameNavigated` 提交 + dcl/load 在认领之后才算 + 1.2s 宽限期比落点）。三种「没动」分得清楚：历史尽头当场回 `unchanged:true` + 原因（什么都不发射，不浪费预算）；历史读不到时退化成「任何提交都算」并标 `historyUnknown:true`；预算耗尽报 `loadPending:true`。回执带 `targetUrl`（这次去的是哪条）。**重试会多跳一条历史** ⇒ 写命令（与 nav 同族），只读档拒；接管浮层中止态同样拦（`HOLD_BLOCKED_COMMANDS`）。实测台：`verify/verify_history_nav.mjs`。
+- **弱网 / CPU 限速（`browser_emulate` 的 `network` / `cpuThrottlingRate`，v1.7.1）**：`network` 预设 slow3g（400ms RTT，双向 ~50KB/s）/ fast3g（150ms，~200KB/s 下 / ~94KB/s 上）/ offline / reset——数值是本工具自己定的（对齐 DevTools/Lighthouse 数量级，不冒充其同名预设），写进工具描述。`cpuThrottlingRate` 1–20（1 = 不限）。**回执报生效数值**（latency/吞吐/倍率），render 也写——模型只看那句话。节流挂在 debugger 会话上：扩展 detach 即失效；`device:"reset"` 是「全部还原」，连节流一起清（只清设备形状会让模型以为回到了真实环境）。emulate 整体仍是写命令（节流改页面加载行为）。
+- **性能指标（`browser_metrics`，v1.7.1）**：`Performance.getMetrics`，只读（重试只是再读一遍计数器），进只读白名单。指标名是 CDP 固定那批，扩展**只透传已知名字**（CDP 新增指标不会打穿封闭 schema），回空如实报错。回执与 render 带数字本身（nodes / heap（MB）/ layouts / script / tasks）。实测台：`verify/verify_metrics_throttle.mjs`。
 
 ## 超时
 

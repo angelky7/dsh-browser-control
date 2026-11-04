@@ -393,6 +393,25 @@ function closeTabIds(args: { tabId?: number; tabIds?: number[] }): number[] {
 	return ids
 }
 
+interface MetricsPayload {
+	tabId: number
+	metrics: {
+		Timestamp?: number
+		Documents?: number
+		Frames?: number
+		JSEventListeners?: number
+		Nodes?: number
+		LayoutCount?: number
+		RecalcStyleCount?: number
+		LayoutDuration?: number
+		RecalcStyleDuration?: number
+		ScriptDuration?: number
+		TaskDuration?: number
+		JSHeapUsedSize?: number
+		JSHeapTotalSize?: number
+	}
+}
+
 interface ScreenshotPayload {
 	tabId: number
 	format: 'png' | 'jpeg'
@@ -1538,10 +1557,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 
 	ctx.tools.register(defineTool({
 		name: 'browser_emulate',
-		description: 'Switch the tab into a device viewport (mobile / tablet / desktop) for responsive-UI testing. `device:"reset"` restores the user\'s actual viewport. Custom `width`/`height`/`deviceScaleFactor`/`isMobile`/`hasTouch` override any preset field.',
+		description: 'Switch the tab into a device viewport (mobile / tablet / desktop) for responsive-UI testing, and throttle the network or CPU to test slow conditions. `device:"reset"` restores the user\'s actual viewport and clears all throttling. `network` presets (this tool\'s own numbers): slow3g = 400ms RTT + ~50KB/s both ways, fast3g = 150ms + ~200KB/s down / ~94KB/s up, offline, reset to clear. `cpuThrottlingRate` multiplies CPU cost (1 = off, up to 20). Throttling lives in the debugger session — it is gone when the extension detaches, and device:"reset" clears it too. Custom `width`/`height`/`deviceScaleFactor`/`isMobile`/`hasTouch` override any preset field.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			device: { type: 'string', description: 'Preset: desktop | mobile-iphone-13 | mobile-pixel-7 | tablet-ipad | reset. Or pass custom width/height below.' },
+			network: { type: 'string', description: 'slow3g | fast3g | offline | reset. The receipt reports the applied latency/throughput in bytes per second.' },
+			cpuThrottlingRate: { type: 'number', description: 'CPU slowdown multiplier: 1 = none (default), 4 = mid-range phone, up to 20.' },
 			width: { type: 'number', description: 'Custom viewport width in CSS px.' },
 			height: { type: 'number', description: 'Custom viewport height in CSS px.' },
 			deviceScaleFactor: { type: 'number', description: 'Custom DPR (1 = standard, 2 = retina, 3 = super-retina).' },
@@ -1562,23 +1583,32 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					isMobile: { type: 'boolean' },
 					hasTouch: { type: 'boolean' },
 					userAgent: { type: 'string' },
+					network: { type: 'string' },
+					latency: { type: 'number' },
+					downloadThroughput: { type: 'number' },
+					uploadThroughput: { type: 'number' },
+					cpuThrottlingRate: { type: 'number' },
 				},
 			},
 			render: (_args, value) => {
-				if (value.reset) return [{ type: 'text', text: `Tab ${value.tabId}: emulation reset to default` }]
-				// 覆盖生效的是哪个 UA 必须写出来：模型只看这句，看不见 value 里的字段。
+				if (value.reset) return [{ type: 'text', text: `Tab ${value.tabId}: emulation reset to default (network unthrottled, CPU rate 1)` }]
+				// 覆盖生效的是哪个 UA / 哪档节流必须写出来：模型只看这句，看不见 value 里的字段。
 				const ua = value.userAgent === undefined ? '' : ` UA="${flattenOneLine(value.userAgent, 80)}"`
+				const net = value.network === undefined ? '' : ` network=${value.network}(${value.latency}ms↓${value.downloadThroughput}B/s↑${value.uploadThroughput}B/s)`
+				const cpu = value.cpuThrottlingRate === undefined ? '' : ` cpu×${value.cpuThrottlingRate}`
 				return [{
 					type: 'text',
-					text: `Tab ${value.tabId}: ${value.width || '?'}×${value.height || '?'} DPR=${value.deviceScaleFactor ?? '?'} mobile=${value.isMobile ?? false} touch=${value.hasTouch ?? false}${ua}`,
+					text: `Tab ${value.tabId}: ${value.width || '?'}×${value.height || '?'} DPR=${value.deviceScaleFactor ?? '?'} mobile=${value.isMobile ?? false} touch=${value.hasTouch ?? false}${ua}${net}${cpu}`,
 				}]
 			},
 		},
-		presentCall: args => ({ card: 'generic', title: `Emulate${args.device ? ' ' + args.device : ' device'}`, kind: 'other' as const }),
+		presentCall: args => ({ card: 'generic', title: `Emulate${args.device ? ' ' + args.device : ''}${args.network ? ' ' + args.network : ''}${args.cpuThrottlingRate ? ' cpu×' + args.cpuThrottlingRate : ''}`, kind: 'other' as const }),
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (typeof args.device === 'string') params.device = args.device
+			if (typeof args.network === 'string') params.network = args.network
+			if (typeof args.cpuThrottlingRate === 'number') params.cpuThrottlingRate = args.cpuThrottlingRate
 			if (typeof args.width === 'number') params.width = args.width
 			if (typeof args.height === 'number') params.height = args.height
 			if (typeof args.deviceScaleFactor === 'number') params.deviceScaleFactor = args.deviceScaleFactor
@@ -1594,6 +1624,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				isMobile?: boolean | null
 				hasTouch?: boolean | null
 				userAgent?: string | null
+				network?: string | null
+				latency?: number | null
+				downloadThroughput?: number | null
+				uploadThroughput?: number | null
+				cpuThrottlingRate?: number | null
 			}
 			// 扩展在无覆盖时回的是显式 `userAgent: null`（background.js:719），而宿主的
 			// 校验器对 null **会下钻判类型**（只跳过 undefined）。原样透传时
@@ -1607,7 +1642,71 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				...(typeof raw.isMobile === 'boolean' ? { isMobile: raw.isMobile } : {}),
 				...(typeof raw.hasTouch === 'boolean' ? { hasTouch: raw.hasTouch } : {}),
 				...(typeof raw.userAgent === 'string' && raw.userAgent.length > 0 ? { userAgent: raw.userAgent } : {}),
+				...(typeof raw.network === 'string' ? { network: raw.network } : {}),
+				...(typeof raw.latency === 'number' ? { latency: raw.latency } : {}),
+				...(typeof raw.downloadThroughput === 'number' ? { downloadThroughput: raw.downloadThroughput } : {}),
+				...(typeof raw.uploadThroughput === 'number' ? { uploadThroughput: raw.uploadThroughput } : {}),
+				...(typeof raw.cpuThrottlingRate === 'number' ? { cpuThrottlingRate: raw.cpuThrottlingRate } : {}),
 			}
+		},
+	}))
+
+	// Performance metrics: a pure read of CDP counters — whitelisted under
+	// readOnly, no effect on the page, and the numbers ARE the content.
+	ctx.tools.register(defineTool({
+		name: 'browser_metrics',
+		description: 'Read the tab\'s performance counters (Performance.getMetrics): DOM node count, JS heap usage, layout/style recalc counts, script/task durations. Use it to back "this page is heavy" with numbers, before and after an action. Read-only.',
+		parameters: {
+			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					tabId: { type: 'number', required: true },
+					metrics: {
+						type: 'object',
+						required: true,
+						additionalProperties: false,
+						properties: {
+							Timestamp: { type: 'number' },
+							Documents: { type: 'number' },
+							Frames: { type: 'number' },
+							JSEventListeners: { type: 'number' },
+							Nodes: { type: 'number' },
+							LayoutCount: { type: 'number' },
+							RecalcStyleCount: { type: 'number' },
+							LayoutDuration: { type: 'number' },
+							RecalcStyleDuration: { type: 'number' },
+							ScriptDuration: { type: 'number' },
+							TaskDuration: { type: 'number' },
+							JSHeapUsedSize: { type: 'number' },
+							JSHeapTotalSize: { type: 'number' },
+						},
+					},
+				},
+			},
+			render: (_args, value) => {
+				const m = (value.metrics ?? {}) as Record<string, number | undefined>
+				// 数字本身就是产出：关键几项原样进模型可见文本，heap 顺手换算成 MB。
+				const parts: string[] = []
+				if (m.Nodes !== undefined) parts.push(`nodes=${m.Nodes}`)
+				if (m.JSHeapUsedSize !== undefined) {
+					const total = m.JSHeapTotalSize !== undefined ? `/${(m.JSHeapTotalSize / 1_048_576).toFixed(1)}MB` : ''
+					parts.push(`heap=${(m.JSHeapUsedSize / 1_048_576).toFixed(1)}${total}`)
+				}
+				if (m.LayoutCount !== undefined) parts.push(`layouts=${m.LayoutCount}`)
+				if (m.ScriptDuration !== undefined) parts.push(`script=${Number(m.ScriptDuration).toFixed(2)}s`)
+				if (m.TaskDuration !== undefined) parts.push(`tasks=${Number(m.TaskDuration).toFixed(2)}s`)
+				return [{ type: 'text', text: `Tab ${value.tabId}: ${parts.join(' ') || JSON.stringify(value.metrics)}` }]
+			},
+		},
+		presentCall: () => ({ card: 'generic', title: 'Browser metrics', kind: 'other' as const }),
+		async execute(args, exec) {
+			const params: Record<string, unknown> = {}
+			if (args.tabId !== undefined) params.tabId = args.tabId
+			return await controller.execute('metrics', params, exec.signal) as MetricsPayload
 		},
 	}))
 }

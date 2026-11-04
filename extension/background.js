@@ -1327,11 +1327,37 @@ async function cmdArchive(params) {
  * overrides any field. Restoring back to desktop is `device:"reset"` so
  * the agent can clean up after itself.
  */
+/**
+ * 弱网/CPU 节流（v1.7.1）。数值是这一版自己定的（对齐 DevTools/Lighthouse 的
+ * 数量级，不冒充它们——那两个的数值随 Chrome 版本漂），写进工具描述让模型知道
+ * 自己在测什么。吞吐单位是 CDP 的字节/秒。节流挂在 debugger 会话上：detach 即失效。
+ */
+const NETWORK_PRESETS = {
+	slow3g: { latency: 400, downloadThroughput: 51_200, uploadThroughput: 51_200 },
+	fast3g: { latency: 150, downloadThroughput: 204_800, uploadThroughput: 96_000 },
+	offline: { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
+};
+
 async function cmdEmulate(params) {
 	const tab = await resolveTab(params.tabId);
 	const preset = params.device && params.device !== 'reset' ? PRESETS[String(params.device).toLowerCase()] : null;
 	if (params.device && params.device !== 'reset' && !preset && typeof params.device === 'string') {
 		throw new Error(`unknown device preset "${params.device}". Use one of: ${Object.keys(PRESETS).join(', ')}, reset, or pass width/height fields directly.`);
+	}
+	let network;
+	if (params.network !== undefined) {
+		const name = String(params.network);
+		if (name === 'reset') network = { name: 'reset' };
+		else if (!NETWORK_PRESETS[name]) {
+			throw new Error(`unknown network preset "${params.network}". Use one of: ${Object.keys(NETWORK_PRESETS).join(', ')}, reset.`);
+		} else network = { name, ...NETWORK_PRESETS[name] };
+	}
+	let cpuRate;
+	if (params.cpuThrottlingRate !== undefined) {
+		cpuRate = Number(params.cpuThrottlingRate);
+		if (!Number.isFinite(cpuRate) || cpuRate < 1 || cpuRate > 20) {
+			throw new Error(`params.cpuThrottlingRate must be a number between 1 (no throttle) and 20 — got ${JSON.stringify(params.cpuThrottlingRate)}`);
+		}
 	}
 	const width = Number(params.width ?? (preset && preset.width) ?? 0);
 	const height = Number(params.height ?? (preset && preset.height) ?? 0);
@@ -1344,7 +1370,32 @@ async function cmdEmulate(params) {
 			await send('Emulation.clearDeviceMetricsOverride').catch(() => {});
 			await send('Emulation.setUserAgentOverride', { userAgent: '' }).catch(() => {});
 			await send('Emulation.setTouchEmulationEnabled', { enabled: false }).catch(() => {});
-			return { tabId: tab.id, reset: true };
+			// reset 是「全部还原」，不只设备形状：网络与 CPU 节流也一起清，
+			// 否则模型以为恢复了真实环境，页面其实还在慢速网上爬。
+			await send('Network.emulateNetworkConditions', {
+				offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+			}).catch(() => {});
+			await send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => {});
+			return { tabId: tab.id, reset: true, network: 'reset', cpuThrottlingRate: 1 };
+		}
+		if (network) {
+			// 网络域要 enable 才收 emulateNetworkConditions（网络日志的 enable 是同
+			// 一个域，重复 enable 无害）。
+			await send('Network.enable').catch(() => {});
+			const applied = network.name === 'reset'
+				? { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }
+				: {
+					offline: Boolean(network.offline),
+					latency: network.latency,
+					downloadThroughput: network.downloadThroughput,
+					uploadThroughput: network.uploadThroughput,
+				};
+			await send('Network.emulateNetworkConditions', applied)
+				.catch((e) => { throw new Error(`Network.emulateNetworkConditions failed: ${e.message}`); });
+		}
+		if (cpuRate !== undefined) {
+			await send('Emulation.setCPUThrottlingRate', { rate: cpuRate })
+				.catch((e) => { throw new Error(`Emulation.setCPUThrottlingRate failed: ${e.message}`); });
 		}
 		if (width > 0 && height > 0) {
 			await send('Emulation.setDeviceMetricsOverride', {
@@ -1359,6 +1410,14 @@ async function cmdEmulate(params) {
 			tabId: tab.id,
 			width, height, deviceScaleFactor, isMobile, hasTouch,
 			userAgent: userAgent || null,
+			// 回执报**这次生效**的节流：模型只看这句话，看不见 params。
+			...(network ? {
+				network: network.name,
+				latency: network.name === 'reset' ? 0 : network.latency,
+				downloadThroughput: network.name === 'reset' ? -1 : network.downloadThroughput,
+				uploadThroughput: network.name === 'reset' ? -1 : network.uploadThroughput,
+			} : {}),
+			...(cpuRate !== undefined ? { cpuThrottlingRate: cpuRate } : {}),
 		};
 	});
 }
@@ -1372,6 +1431,32 @@ const PRESETS = {
 
 async function cmdBrowserInfo() {
 	return { client: 'dsh-browser-extension', version: EXT_VERSION, browser: helloInfo };
+}
+
+/**
+ * 性能指标（v1.7.1）：页面有多重、脚本跑了多久，数字说话。只读——重试只是
+ * 再读一遍计数器，没有额外损害。指标名是 CDP 固定的那批，插件 schema 按名字
+ * 封口，所以这里**只透传已知名字**：CDP 将来新增的指标不会打穿封闭 schema。
+ */
+const METRIC_NAMES = ['Timestamp', 'Documents', 'Frames', 'JSEventListeners', 'Nodes', 'LayoutCount', 'RecalcStyleCount', 'LayoutDuration', 'RecalcStyleDuration', 'ScriptDuration', 'TaskDuration', 'JSHeapUsedSize', 'JSHeapTotalSize'];
+
+async function cmdMetrics(params) {
+	const tab = await resolveTab(params.tabId);
+	return withCDP(tab.id, async (send) => {
+		await send('Performance.enable').catch(() => {});
+		const res = await send('Performance.getMetrics')
+			.catch((e) => { throw new Error(`Performance.getMetrics failed: ${e.message}`); });
+		// 与 pdf/archive 同一条诚实线：没有数据要说出来，不回一个空对象装成功。
+		if (!res || !Array.isArray(res.metrics)) throw new Error('Performance.getMetrics returned no metrics');
+		const metrics = {};
+		for (const m of res.metrics) {
+			if (m && typeof m.name === 'string' && METRIC_NAMES.includes(m.name)) {
+				const value = Number(m.value);
+				if (Number.isFinite(value)) metrics[m.name] = value;
+			}
+		}
+		return { tabId: tab.id, metrics };
+	});
 }
 
 async function cmdTabsList() {
@@ -2537,7 +2622,7 @@ const COMMANDS = {
 	snapshot: cmdSnapshot, screenshot: cmdScreenshot,
 	wait: cmdWait, dialog: cmdDialogPolicy,
 	'console.log': cmdConsoleLog, 'network.log': cmdNetworkLog, 'network.clear': cmdNetworkClear,
-	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive,
+	pdf: cmdPdf, emulate: cmdEmulate, archive: cmdArchive, metrics: cmdMetrics,
 	'windows.list': cmdWindowsList, 'windows.open': cmdWindowsOpen, 'windows.update': cmdWindowsUpdate,
 	'windows.close': cmdWindowsClose, 'windows.moveTab': cmdWindowsMoveTab,
 	'cookies.get': cmdCookiesGet, 'cookies.set': cmdCookiesSet, 'cookies.remove': cmdCookiesRemove,
