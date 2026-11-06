@@ -249,6 +249,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
 | `browser_click` | Click an element (by ref / selector) |
 | `browser_type` | Type into inputs |
+| `browser_upload` | Set local files on a page's file input (`input[type=file]`) through CDP — the native file picker never opens; paths are read on the machine running Chrome. For "choose file / upload asset / upload video" controls |
 | `browser_press` | Send keyboard keys (Enter, Tab, arrows, and combinations like "Ctrl+A" / "Shift+ArrowRight"; one press inserts exactly once) |
 | `browser_scroll` | Scroll the page |
 | `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
@@ -270,7 +271,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-25 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+26 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

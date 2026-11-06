@@ -1,5 +1,13 @@
 # 更新日志
 
+## Unreleased
+
+- **新工具 `browser_upload`**：CDP `DOM.setFileInputFiles` 把本机文件设到 `input[type=file]` 上，
+  **不走原生文件选择器**；路径在宿主侧先校验存在与大小；扩展侧不用改（走 1.7.2 起的 `cdp` 透传），
+  老扩展报 `extension_outdated` 并给重装指引。只读档拒绝。工具面 25 → **26 条**。
+  实测台 `verify/verify_upload.mjs` 覆盖：路径前置校验（相对路径/不存在）、三步 CDP 的顺序与参数、
+  `tabId` 自动解析、selector 未命中不发 `setFileInputFiles`、缺 `cdp` 能力时零命令拒绝。
+
 ## v1.7.2 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `cdp` 命令 + hello 带 capabilities）——扩展必须重装；这也是最后一次「功能更新要求重装」**：从这一版起握手让插件知道扩展有什么，CDP 层的新能力（路线图上的拖拽 / mock / iframe / screencast……）此后全部只更插件。同时把用户定的铁律钉成机器可查的台子：**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**，逐条功能比，从此不许倒退。
