@@ -57,6 +57,31 @@ check("hello 帧带来的 capabilities 被桥原样收下（当前扩展 ≥1.7.
   Array.isArray(helloCaps) && helloCaps.includes("cdp") && helloCaps.includes("metrics") && helloCaps.includes("tabs.back"),
   JSON.stringify(helloCaps ?? null));
 
+// v1.8.0 实例身份：真扩展给自己 mint 一个稳定 id 并在 hello 里报上来，
+// 桥按它区分同时连着的多个浏览器（这条证明扩展侧真的报了，不是只有桥支持）。
+const instance = server.status.instances?.[0];
+check("hello 帧带来实例身份（id 由扩展生成并落 chrome.storage.local）",
+  server.status.instances?.length === 1 && typeof instance?.id === "string" && instance.id.length >= 8,
+  JSON.stringify(server.status.instances ?? null));
+check("没填名称时 label 为空（桥不替用户编名字）", instance?.label === undefined, String(instance?.label));
+
+// 弹窗改名 → 扩展立刻重报 hello（同一条 socket，不重连），桥上的名称跟着变。
+// hello 是异步帧，等桥把它处理完再断言，别在「已发送」与「已入账」之间采样。
+const waitLabel = async (label) => {
+  for (let i = 0; i < 40; i++) {
+    if (server.status.instances?.[0]?.label === label) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return false;
+};
+await model.sendRuntimeMessage({ type: "instanceSetLabel", label: "E2E 实例" });
+check("弹窗改名后扩展重新上报 hello，桥上的名称立刻能用",
+  await waitLabel("E2E 实例"),
+  JSON.stringify(server.status.instances ?? null));
+check("改名不换 id、不重连（实例还是同一个）",
+  server.status.instances?.[0]?.id === instance.id && server.status.extensionConnected === true,
+  `id=${server.status.instances?.[0]?.id}`);
+
 const call = async (command, params = {}, timeoutMs = 4000) => {
   const res = await fetch(`http://127.0.0.1:${PORT}/api/command`, {
     method: "POST",

@@ -9,7 +9,7 @@ npm run verify        # 依次跑完下面全部
 node verify/verify_plugin.mjs new     # 单独跑一个
 ```
 
-前提：`127.0.0.1:9777`、`9778`（错误契约）、`9779`（扩展端到端）、`9791`–`9795`（兼容矩阵，一个历史面一个端口）空闲（脚本会真的占用这些端口）；`verify_compat_matrix.mjs` 还需要在 git 仓库里跑（它用 `git show <tag>` 物化历史扩展代码），依赖已 `npm install`。`verify_tab_groups.mjs` 与 `verify_extension_e2e.mjs` 共用 `verify/ext_harness.mjs`（假 Chrome 的那台内存浏览器）。
+前提：`127.0.0.1:9777`、`9778`（错误契约）、`9779`（扩展端到端）、`9787`（多实例路由）、`9791`–`9795`（兼容矩阵，一个历史面一个端口）空闲（脚本会真的占用这些端口）；`verify_compat_matrix.mjs` 还需要在 git 仓库里跑（它用 `git show <tag>` 物化历史扩展代码），依赖已 `npm install`。`verify_tab_groups.mjs` 与 `verify_extension_e2e.mjs` 共用 `verify/ext_harness.mjs`（假 Chrome 的那台内存浏览器）。
 
 | 脚本 | 证明什么 | 关联 |
 |---|---|---|
@@ -57,4 +57,5 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 - 打桩的 Proxy 会让 `typeof chrome.tabGroups.update === 'function'` **永远成立**，于是「能力探测 + 降级」这条路永远测不到。要么显式让该命名空间返回 `undefined`，要么像 `ext_harness.mjs` 那样把 `tabs`/`tabGroups` 换成有状态的假浏览器；换成立实现之后，**每个建模过的命名空间还要再套一层 fallback Proxy**，否则 `chrome.storage.onChanged.addListener` 这种没建模到的成员会直接 `undefined` 炸在加载期。
 - **假 `chrome.runtime.lastError` 必须是 getter，不能是写死的 `undefined` 属性。** 扩展全靠「每次回调前读 `chrome.runtime.lastError`」来判断失败；写成静态属性的话所有错误都被吞掉，测试会一路假绿（S2/S3/S4 全过但什么都没测到）。同类陷阱：假 debugger 要自己维护 `attached` 集合，让「扩展缓存说附着着、Chrome 其实已经收回」真的表现为 `Debugger is not attached to the tab with id: N.`。
 - 假 `chrome.storage.local.get` **不能把没配的键返回 `undefined`**：扩展里是 `cfg = {...DEFAULT_CONFIG, ...stored}`，`{port: undefined}` 会把默认端口洗掉，WS 就去了 `ws://127.0.0.1:undefined/ws`。只回真给得出值的键。
+| `verify_multi_instance.mjs` | **多实例路由（v1.8.0）**：起真 `BridgeServer` + 多个假扩展 WS 客户端，断言两个带实例 id 的扩展**同时**在位（旧实现会互踢）、同一 id 重连只替换自己、老扩展进 legacy 单槽且保留旧替换语义；没指定 `instance` 时 `instance_required` + **零派发**、按名称/id/唯一前缀路由、重名与指错走 `instance_not_found`、拒绝不猜；断开一个实例只失败它自己的在途命令（另一个的照常返回）；单实例保留旧 `hello`/`connectedAt` 视图、多实例让位给 `instances`；外加静态对账「每条驱动浏览器的工具都带 `instance` 并真的传下去」 | v1.8.0 多实例 |
 | `verify_compat_matrix.mjs` | **兼容矩阵（v1.7.2）**：把用户定的铁律钉成机器可查——**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**。从 git 标签物化**真实历史扩展代码**（v1.2.0 / 1.5.0 / 1.6.0 / 1.7.0 / 1.7.1，不是模拟），当前插件对每面跑 27 个探针：当年就有的工具照常工作（≥ 当年组合）、比扩展新的必须报带重装指引的 extension-outdated、错误里绝不允许 unknown command 冒充契约性失败；外加反向 append-only（历史命令面 ⊆ 当前命令面）。老 hello 无 capabilities ⇒ 版本映射兜底路径的实测也在台上。历史 manifest 由 harness 逐 boot 注入（模块级缓存会盖掉覆盖——修过一次） | v1.7.2 / capabilities 握手 |

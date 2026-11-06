@@ -161,6 +161,15 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，
 才是模型够不到的那一层。
 
+## 多实例路由（v1.8.0）
+
+- **一个 Chrome profile = 一个实例**：扩展首次启动生成实例 id 落 `chrome.storage.local`（改名不换 id），hello 帧带 `instance: {id, label}`。桥按 hello 建连接表，同一 id 重连只替换它自己的 socket；不同 id 并存。
+- **指定方式**：所有驱动浏览器的工具带可选 `instance`（名称 / id / 唯一前缀，大小写不敏感）。单实例时省略；多实例省略 = `instance_required`，命令**零派发**（不是发给「最近连上的那个」）。
+- **歧义按失败处理**：名称重名或前缀同时命中多个 → `instance_not_found`，文案给出候选与 id 前缀；不挑一个「最像的」执行。
+- **隔离**：某个实例掉线只失败它自己的在途命令（`link_lost`），其它实例的连接与命令不受影响；能力闸门（`extension_outdated`）读的是**目标实例**的 hello，不是全局的。
+- **老扩展**：hello 无 `instance` ⇒ 进 `legacy` 单槽，保持旧的替换语义（桥无法区分两个匿名浏览器，静默复用会让「这条点击落在哪个浏览器」无法回答）；它仍可被 `instance: "legacy"` 点名。要并行多实例，每个扩展都必须是带实例身份的版本。
+- **状态面**：`/api/status` 增 `instances[]`；单实例时旧的 `hello` / `connectedAt` / `extensionProtocol` 照旧填，多实例时留空、以 `instances` 为准（向后兼容，见 `verify/verify_multi_instance.mjs`）。
+
 ## 兼容契约（插件升级 × 旧扩展）
 
 铁律：**dsh 插件 x + 扩展 x-n 的体验 ≥ dsh 插件 x-n + 扩展 x-n**——升级插件永远不许比「那个年代的配套组合」差，逐条功能比。实现与验证：
