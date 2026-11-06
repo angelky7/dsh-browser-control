@@ -25,7 +25,7 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-invariants'
 import type {} from '@deepseek-ai/dsh-settings'
-import { BridgeServer, cleanupArtifacts } from './server.ts'
+import { BridgeServer, cleanupArtifacts, type BridgeExecuteOptions, type BridgeServerStatus } from './server.ts'
 import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
 
@@ -38,6 +38,21 @@ const NAV_MAX_MS = 120_000
  * protocol: a value only one side knows is a lie on the other).
  */
 const NAV_TIERS: Record<string, number> = { none: 0, commit: 4_000, domcontentloaded: 4_000, load: 15_000 }
+
+/**
+ * Shared `instance` parameter: every tool that drives the browser accepts it,
+ * so one dsh session can drive several Chrome profiles at once (one per
+ * logged-in account) by naming the target. Optional while a single browser is
+ * connected; required as soon as two are — the bridge refuses rather than
+ * guessing which browser a click belongs to.
+ */
+const INSTANCE_PARAM = {
+	instance: {
+		type: 'string',
+		description: '目标浏览器实例（同时连了多个时必填）：browser_info 列出的实例名称或 id；重名就用 id。只连了一个实例时可省略。',
+	},
+} as const
+
 /**
  * Extra time handed to the bridge on top of the navigation budget. Without it a
  * caller-requested budget longer than the bridge default (60s) would be beaten by
@@ -195,19 +210,20 @@ class BridgeController {
 		return this.current === undefined ? undefined : path.resolve(this.current.shotsDir)
 	}
 
-	/** Version the connected extension reported in its hello frame, if any. */
-	extensionVersion(): string | undefined {
-		return this.server?.status.hello?.version
+	/** Version of the resolved instance's extension (the only one when `instance` is omitted). */
+	extensionVersion(instance?: string): string | undefined {
+		return this.server?.helloFor(instance)?.version
 	}
 
 	/**
-	 * Whether the connected extension implements `command`. Exact when the hello
+	 * Whether the target extension implements `command`. Exact when its hello
 	 * carries a capabilities list (v1.7.2+); otherwise derived from the reported
-	 * version via the surface-delta map. No connection ⇒ true: the not-enabled
-	 * error from execute is the right failure there, not a capability complaint.
+	 * version via the surface-delta map. No connection ⇒ true: the not-enabled /
+	 * instance_required error from execute is the right failure there, not a
+	 * capability complaint.
 	 */
-	hasExtensionCommand(command: string): boolean {
-		const hello = this.server?.status.hello
+	hasExtensionCommand(command: string, instance?: string): boolean {
+		const hello = this.server?.helloFor(instance)
 		if (hello?.capabilities !== undefined) return hello.capabilities.includes(command)
 		const version = hello?.version
 		if (version === undefined || version === 'unknown') return true
@@ -219,11 +235,12 @@ class BridgeController {
 	/**
 	 * Pre-flight capability gate: throw the actionable upgrade error before the
 	 * command is sent, so an old extension answers with a what-to-do, never with
-	 * a bare "unknown command" the model cannot act on.
+	 * a bare "unknown command" the model cannot act on. The gate reads the
+	 * `instance`'s hello, not "whatever connected last".
 	 */
-	requireExtensionCommand(command: string, since: string): void {
-		if (this.hasExtensionCommand(command)) return
-		throw extensionOutdatedError(this.extensionVersion(), command, since)
+	requireExtensionCommand(command: string, since: string, instance?: string): void {
+		if (this.hasExtensionCommand(command, instance)) return
+		throw extensionOutdatedError(this.extensionVersion(instance), command, since)
 	}
 
 	/**
@@ -281,9 +298,12 @@ class BridgeController {
 	 *   that wait inside the page (browser_wait) must pass a value larger than their
 	 *   own page-level timeout, otherwise the bridge aborts first and the caller
 	 *   cannot tell a slow page from a dead link.
+	 * @param instance - target browser instance (name or id) when several are
+	 *   connected; omitted means "the only one", and the bridge refuses rather
+	 *   than guesses when that is ambiguous.
 	 * @returns the extension's result payload verbatim.
 	 */
-	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number): Promise<unknown> {
+	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number, instance?: string): Promise<unknown> {
 		this.policyGate(command, params)
 		const server = this.server
 		if (server === undefined) {
@@ -291,7 +311,17 @@ class BridgeController {
 				this.lastError ?? '浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里给 browser-bridge 配 enabled: true（dsh 0.1.7+ 的宿主也会在设置 → 插件 自动列出本插件开关；0.1.2 及更早的宿主没有这张卡片，只能改配置文件）',
 			))
 		}
-		return server.execute(command, params, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
+		const options: BridgeExecuteOptions = {
+			signal,
+			...(timeoutMs === undefined ? {} : { timeoutMs }),
+			...(instance === undefined || instance.trim().length === 0 ? {} : { instance: instance.trim() }),
+		}
+		return server.execute(command, params, options)
+	}
+
+	/** Live bridge snapshot (instances, token strength, protocol) for `browser_info`. */
+	bridgeStatus(): BridgeServerStatus | undefined {
+		return this.server?.status
 	}
 
 	/**
@@ -609,13 +639,17 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			+ 'disabled or no browser is connected. When a result is cut to bound token cost it is '
 			+ 'marked "[renderedTruncated omittedChars=N limitChars=L]" — re-issue a narrower query '
 			+ '(smaller limit, a pattern filter, or browser_read\'s offset) instead of assuming the '
-			+ 'page is shorter than it is.',
+			+ 'page is shorter than it is. Several browsers can be connected at once (one Chrome '
+			+ 'profile per instance): browser_info lists them, and every tool then needs `instance` '
+			+ 'set to a name or id from that list — omitted it while more than one is connected, the '
+			+ 'call fails with instance_required instead of acting on a guessed browser.',
 	})
 
 	ctx.tools.register(defineTool({
 		name: 'browser_navigate',
 		description: 'Navigate a browser tab to a URL and wait for the page load to settle.',
 		parameters: {
+			...INSTANCE_PARAM,
 			url: { type: 'string', required: true, description: 'Absolute URL to open in the tab.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			waitUntil: { type: 'string', description: 'When the navigation counts as arrived: "load" (default) waits for the page load event (15s budget), "domcontentloaded" returns once the DOM is parsed (async components may still be mounting — follow with browser_wait if an element is missing), "commit" once the new document\'s address lands, "none" returns immediately with no arrival check at all.' },
@@ -674,7 +708,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			}
 			if (waitUntil !== 'none') params.timeoutMs = budgetMs
 			const raw = await controller.execute('nav', params, exec.signal,
-				waitUntil === 'none' ? undefined : budgetMs + BRIDGE_MARGIN_MS) as {
+				waitUntil === 'none' ? undefined : budgetMs + BRIDGE_MARGIN_MS, args.instance) as {
 				tabId: number
 				title?: string
 				url?: string
@@ -709,6 +743,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_read',
 		description: 'Read the current page: title, URL and the page text itself (or full HTML) in a window you control with offset/limit. The returned text is what you see — no separate fetch step is needed.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			mode: { type: 'string', description: '"text" (default) for visible text, "html" for the whole document.' },
 			offset: { type: 'number', description: `Character index the window starts at; default 0. Use the "call again with offset=" value the previous result reported.` },
@@ -745,6 +780,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				'content',
 				args.tabId === undefined ? { mode } : { mode, tabId: args.tabId },
 				exec.signal,
+				undefined,
+				args.instance,
 			) as { tabId: number; title?: string; url?: string; content?: string }
 			const full = raw.content ?? ''
 			const content = full.slice(offset, offset + limit)
@@ -765,6 +802,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_snapshot',
 		description: 'Inventory the page\'s interactive elements with stable refs; pass a ref to browser_click/browser_type afterwards. mode:"ax" numbers them by Chrome\'s accessibility tree (role + accessible name), which survives a DOM redesign; the default mode matches CSS selectors.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			limit: { type: 'number', description: 'Max elements returned; defaults to 120, capped at 200.' },
 			mode: { type: 'string', description: '"ax" for the accessibility tree, "dom" (default) for the selector list. "ax" falls back to "dom" with axFallback set if the page gives no a11y tree.' },
@@ -814,7 +852,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { limit }
 			if (typeof args.tabId === 'number') params.tabId = args.tabId
 			if (typeof args.mode === 'string') params.mode = args.mode
-			const raw = await controller.execute('snapshot', params, exec.signal) as {
+			const raw = await controller.execute('snapshot', params, exec.signal, undefined, args.instance) as {
 				tabId: number
 				title?: string
 				url?: string
@@ -856,6 +894,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_click',
 		description: 'Click a page element with real mouse events; target it by snapshot ref or CSS selector.',
 		parameters: {
+			...INSTANCE_PARAM,
 			ref: { type: 'string', description: 'Element ref from browser_snapshot (e.g. "e3"); wins over selector.' },
 			selector: { type: 'string', description: 'CSS selector; ignored when ref is given.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
@@ -870,7 +909,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { selector: targetSelector(args) }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (args.doubleClick !== undefined) params.doubleClick = args.doubleClick
-			return await controller.execute('click', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('click', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -878,6 +917,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_type',
 		description: 'Fill an input/textarea/select/contentEditable (React-compatible events); optionally press Enter afterwards.',
 		parameters: {
+			...INSTANCE_PARAM,
 			value: { type: 'string', required: true, description: 'Text to put into the element.' },
 			ref: { type: 'string', description: 'Element ref from browser_snapshot; wins over selector.' },
 			selector: { type: 'string', description: 'CSS selector; ignored when ref is given.' },
@@ -892,9 +932,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { selector: targetSelector(args), value: args.value }
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			const filled = await controller.execute('input', params, exec.signal) as Record<string, JsonValue>
+			const filled = await controller.execute('input', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 			if (args.submit === true) {
-				await controller.execute('press', args.tabId === undefined ? { key: 'Enter' } : { key: 'Enter', tabId: args.tabId }, exec.signal)
+				await controller.execute('press', args.tabId === undefined ? { key: 'Enter' } : { key: 'Enter', tabId: args.tabId }, exec.signal, undefined, args.instance)
 			}
 			return filled
 		},
@@ -904,6 +944,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_press',
 		description: 'Send a real keyboard event to the page: a named key (Enter, Tab, Escape, ArrowDown…), a single character, or a combination such as "Ctrl+A" / "Shift+ArrowRight".',
 		parameters: {
+			...INSTANCE_PARAM,
 			key: { type: 'string', required: true, description: 'Named key, a single character, or "Modifier+Key" (alt, ctrl/control, meta/command, shift). Unknown names now fail loudly instead of doing nothing.' },
 			modifiers: { type: 'array', items: { type: 'string' }, description: 'Alternative to the "Ctrl+A" spelling: ["ctrl", "shift"]. Shift alone still lets the character be typed; ctrl/meta suppress insertion.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
@@ -917,7 +958,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { key: args.key }
 			if (Array.isArray(args.modifiers)) params.modifiers = args.modifiers
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('press', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('press', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -925,6 +966,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_scroll',
 		description: 'Scroll the page viewport by a delta and report the resulting position.',
 		parameters: {
+			...INSTANCE_PARAM,
 			x: { type: 'number', description: 'Horizontal delta in pixels; defaults to 0.' },
 			y: { type: 'number', description: 'Vertical delta in pixels; positive scrolls down.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
@@ -937,7 +979,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { x: args.x ?? 0, y: args.y ?? 0 }
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('scroll', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('scroll', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -948,6 +990,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_wait',
 		description: 'Block until a selector appears, some text shows up in the body, or a page-side predicate turns true. Use it after navigation for SPA routes and lazy-rendered content, which browser_navigate does not wait for.',
 		parameters: {
+			...INSTANCE_PARAM,
 			selector: { type: 'string', description: 'CSS selector that must exist in the document.' },
 			text: { type: 'string', description: 'Literal substring that must appear in document.body.innerText.' },
 			fn: { type: 'string', description: 'JS predicate evaluated in the page: an expression ("window.x === 3") or a function body ("() => !!document.querySelector(\'.row\')").' },
@@ -967,7 +1010,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { [given[0]]: args[given[0]], timeoutMs }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			// Slack so the page-side timeout always reports before the bridge gives up.
-			return await controller.execute('wait', params, exec.signal, timeoutMs + 10_000) as Record<string, JsonValue>
+			return await controller.execute('wait', params, exec.signal, timeoutMs + 10_000, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -975,6 +1018,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_find',
 		description: 'Describe the elements matching a CSS selector — count, tag, id, class, text, href and viewport rect. Read-only; use it to decide what to click and to verify the page state.',
 		parameters: {
+			...INSTANCE_PARAM,
 			selector: { type: 'string', required: true, description: 'CSS selector to query.' },
 			limit: { type: 'number', description: 'Maximum items to describe; defaults to 10, capped at 50 (count is always the full total).' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
@@ -988,7 +1032,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { selector: args.selector }
 			if (args.limit !== undefined) params.limit = args.limit
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('find', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('find', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -996,6 +1040,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_hold',
 		description: 'Put a cancellable take-over overlay on a tab so the user can see that you are working on this page and cannot mis-click. The card title is fixed by the extension; your `note` is the body text only (≤400 chars, newlines flattened). The user double-clicks the page (or presses Escape twice, or holds Escape) to close it — you can keep working. Pressing the card\'s abort button blocks your click/input/press/nav on that tab until you call action="off" (which counts as confirming you continue). This is a soft layer, not a security boundary: the popup lock is the thing that actually freezes the browser. Returns `covered:false` with a `reason` when the page cannot be covered (browser pages, error pages, CSP-strict frames, PDF viewer, an open native dialog).',
 		parameters: {
+			...INSTANCE_PARAM,
 			action: { type: 'string', enum: ['on', 'off', 'status'], required: true, description: '"on" shows the overlay, "off" removes it (and clears the abort state), "status" reports what is actually on the page.' },
 			note: { type: 'string', description: 'on: body text — say what you are doing (e.g. "正在把「局域网」档改成放行"). The title cannot be set.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
@@ -1011,7 +1056,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { action }
 			if (args.action === 'on' && args.note !== undefined) params.note = args.note
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('hold', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('hold', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -1019,6 +1064,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_cookies',
 		description: 'Read, set or remove cookies of a tab (CDP Network.*, no new permission). Cookie values are credentials — a get returns them in full and they land in the model-visible text, so filter by domain and do not point this at a page whose cookies you do not actually need. set/remove need an anchor: url, or domain (with optional path).',
 		parameters: {
+			...INSTANCE_PARAM,
 			action: { type: 'string', enum: ['get', 'set', 'remove'], required: true, description: '"get" lists cookies visible to the tab (domain filter optional); "set" writes one; "remove" deletes one and reports whether it is still visible afterwards.' },
 			name: { type: 'string', description: 'set/remove: cookie name (required).' },
 			value: { type: 'string', description: 'set: cookie value (required; pass an empty string to clear the content).' },
@@ -1056,9 +1102,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (args.sameSite !== undefined) params.sameSite = args.sameSite
 			if (args.expires !== undefined) params.expires = args.expires
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			if (command === 'cookies.get') return await controller.execute('cookies.get', params, exec.signal) as Record<string, JsonValue>
-			if (command === 'cookies.set') return await controller.execute('cookies.set', params, exec.signal) as Record<string, JsonValue>
-			return await controller.execute('cookies.remove', params, exec.signal) as Record<string, JsonValue>
+			if (command === 'cookies.get') return await controller.execute('cookies.get', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
+			if (command === 'cookies.set') return await controller.execute('cookies.set', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
+			return await controller.execute('cookies.remove', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
@@ -1066,6 +1112,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_dialog',
 		description: 'Read or change how native alert/confirm/prompt dialogs are answered (accept, dismiss, or manual), and get the recent dialog log so you can prove one appeared.',
 		parameters: {
+			...INSTANCE_PARAM,
 			policy: { type: 'string', enum: ['accept', 'dismiss', 'manual'], description: 'Set this policy; omit to only read the current one.' },
 		},
 		output: {
@@ -1076,21 +1123,53 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.policy !== undefined) params.policy = args.policy
-			return await controller.execute('dialog', params, exec.signal) as Record<string, JsonValue>
+			return await controller.execute('dialog', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 		},
 	}))
 
 	ctx.tools.register(defineTool({
 		name: 'browser_info',
-		description: 'Report which browser and which extension build is actually attached. Run it first when behaviour looks wrong — a stale extension or the wrong browser profile explains most of it.',
-		parameters: {},
+		description: 'Report which browser instances and which extension builds are actually attached (one entry per Chrome profile). Run it first when behaviour looks wrong — a stale extension or the wrong browser profile explains most of it. With several instances connected, every other browser_* tool needs `instance` set to one of the names or ids listed here.',
+		parameters: { ...INSTANCE_PARAM },
 		output: {
 			schema: { type: 'object', additionalProperties: true },
 			render: (_args, value) => [{ type: 'text', text: clampRendered(JSON.stringify(value)) }],
 		},
 		presentCall: () => ({ card: 'generic', title: 'Browser identity', kind: 'other' as const }),
-		async execute(_args, exec) {
-			return await controller.execute('browser.info', {}, exec.signal) as Record<string, JsonValue>
+		async execute(args, exec) {
+			const status = controller.bridgeStatus()
+			const instances = status?.instances ?? []
+			const asJson = instances.map((instance) => {
+				const row: Record<string, JsonValue> = {
+					id: instance.id,
+					extensionVersion: instance.hello.version,
+					protocol: instance.hello.protocol,
+					connectedAt: instance.connectedAt,
+				}
+				if (instance.label !== undefined) row.label = instance.label
+				return row
+			})
+			const ref = typeof args.instance === 'string' ? args.instance.trim() : ''
+			// Two or more connected and no target named: this call is the discovery
+			// step, so answer from the bridge and touch no browser at all.
+			if (instances.length > 1 && ref === '') {
+				const bridge: Record<string, JsonValue> = { bridgeProtocol: status?.bridgeProtocol ?? 0 }
+				if (status?.port !== undefined) bridge.port = status.port
+				return {
+					connected: true,
+					instanceRequired: true,
+					instances: asJson,
+					note: '多个浏览器实例已连接：其它 browser_* 工具都要带 instance 参数（上面的 label 或 id）；只连一个实例时才可省略。',
+					bridge,
+				}
+			}
+			const payload = await controller.execute('browser.info', {}, exec.signal, undefined, args.instance) as Record<string, JsonValue>
+			if (instances.length === 1) {
+				const meta: Record<string, JsonValue> = { id: instances[0].id }
+				if (instances[0].label !== undefined) meta.label = instances[0].label
+				return { ...payload, instance: meta }
+			}
+			return payload
 		},
 	}))
 
@@ -1098,6 +1177,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_tabs',
 		description: 'List tabs, or open/close/activate/group/ungroup, or go back/forward in the tab\'s history. `close` takes one tab (`tabId`) or several (`tabIds`); the result accounts for every id, so a retry is safe.',
 		parameters: {
+			...INSTANCE_PARAM,
 			action: { type: 'string', required: true, description: 'One of: list, open, close, activate, group, ungroup, back, forward.' },
 			url: { type: 'string', description: 'URL for the open action.' },
 			tabId: { type: 'number', description: 'Target tab for close/activate/group/back/forward; defaults to the active tab for back/forward.' },
@@ -1116,7 +1196,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			switch (args.action) {
 				case 'list':
-					return await controller.execute('tabs.list', {}, exec.signal) as Record<string, JsonValue>
+					return await controller.execute('tabs.list', {}, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				case 'open': {
 					if (typeof args.url !== 'string' || args.url.length === 0) throw new Error('open requires url')
 					const waitUntil = args.waitUntil === undefined ? 'load' : String(args.waitUntil)
@@ -1127,25 +1207,25 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					if (args.active !== undefined) params.active = args.active
 					if (args.group !== undefined) params.group = args.group
 					if (waitUntil === 'none') {
-						return await controller.execute('tabs.open', params, exec.signal) as Record<string, JsonValue>
+						return await controller.execute('tabs.open', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 					}
 					let budgetMs = NAV_TIERS[waitUntil]
 					if (typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)) {
 						budgetMs = Math.min(NAV_MAX_MS, Math.max(100, Math.trunc(args.timeoutMs)))
 					}
 					params.timeoutMs = budgetMs
-					return await controller.execute('tabs.open', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
+					return await controller.execute('tabs.open', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS, args.instance) as Record<string, JsonValue>
 				}
 				case 'close': {
 					const ids = closeTabIds(args)
 					// One id keeps the single-tab command; several go out as ONE command
 					// (`tabs.closeMany`) instead of N round-trips that can die in between.
 					return ids.length === 1
-						? await controller.execute('tabs.close', { tabId: ids[0] }, exec.signal) as Record<string, JsonValue>
-						: await controller.execute('tabs.closeMany', { tabIds: ids }, exec.signal) as Record<string, JsonValue>
+						? await controller.execute('tabs.close', { tabId: ids[0] }, exec.signal, undefined, args.instance) as Record<string, JsonValue>
+						: await controller.execute('tabs.closeMany', { tabIds: ids }, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				}
 				case 'activate':
-					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal) as Record<string, JsonValue>
+					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				case 'back':
 				case 'forward': {
 					// Same wait-shape as open: tier default load, explicit budget, bridge
@@ -1163,18 +1243,18 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					}
 					params.timeoutMs = budgetMs
 					if (args.action === 'back') {
-						controller.requireExtensionCommand('tabs.back', '1.7.0')
-						return await controller.execute('tabs.back', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
+						controller.requireExtensionCommand('tabs.back', '1.7.0', args.instance)
+						return await controller.execute('tabs.back', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS, args.instance) as Record<string, JsonValue>
 					}
-					controller.requireExtensionCommand('tabs.forward', '1.7.0')
-						return await controller.execute('tabs.forward', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
+					controller.requireExtensionCommand('tabs.forward', '1.7.0', args.instance)
+						return await controller.execute('tabs.forward', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS, args.instance) as Record<string, JsonValue>
 				}
 				case 'group':
-					return await controller.execute('tabs.group', { tabId: requireTabId(args, 'group') }, exec.signal) as Record<string, JsonValue>
+					return await controller.execute('tabs.group', { tabId: requireTabId(args, 'group') }, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				case 'ungroup': {
 					const params: Record<string, unknown> = {}
 					if (typeof args.windowId === 'number') params.windowId = args.windowId
-					return await controller.execute('tabs.ungroup', params, exec.signal) as Record<string, JsonValue>
+					return await controller.execute('tabs.ungroup', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				}
 				default:
 					throw new Error(`unknown tabs action: ${String(args.action)} (use list|open|close|activate|group|ungroup)`)
@@ -1189,6 +1269,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_windows',
 		description: 'Inspect and control browser windows: list windows with geometry and state, open a new window (optionally positioned/sized), update state (minimize / maximize / fullscreen / focus) or geometry, close a whole window (all its tabs go too), or move tabs between windows. Geometry and state changes happen only through this tool. open is the only non-idempotent action: if it times out, run action:"list" first — the window may already exist.',
 		parameters: {
+			...INSTANCE_PARAM,
 			action: { type: 'string', required: true, description: 'One of: list, open, update, close, moveTab.' },
 			windowId: { type: 'number', description: 'Target window for update/close/moveTab.' },
 			url: { type: 'string', description: 'For open: a URL or an array of URLs (one tab each); defaults to about:blank.' },
@@ -1213,8 +1294,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			switch (args.action) {
 				case 'list':
-					controller.requireExtensionCommand('windows.list', '1.6.0')
-					return await controller.execute('windows.list', {}, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('windows.list', '1.6.0', args.instance)
+					return await controller.execute('windows.list', {}, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				case 'open': {
 					const params: Record<string, unknown> = {}
 					if (args.url !== undefined) params.url = args.url
@@ -1224,8 +1305,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 						if (typeof args[k] === 'number') params[k] = args[k]
 					}
 					if (args.focused !== undefined) params.focused = args.focused
-					controller.requireExtensionCommand('windows.open', '1.6.0')
-					return await controller.execute('windows.open', params, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('windows.open', '1.6.0', args.instance)
+					return await controller.execute('windows.open', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				}
 				case 'update': {
 					const params: Record<string, unknown> = { windowId: requireWindowId(args, 'update') }
@@ -1236,20 +1317,20 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					if (args.focused !== undefined) params.focused = args.focused
 					if (args.alwaysOnTop !== undefined) params.alwaysOnTop = args.alwaysOnTop
 					if (args.drawAttention === true) params.drawAttention = true
-					controller.requireExtensionCommand('windows.update', '1.6.0')
-					return await controller.execute('windows.update', params, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('windows.update', '1.6.0', args.instance)
+					return await controller.execute('windows.update', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				}
 				case 'close':
-					controller.requireExtensionCommand('windows.close', '1.6.0')
-					return await controller.execute('windows.close', { windowId: requireWindowId(args, 'close') }, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('windows.close', '1.6.0', args.instance)
+					return await controller.execute('windows.close', { windowId: requireWindowId(args, 'close') }, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				case 'moveTab': {
 					if (args.tabId === undefined && args.tabIds === undefined) throw new Error('moveTab requires tabId or tabIds')
 					const params: Record<string, unknown> = { windowId: requireWindowId(args, 'moveTab') }
 					if (args.tabId !== undefined) params.tabId = args.tabId
 					if (args.tabIds !== undefined) params.tabIds = args.tabIds
 					if (args.index !== undefined) params.index = args.index
-					controller.requireExtensionCommand('windows.moveTab', '1.6.0')
-					return await controller.execute('windows.moveTab', params, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('windows.moveTab', '1.6.0', args.instance)
+					return await controller.execute('windows.moveTab', params, exec.signal, undefined, args.instance) as Record<string, JsonValue>
 				}
 				default:
 					throw new Error(`unknown windows action: ${String(args.action)} (use list|open|update|close|moveTab)`)
@@ -1264,6 +1345,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_evaluate',
 		description: 'Run JavaScript in the page and get the JSON result back as a string. Prefer read-only inspection.',
 		parameters: {
+			...INSTANCE_PARAM,
 			expression: { type: 'string', required: true, description: 'JavaScript expression or statement sequence; awaited like a promise body.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			timeoutMs: { type: 'number', description: `Give up after this many milliseconds; defaults to 60000, capped at ${EVAL_MAX_MS}.` },
@@ -1297,6 +1379,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				params,
 				exec.signal,
 				bridgeCeiling,
+				args.instance,
 			) as { tabId: number; value: unknown }
 			let json: string
 			try {
@@ -1312,6 +1395,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_screenshot',
 		description: 'Capture the tab as PNG/JPEG, save it under the configured shots directory, and return the absolute file path plus the image\'s real pixel size. fullPage captures the whole scrollable page in one shot (sticky/fixed headers may repeat); selector captures one element.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			fullPage: { type: 'boolean', description: 'Capture the entire scrollable page instead of just the viewport. The receipt\'s width/height show the real size.' },
 			selector: { type: 'string', description: 'CSS selector: capture just that element (scrolled into view); the receipt carries its rect.' },
@@ -1353,7 +1437,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (args.fullPage !== undefined) params.fullPage = args.fullPage
 			if (args.selector !== undefined) params.selector = args.selector
-			const payload = await controller.execute('screenshot', params, exec.signal) as ScreenshotPayload
+			const payload = await controller.execute('screenshot', params, exec.signal, undefined, args.instance) as ScreenshotPayload
 			return saveScreenshot(controller, payload)
 		},
 	}))
@@ -1389,6 +1473,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_console_log',
 		description: 'Read the captured `console.log/info/warn/error` entries for a tab, with the entry text itself. Set `clear:true` to also empty the buffer so the next call shows only entries recorded after this one. Useful for "what did the page log after I clicked submit".',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			levels: { type: 'array', items: { type: 'string' }, description: 'Filter to one or more of: log, info, warn, error, debug.' },
 			pattern: { type: 'string', description: 'Regex (case-insensitive) matched against the formatted text.' },
@@ -1435,7 +1520,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.pattern === 'string') params.pattern = args.pattern
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
-			const raw = await controller.execute('console.log', params, exec.signal) as {
+			const raw = await controller.execute('console.log', params, exec.signal, undefined, args.instance) as {
 				tabId: number
 				count: number
 				total: number
@@ -1459,6 +1544,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_network_log',
 		description: 'Read captured HTTP request/response pairs for a tab. `includeStatic:true` adds images / fonts / stylesheets / scripts (filtered by default — they dominate the buffer). `methodPattern` / `urlPattern` / `status` filter server-side results; `clear:true` empties the buffer.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			includeStatic: { type: 'boolean', description: 'Include images / fonts / stylesheets / scripts. Default false.' },
 			methodPattern: { type: 'string', description: 'Regex (case-insensitive) matched against the HTTP method.' },
@@ -1523,7 +1609,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.status === 'string') params.status = args.status
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
-			const raw = await controller.execute('network.log', params, exec.signal) as {
+			const raw = await controller.execute('network.log', params, exec.signal, undefined, args.instance) as {
 				tabId: number
 				count: number
 				total: number
@@ -1542,6 +1628,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_network_clear',
 		description: 'Empty the per-tab network capture buffer without returning the rows.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 		},
 		output: {
@@ -1559,7 +1646,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			return await controller.execute('network.clear', params, exec.signal) as { tabId: number; cleared: boolean }
+			return await controller.execute('network.clear', params, exec.signal, undefined, args.instance) as { tabId: number; cleared: boolean }
 		},
 	}))
 
@@ -1567,6 +1654,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_pdf',
 		description: 'Export the current page to a PDF. `path` may be absolute (saved there) or omitted (saved under the configured shotsDir). Returns the absolute path + size; the PDF preserves text (selectable, searchable) and print-media CSS.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			path: { type: 'string', description: 'Absolute path. Omit to save under the configured shotsDir with a timestamped name.' },
 			landscape: { type: 'boolean', description: 'Use landscape orientation.' },
@@ -1601,7 +1689,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.paperHeight === 'number') params.paperHeight = args.paperHeight
 			if (typeof args.scale === 'number') params.scale = args.scale
 			if (typeof args.pageRanges === 'string') params.pageRanges = args.pageRanges
-			const payload = await controller.execute('pdf', params, exec.signal) as { base64: string; tabId: number }
+			const payload = await controller.execute('pdf', params, exec.signal, undefined, args.instance) as { base64: string; tabId: number }
 			return await savePdf(controller, payload, typeof args.path === 'string' ? args.path : undefined)
 		},
 	}))
@@ -1610,6 +1698,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_archive',
 		description: 'Save the whole page as a single-file MHTML archive (text, images and styles inline; no network needed to reopen it). Returns the absolute path. The archive is a snapshot of when it was taken — scripts inside do not run and later page changes are not reflected; read it back with file tools or grep it like text.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			path: { type: 'string', description: 'Absolute path. Omit to save under the configured shotsDir with a timestamped .mhtml name.' },
 		},
@@ -1632,8 +1721,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			controller.requireExtensionCommand('archive', '1.5.0')
-			const payload = await controller.execute('archive', params, exec.signal) as { mhtml: string; tabId: number }
+			controller.requireExtensionCommand('archive', '1.5.0', args.instance)
+			const payload = await controller.execute('archive', params, exec.signal, undefined, args.instance) as { mhtml: string; tabId: number }
 			return await saveMhtml(controller, payload, typeof args.path === 'string' ? args.path : undefined)
 		},
 	}))
@@ -1642,6 +1731,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_emulate',
 		description: 'Switch the tab into a device viewport (mobile / tablet / desktop) for responsive-UI testing, and throttle the network or CPU to test slow conditions. `device:"reset"` restores the user\'s actual viewport and clears all throttling. `network` presets (this tool\'s own numbers): slow3g = 400ms RTT + ~50KB/s both ways, fast3g = 150ms + ~200KB/s down / ~94KB/s up, offline, reset to clear. `cpuThrottlingRate` multiplies CPU cost (1 = off, up to 20). Throttling lives in the debugger session — it is gone when the extension detaches, and device:"reset" clears it too. Custom `width`/`height`/`deviceScaleFactor`/`isMobile`/`hasTouch` override any preset field.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			device: { type: 'string', description: 'Preset: desktop | mobile-iphone-13 | mobile-pixel-7 | tablet-ipad | reset. Or pass custom width/height below.' },
 			network: { type: 'string', description: 'slow3g | fast3g | offline | reset. The receipt reports the applied latency/throughput in bytes per second.' },
@@ -1698,7 +1788,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.isMobile === 'boolean') params.isMobile = args.isMobile
 			if (typeof args.hasTouch === 'boolean') params.hasTouch = args.hasTouch
 			if (typeof args.userAgent === 'string') params.userAgent = args.userAgent
-			const raw = await controller.execute('emulate', params, exec.signal) as {
+			const raw = await controller.execute('emulate', params, exec.signal, undefined, args.instance) as {
 				tabId: number
 				reset?: boolean | null
 				width?: number | null
@@ -1740,6 +1830,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_metrics',
 		description: 'Read the tab\'s performance counters (Performance.getMetrics): DOM node count, JS heap usage, layout/style recalc counts, script/task durations. Use it to back "this page is heavy" with numbers, before and after an action. Read-only.',
 		parameters: {
+			...INSTANCE_PARAM,
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 		},
 		output: {
@@ -1789,8 +1880,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			controller.requireExtensionCommand('metrics', '1.7.1')
-			return await controller.execute('metrics', params, exec.signal) as MetricsPayload
+			controller.requireExtensionCommand('metrics', '1.7.1', args.instance)
+			return await controller.execute('metrics', params, exec.signal, undefined, args.instance) as MetricsPayload
 		},
 	}))
 }

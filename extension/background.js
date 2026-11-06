@@ -46,6 +46,71 @@ let lastError = null;
  *  until they click 立即连接 again. Reset on browser restart. */
 let manualDisconnect = false;
 
+/* --------------------------------------------------------------- instance */
+
+/**
+ * Instance identity (v1.8.0+): one Chrome profile runs one extension, so an id
+ * kept in chrome.storage.local names exactly one browser instance for the
+ * bridge. The bridge uses it to hold several profiles at once (one per
+ * logged-in account) and to route each command to the instance the caller
+ * names. The label is what the user types in the popup; it is cosmetic — the
+ * id is what survives a rename, a browser restart and an extension reload.
+ */
+const INSTANCE_KEY = 'instance';
+/** Upper bound for the user-set label; it is rendered verbatim by the bridge. */
+const INSTANCE_LABEL_MAX = 60;
+let instanceInfo = null;
+
+function newInstanceId() {
+	try { return crypto.randomUUID(); } catch { return `inst-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`; }
+}
+
+function sanitizeLabel(raw) {
+	return typeof raw === 'string' ? raw.trim().replace(/\s+/g, ' ').slice(0, INSTANCE_LABEL_MAX) : '';
+}
+
+let instanceLoad = null;
+
+/**
+ * Read (or mint) this profile's identity. Idempotent: safe to call on every
+ * wake-up, and two concurrent callers share one mint — otherwise a double init
+ * could announce two different ids for the same browser and leave an orphan
+ * instance on the bridge. Storage failures never block connecting: identity is
+ * for routing, not a security boundary, so we fall back to an in-memory id.
+ */
+function loadInstance() {
+	if (instanceInfo !== null) return Promise.resolve(instanceInfo);
+	instanceLoad ??= (async () => {
+		let raw = null;
+		try {
+			const stored = await chrome.storage.local.get([INSTANCE_KEY]);
+			raw = stored[INSTANCE_KEY];
+		} catch {
+			instanceInfo = { id: newInstanceId(), label: '' };
+			return instanceInfo;
+		}
+		const id = raw && typeof raw.id === 'string' && raw.id.trim().length > 0 ? raw.id.trim() : newInstanceId();
+		const label = sanitizeLabel(raw && raw.label);
+		instanceInfo = { id, label };
+		if (!raw || raw.id !== id || raw.label !== label) {
+			// 落盘失败不影响本次会话：内存里的身份照常上报，下次唤醒重试。
+			await chrome.storage.local.set({ [INSTANCE_KEY]: instanceInfo }).catch(() => {});
+		}
+		return instanceInfo;
+	})().finally(() => { instanceLoad = null; });
+	return instanceLoad;
+}
+
+/** Persist a new label (popup) and re-announce it so a live bridge picks it up. */
+async function setInstanceLabel(raw) {
+	if (instanceInfo === null) await loadInstance();
+	const label = sanitizeLabel(raw);
+	instanceInfo = { id: instanceInfo.id, label };
+	await chrome.storage.local.set({ [INSTANCE_KEY]: instanceInfo });
+	if (wsState === 'open') sendHello();
+	return instanceInfo;
+}
+
 /** Tab ids we hold a persistent debugger attachment on. Detach only on
  *  explicit disconnect, tab close, or DevTools stealing the tab. */
 const attachedTabs = new Set();
@@ -210,7 +275,18 @@ function sendHello() {
 	// 能力清单（v1.7.2）：把命令面原样报给桥，插件据此做能力对账——
 	// 缺什么、要不要重装扩展，由系统说话而不是让调用撞上 unknown command 再猜。
 	// 老插件不认识这个字段会直接忽略；本字段缺失时插件按版本静态映射兜底。
-	send({ type: 'hello', client: 'dsh-browser-extension', version: EXT_VERSION, protocol: PROTOCOL_VERSION, browser: helloInfo, capabilities: Object.keys(COMMANDS) });
+	// 实例身份（v1.8.0）：桥按它区分同时连着的多个浏览器；老插件忽略这个字段，
+	// 老扩展没有这个字段时桥按 legacy 单槽处理（与旧行为一致）。
+	const instance = instanceInfo !== null && instanceInfo.id ? { id: instanceInfo.id, label: instanceInfo.label } : undefined;
+	send({
+		type: 'hello',
+		client: 'dsh-browser-extension',
+		version: EXT_VERSION,
+		protocol: PROTOCOL_VERSION,
+		browser: helloInfo,
+		capabilities: Object.keys(COMMANDS),
+		...(instance === undefined ? {} : { instance }),
+	});
 }
 
 /* Alarm keeps the SW alive for reconnect even without user events. */
@@ -2702,7 +2778,7 @@ async function cmdDialogPolicy(params) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	if (msg?.type === 'bridgeStatus') {
-		sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none' });
+		sendResponse({ state: wsState, cfg, helloInfo, instance: instanceInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none' });
 		return false;
 	}
 	if (msg?.type === 'lockSet') {
@@ -2714,6 +2790,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 		setHardLock(msg.locked !== false)
 			.then((locked) => sendResponse({ locked }))
 			.catch((err) => sendResponse({ locked: hardLocked, error: String((err && err.message) || err) }));
+		return true;
+	}
+	if (msg?.type === 'instanceSetLabel') {
+		setInstanceLabel(msg.label)
+			.then((instance) => sendResponse({ instance }))
+			.catch((err) => sendResponse({ instance: instanceInfo, error: String((err && err.message) || err) }));
 		return true;
 	}
 	if (msg?.type === 'reconnect') {
@@ -2736,6 +2818,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function init() {
 	await loadConfig();
+	// Identity before the first hello: a bridge that sees an id-less hello would
+	// file this browser under the legacy slot and could not tell it apart from
+	// an old extension.
+	await loadInstance();
 	// 先把本地锁读出来再连：service worker 被回收后重新唤醒时，如果只有第一条命令
 	// 才触发重读，那段时间图标上显示的是绿色 ON —— 用户以为锁着，桥那边却一切正常。
 	await syncHardLock();

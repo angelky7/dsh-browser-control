@@ -18,11 +18,16 @@ function render(status) {
 	const ring = $('ring');
 	ring.className = `ring ${status.state}`;
 	$('state').textContent = STATE_TEXT[status.state] ?? status.state;
+	const label = status.instance?.label ? ` · ${status.instance.label}` : '';
 	$('hello').textContent = status.helloInfo
-		? `${status.helloInfo.name} ${status.helloInfo.version}`
+		? `${status.helloInfo.name} ${status.helloInfo.version}${label}`
 		: (STATE_SUB[status.state]?.() ?? '');
 	if (document.activeElement !== $('port')) $('port').value = status.cfg.port ?? 9777;
 	if (document.activeElement !== $('token')) $('token').value = status.cfg.token;
+	if (document.activeElement !== $('label')) $('label').value = status.instance?.label ?? '';
+	$('instid').textContent = status.instance?.id
+		? `实例 id ${status.instance.id.slice(0, 8)}${status.instance.label ? '' : '（未命名：同时连多个浏览器时建议填名称）'}`
+		: '';
 	$('auto').checked = Boolean(status.cfg.autoConnect);
 	const connected = status.state === 'open';
 	const btn = $('reconnect');
@@ -86,6 +91,9 @@ $('gear').addEventListener('click', () => {
 });
 
 $('save').addEventListener('click', async () => {
+	// Label first: it is announced in the hello frame, so it has to be stored
+	// before the reconnect that sends the next hello.
+	await chrome.runtime.sendMessage({ type: 'instanceSetLabel', label: $('label').value });
 	await chrome.storage.local.set({
 		port: Number($('port').value) || 9777,
 		token: $('token').value.trim(),

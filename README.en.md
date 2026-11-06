@@ -227,6 +227,30 @@ so it does not retry what looks like a network failure.
   `cordis.patch.yml`, which the agent can read *and* rewrite. A freeze that only a human can lift has to
   be enforced somewhere the agent cannot reach.
 
+### Driving several browser instances at once (multi-account)
+
+One Chrome profile is one instance. If the same Chrome has two profiles (`work` / `personal`), each signed into its own account, load the extension in both: the bridge then holds **both** links at the same time and routes each command by its `instance` argument — no signing in and out to switch accounts.
+
+1. Load the same extension folder into every Chrome profile you want to drive (`chrome://extensions` → Developer mode → Load unpacked).
+2. Open that profile's extension popup → Advanced → **instance name**, type something memorable (`work` / `personal`), then Save & reconnect. Unnamed instances still work; the bridge just shows the id prefix.
+3. `browser_info` lists every connected instance (`instances[]`: name, id, extension version, connected at).
+4. Every `browser_*` tool then takes an optional `instance`:
+
+```jsonc
+browser_tabs     { "action": "list", "instance": "work" }
+browser_navigate { "url": "https://example.com/dashboard", "instance": "personal" }
+```
+
+Routing is **fail-closed** (rather refuse than act on the wrong browser):
+
+- Exactly one instance connected: `instance` may be omitted, and behaviour is exactly as before.
+- Two or more connected and no `instance`: **no command is sent at all**; the call fails with `instance_required` plus the instance list. It never guesses which browser you meant.
+- `instance` accepts a name or an id (case-insensitive) or a unique prefix; a duplicated name or an ambiguous prefix fails with `instance_not_found` and tells you to use the full id.
+- A reconnect of one profile (browser restart, extension reload) replaces only that instance's link; a disconnect there fails only that instance's in-flight commands.
+- Extensions that predate instance identity (no `instance` in hello) land in the single `legacy` slot with the old replace-on-reconnect behaviour; they can still coexist with upgraded instances and be addressed as `instance: "legacy"`. To run several browsers in parallel, every extension has to be the version that announces an identity.
+
+`/api/status` lists `instances` too; the old `hello` / `connectedAt` fields stay populated while exactly one instance is connected and are left empty when several are, so `instances` is the source of truth then. The status page prints each instance name and id prefix.
+
 ### Calling the HTTP face from a script
 
 `/api/command` and `/api/cleanup` now require the token — the same value the extension presents on the WebSocket:
@@ -237,6 +261,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
   -H 'Content-Type: application/json' \
   -d '{"command":"nav","params":{"url":"https://example.com"}}'
 ```
+
+With several instances, add `"instance"` (name or id) to the JSON: `{"command":"tabs.list","params":{},"instance":"work"}`. Omitting it while more than one is connected returns 409 + `instance_required`.
 
 `?token=<your token>` and `X-Token: <your token>` work too. Missing or wrong token is a 401; `/` and `/api/status` stay unauthenticated read-only. What used to work without a token no longer does (issue #3 / #6). The cleanup button on the status page asks for the token once and keeps it in the browser session only.
 
@@ -268,9 +294,9 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+); v1.7.1+ adds throttling: `network` slow3g/fast3g/offline/reset + `cpuThrottlingRate` (1–20), the receipt states the applied numbers, `device:"reset"` clears them too |
 | `browser_metrics` | Read performance counters (DOM nodes / JS heap / layout & script durations, Performance.getMetrics, read-only; puts numbers behind "this page is heavy", v1.7.1+) |
 | `browser_cleanup` | Clean up temp files |
-| `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
+| `browser_info` | Which browser instances and extension builds are attached; lists `instances[]` when several are connected (run it first when debugging, v1.0.9+) |
 
-25 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+25 tools in total. Every tool except `browser_cleanup` (which only touches local files) takes the optional `instance` argument for multi-instance routing; see the section above. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

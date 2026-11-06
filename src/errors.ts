@@ -27,6 +27,8 @@ export type BridgeErrorCode =
 	| 'locked_by_user'       // 扩展弹窗里的本地锁拦下，只有用户能解除
 	| 'lock_unreadable'      // 扩展读不出锁状态，按冻结处理（会自动重读）
 	| 'held_by_user'         // 用户在接管浮层上按了「中止操作」（模型可调 hold off 解除）
+	| 'instance_required'    // 多实例已连接，但这条命令没指定 instance
+	| 'instance_not_found'   // instance 指错了：没有匹配、或匹配到多个
 	| 'command_failed';      // 扩展明确回了失败
 
 /**
@@ -102,6 +104,8 @@ const HINTS: Record<BridgeErrorCode, string> = {
 	blocked_by_policy: '这是本机策略拦下的，不是故障：命令没有发给浏览器（零副作用）。要放开改 profile 的 cordis.patch.yml（browser-bridge 的 readOnly / allowScript）并重启 dsh，或换成本机允许的只读工具；不要原地重试。',
 	locked_by_user: '这是用户在扩展弹窗里按下的「锁定」，不是故障：命令一条都没有发出。请先与用户确认，由他在同一个弹窗里点「已锁定」解除；不要重试，也不要试图改配置绕过它。',
 	lock_unreadable: '扩展这次读不出锁的状态，按冻结处理了：命令没有发出。下一条命令会重新读一次，所以可以再试一次，但不要循环重试；一直如此就请用户重启浏览器或重装扩展。',
+	instance_required: '同时连了多个浏览器实例，这条命令没说要操作哪一个：先用 browser_info 看实例清单，再在 instance 参数里写实例名称或 id。命令一条都没有发出去，指定后重试即可。',
+	instance_not_found: 'instance 没有唯一对上某个浏览器实例：用 browser_info 看清单，重名就用完整 id。命令一条都没有发出去，改对参数后重试即可。',
 	command_failed: '扩展报回失败：按 error 文本处理，通常是选择器没命中、标签页已关闭或页面不允许该操作。',
 };
 

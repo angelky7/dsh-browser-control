@@ -1,5 +1,16 @@
 # 更新日志
 
+## Unreleased
+
+**这一版改了 `extension/`（hello 新增 `instance` 实例身份）——扩展需重装**。功能：一个 dsh 会话可以**同时**操作多个 Chrome 配置文件（每个 profile 一套登录态），按 `instance` 参数路由命令；多实例下不指定目标就拒绝，不猜。
+
+- **实例身份**：扩展首次启动生成 id 落 `chrome.storage.local`（改名不换 id），hello 帧带 `instance: {id, label}`。`label` 在扩展弹窗「高级 → 实例名称」里填，改完立即重报 hello（不重连）；状态页逐条列出实例名称与 id 前缀。老扩展的 hello 没有这个字段 ⇒ 进 `legacy` 单槽，行为与旧版一致。
+- **桥支持多条连接**（`src/server.ts`）：连接表按 hello 的实例 id 建索引，同一 id 重连只替换它自己的 socket；**旧实现的「新连接踢掉旧连接」只保留给 legacy 槽**。某实例掉线只失败它自己的在途命令（`link_lost`），别的实例不受连坐。
+- **工具面**：除 `browser_cleanup` 以外的 24 条工具都带可选 `instance`（名称 / id / 唯一前缀，大小写不敏感）；`browser_info` 在多实例时返回 `instances[]` 清单（不碰任何浏览器），单实例时保持旧返回值并附 `instance` 元信息。能力闸门（`extension_outdated`）改为读**目标实例**的 hello。
+- **fail-closed**：多实例 + 没指定 → `instance_required`（HTTP 409），**命令一条都不发**；名称重名或前缀歧义 → `instance_not_found`（HTTP 404）并给出候选；单实例仍可省略 `instance`，行为与旧版逐字一致（旧字段 `hello` / `connectedAt` / `extensionProtocol` 只在单实例时填报）。
+- **`/api/command` 接受 `instance` 字段**（curl 面）；`/api/status` 增 `instances[]`。
+- **实测台**：新增 `verify_multi_instance.mjs`（真桥 + 多假扩展：并存 / 重连隔离 / legacy 单槽 / 零派发 / 路由与歧义 / 在途命令隔离 / 静态对账）；`verify_extension_e2e` 增 4 项（真扩展上报实例 id、未命名 label 为空、弹窗改名后即刻重报、改名不换 id 不重连）；`verify_archive` 的参数表断言同步纳入 `instance`。
+
 ## v1.7.2 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `cdp` 命令 + hello 带 capabilities）——扩展必须重装；这也是最后一次「功能更新要求重装」**：从这一版起握手让插件知道扩展有什么，CDP 层的新能力（路线图上的拖拽 / mock / iframe / screencast……）此后全部只更插件。同时把用户定的铁律钉成机器可查的台子：**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**，逐条功能比，从此不许倒退。

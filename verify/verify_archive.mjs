@@ -71,7 +71,7 @@ await new Promise((r) => setTimeout(r, 400));
 const archive = tools.find((t) => t.name === "browser_archive");
 check("browser_archive 已注册", Boolean(archive));
 const props = archive?.parameters?.properties ?? {};
-check("参数表只有 tabId 与 path", "tabId" in props && "path" in props && Object.keys(props).length === 2, Object.keys(props).join(","));
+check("参数表只有 instance / tabId / path", "tabId" in props && "path" in props && "instance" in props && Object.keys(props).length === 3, Object.keys(props).join(","));
 
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`);
 await new Promise((r) => {

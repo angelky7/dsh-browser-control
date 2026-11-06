@@ -221,6 +221,30 @@ Agent **新建**的标签页会自动收进当前窗口的一个 `DSH` 蓝色标
 - 为什么客户端而不是桥接侧管这件事：桥的 token 就写在 profile 的 `cordis.patch.yml` 里，模型读得到也改得动；
   把「冻结」放在浏览器里、且只留一个人工通道，才真的挡得住。
 
+### 同时操作多个浏览器实例（多账号）
+
+一个 Chrome 配置文件 = 一个实例。同一个 Chrome 里开着两个 profile、各自登录一个账号时，两边都装这个扩展，桥就**同时**持有两条连接，插件按 `instance` 参数把命令路由到指定实例——不用退出登录来回换账号。
+
+1. 在每个要用的 Chrome profile 里都加载同一个扩展目录（`chrome://extensions` → 开发者模式 → 加载已解压的扩展程序）。
+2. 打开该 profile 的扩展弹窗 → 高级 → **实例名称**填一个好记的名字（如 `work` / `personal`），点「保存并重连」。不填也能用，只是桥只能显示 id 前缀。
+3. `browser_info` 会列出全部已连接实例（`instances[]`：名称、id、扩展版本、连接时间）。
+4. 之后每条 `browser_*` 工具都带可选参数 `instance`：
+
+```jsonc
+browser_tabs     { "action": "list", "instance": "work" }
+browser_navigate { "url": "https://example.com/dashboard", "instance": "personal" }
+```
+
+路由规则是 **fail-closed**（宁可不做，也不做错）：
+
+- 只连了一个实例：`instance` 可以省略，行为与以前完全一样。
+- 连了两个及以上、`instance` 又没写：**命令一条都不发**，返回 `instance_required` 并附实例清单。不替你猜「应该是那个」。
+- `instance` 写名称或 id 都行（大小写不敏感），也接受唯一前缀；名称重名或前缀同时命中多个 → `instance_not_found`，提示改用完整 id。
+- 同一个 profile 重连（浏览器重启、扩展重载）只替换它自己的连接；某个实例掉线也只失败它自己的在途命令，别的实例照常。
+- 没升级扩展（hello 里没有实例身份）的老扩展进 `legacy` 单槽，行为与旧版一致（新连接替换旧连接），仍可与已升级的实例并存、用 `instance: "legacy"` 点名。要真正并行多实例，**每个**要用的扩展都得换成带实例身份的版本。
+
+`/api/status` 也列出 `instances`；只连一个实例时旧的 `hello` / `connectedAt` 字段照旧填，多实例时留空、以 `instances` 为准。状态页会逐条列出实例名称与 id 前缀。
+
 ### 用脚本直连 HTTP（curl 等）
 
 `/api/command` 与 `/api/cleanup` 现在要求 Token，用的就是扩展连 WS 时那个值：
@@ -231,6 +255,8 @@ curl -X POST http://127.0.0.1:9777/api/command \
   -H 'Content-Type: application/json' \
   -d '{"command":"nav","params":{"url":"https://example.com"}}'
 ```
+
+多实例时在 JSON 里加一个 `"instance"`（名称或 id）：`{"command":"tabs.list","params":{},"instance":"work"}`。没写又同时连着多个，返回 409 + `instance_required`。
 
 也可以写 `?token=<你的 token>` 或 `X-Token: <你的 token>`。不带、或带错，一律 401；`/` 与 `/api/status` 仍是免鉴权的只读信息。之前「不带 Token 也能调通命令面」的行为已经失效（issue #3 / #6）。状态页上的清理按钮会要求你把 Token 输一次，只记在浏览器会话里。
 
@@ -262,9 +288,9 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_metrics` | 读性能计数器（DOM 节点数 / JS 堆 / 布局与脚本耗时，Performance.getMetrics，只读；让「这页面很重」有数字说话，v1.7.1+） |
 | `browser_windows` | 窗口控制：清单/开窗/改状态与几何/关整窗/跨窗挪标签（唯一能碰窗口几何的工具，v1.6.0+） |
 | `browser_cleanup` | 清理临时文件 |
-| `browser_info` | 报告实际连上的浏览器与扩展版本（排障先跑它，v1.0.9+） |
+| `browser_info` | 报告实际连上的浏览器实例与扩展版本；多实例时列 `instances[]`（排障先跑它，v1.0.9+） |
 
-共 25 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
+共 25 个工具；除 `browser_cleanup`（只动本机文件）外，每条工具都带可选参数 `instance`（多实例路由，见上一节）。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
 
 ## 架构
 
