@@ -39,6 +39,17 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - 页面在 Promise 挂起期间跳转 → 结构化错误 `context_destroyed: page navigated while evaluate was pending`，不会耗尽整个超时预算。
 - `frameSelector` 参数支持同源 iframe（contentDocument 穿透）；跨源帧明确报错，不做静默降级。
 
+## 文件上传（`browser_upload`）
+
+- 走 CDP `DOM.setFileInputFiles`：按 selector 找到 file input 的 nodeId，把**本机绝对路径**的文件直接设进去，
+  **不触发 Chrome 的原生文件选择器**，也不需要页面上有可见的上传按钮。
+- 路径在**运行 Chrome 的这台机器**上校验（存在、是普通文件、绝对路径）；校验失败在调用前就报错，
+  不会在页面里留下半截状态。
+- 扩展必须是带 `cdp` 透传的版本（≥1.7.2），否则报 `extension_outdated` 并给重装指引。
+- 分类为写操作：只读档（`readOnly`）拒绝；失败可能已经设进去也可能没有，按 `unknown` 处理，
+  先用 `browser_evaluate` 核验 `input.files` 再重试。
+- 上传成功后**必须核验页面收下了**（页面提示、缩略图、或 `input.files` 的名字/大小）；只看「没有报错」不算成功。
+
 ## 截图与坐标
 
 - **窗口控制（`browser_windows`）**：窗口几何与状态的改变**只**发生在这个工具里——其它一切工具（含输入路径）只聚焦、永不缩放，用户看到的每一次窗口变化都对应一次显式调用。`list` 读清单（几何/状态/tabIds，只读白名单）；`open`/`update`/`close`/`moveTab` 改窗口。
