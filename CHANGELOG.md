@@ -1,5 +1,15 @@
 # 更新日志
 
+## Unreleased
+
+- **不再抢前台（2026-11-06）**：`browser_click` / `browser_type` 的真实键盘模式 / `browser_press`
+  过去会在发事件前主动 `chrome.windows.update({focused:true}) + chrome.tabs.update({active:true})`，
+  每次交互都把 Chrome 抢到最前。真机实测 CDP 键鼠事件在**后台标签页同样生效**，因此这三处改成只挡
+  「窗口最小化（0×0 视口）」，不再 focus/activate；`tabs.open` 不传 `active` 时默认后台打开，
+  `windows.open` 不传 `focused` 时默认不聚焦（显式传参仍可按需前台）。
+  Chrome 自身的原生弹窗（文件选择器 / 权限提示 / 保存面板）仍可能激活窗口，属于浏览器行为，文档中说明。
+  新实测台 `verify/verify_silent.mjs` 用焦点探针钉住以上四条；`verify_windows` 跟进函数改名。
+
 ## v1.7.2 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `cdp` 命令 + hello 带 capabilities）——扩展必须重装；这也是最后一次「功能更新要求重装」**：从这一版起握手让插件知道扩展有什么，CDP 层的新能力（路线图上的拖拽 / mock / iframe / screencast……）此后全部只更插件。同时把用户定的铁律钉成机器可查的台子：**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**，逐条功能比，从此不许倒退。

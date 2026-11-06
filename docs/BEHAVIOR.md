@@ -2,6 +2,16 @@
 
 Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 bug。
 
+## 操作不抢前台（2026-11-06）
+
+- `browser_click` / `browser_type` 的真实键盘模式（`type`） / `browser_press` **不会**聚焦窗口或激活标签：
+  CDP 键鼠事件在后台标签页同样生效（真机实测）。这些命令只拒绝最小化窗口（0×0 视口），报 `window_minimized`。
+- `browser_tabs` `action:"open"` 不传 `active` 时**默认后台打开**；显式 `active:true` 仍会前台打开。
+- `browser_windows` `action:"open"` 不传 `focused` 时**默认不聚焦**；显式 `focused:true` 才抢焦点。
+- 原生弹窗（文件选择器、权限提示、macOS 保存面板）由 Chrome 呈现，可能激活窗口；这不是本扩展的行为，
+  能避免时走不弹对话框的路径（例如直接给文件输入设值，而不是点开会弹原生选择器的按钮）。
+- 实测台：`verify/verify_silent.mjs` 用焦点探针钉住以上契约。
+
 ## 窗口几何不可侵犯
 
 - 自动化**绝不**修改窗口尺寸、位置或状态（最大化/还原/最小化一律不动）。真实输入所需的窗口聚焦（`focused: true`）与标签页激活不改变任何几何属性。

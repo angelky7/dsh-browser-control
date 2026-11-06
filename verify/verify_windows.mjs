@@ -71,7 +71,7 @@ const check = (name, ok, detail = "") => {
   const { model, ctx } = await bootBackground();
   const a = model.addTab(1, "https://a.test/");
   await ctx.cmdWindowsUpdate({ windowId: 1, state: "minimized" });
-  const err = await ctx.activateTabWindow(a).then(() => null, (e) => e);
+  const err = await ctx.assertWindowNotMinimized(a).then(() => null, (e) => e);
   check("最小化窗口上做输入：结构化报错并指向 browser_windows 的恢复出口", err?.code === "window_minimized" && /browser_windows/.test(String(err?.message)), String(err?.message));
 }
 
