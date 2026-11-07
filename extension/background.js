@@ -70,6 +70,24 @@ const networkLog = new Map();
  * that call's duration; the default is accept so automation never deadlocks.
  */
 let dialogPolicy = 'accept';
+/** Chrome raises the window the moment a beforeunload dialog opens — the
+ *  debugger answers it within milliseconds, so the user never sees the dialog,
+ *  only Chrome jumping to the front mid-task (2026-11-07, real report). The
+ *  agent has already decided to leave the page (that is why it navigates or
+ *  closes the tab), so when the dialog policy auto-answers, drop the page's own
+ *  beforeunload hook first. Keep it as best effort: a detached debugger or a
+ *  busy renderer must not turn a close/navigate into a failure. */
+async function clearBeforeUnload(tabId) {
+	if (dialogPolicy === 'manual') return;
+	try {
+		await withCDP(tabId, (send) => send('Runtime.evaluate', {
+			expression: 'window.onbeforeunload = null; window.onunload = null; true',
+			awaitPromise: false, returnByValue: true, userGesture: true,
+		}));
+	} catch { /* the action itself reports its failure downstream */ }
+}
+
+
 /** Dialogs answered since attach, surfaced in results for verification. */
 const dialogLog = [];
 
@@ -929,13 +947,11 @@ async function probeReadyState(tabId) {
 	return value === '' ? undefined : value;
 }
 
-/** Bring the tab and its window forward so real input can land. This path only
- *  FOCUSES — it never touches geometry or window state; explicit window control
- *  is the browser_windows tool's job and nothing else. A minimized window keeps
- *  its 0x0 viewport where real input cannot land — report that and let the
- *  agent restore it explicitly with browser_windows (focused:true restores
- *  without un-maximizing; state:'normal' would also un-maximize). */
-async function activateTabWindow(tabId) {
+/** Refuse real input on a minimized window (0×0 viewport) — and nothing else.
+ *  This path NEVER focuses or activates anything: CDP input reaches a background
+ *  tab just as well as a foreground one, and silently raising the window on every
+ *  click/keystroke is exactly what used to interrupt the user mid-task. */
+async function assertWindowNotMinimized(tabId) {
 	let win;
 	try {
 		const tab = await chrome.tabs.get(tabId);
@@ -948,10 +964,6 @@ async function activateTabWindow(tabId) {
 		err.code = 'window_minimized';
 		throw err;
 	}
-	try {
-		await chrome.windows.update(win.id, { focused: true });
-		await chrome.tabs.update(tabId, { active: true });
-	} catch { /* tab may be closing; input will fail downstream anyway */ }
 }
 
 /* ---------------------------------------------------------- debugger (CDP) — persistent attachment */
@@ -1624,7 +1636,7 @@ async function cmdWindowsOpen(params) {
 	for (const k of ['left', 'top', 'width', 'height']) {
 		if (typeof params[k] === 'number') createProps[k] = Math.round(params[k]);
 	}
-	if (params.focused !== undefined) createProps.focused = Boolean(params.focused);
+	createProps.focused = params.focused !== undefined ? Boolean(params.focused) : false;
 	const state = windowStateOf(params);
 	if (state !== undefined) createProps.state = state;
 	// 未给扩展开隐身权限时 Chrome 自己会拒——错误原样上报，不假装开了普通窗
@@ -1716,7 +1728,7 @@ async function cmdTabsOpen(params) {
 	// 置真之前，也冒领不了。
 	const created = await chrome.tabs.create({
 		url: 'about:blank',
-		active: params.active !== undefined ? Boolean(params.active) : true,
+		active: params.active !== undefined ? Boolean(params.active) : false,
 	});
 	const started = Date.now();
 	const startedFlag = { value: false };
@@ -1793,6 +1805,7 @@ async function cmdTabsCloseMany(params) {
 	if (present.length > 0) {
 		try {
 			// 一次调用、数组形态：一批标签在链路上是一条命令、一份超时预算。
+			for (const id of present) await clearBeforeUnload(id);
 			await chrome.tabs.remove(present);
 		} catch (error) {
 			report = failureText(error);
@@ -1882,6 +1895,7 @@ async function cmdTabsHistory(params, direction) {
 	}
 	const startedFlag = { value: false };
 	const settling = waitForArrival(tab.id, tier, budget, targetUrl ?? '', startedFlag);
+	await clearBeforeUnload(tab.id);
 	if (direction === 'back') await chrome.tabs.goBack(tab.id);
 	else await chrome.tabs.goForward(tab.id);
 	startedFlag.value = true;
@@ -1927,6 +1941,7 @@ async function cmdNav(params) {
 		await ensureAttached(tab.id);
 		settling = waitForArrival(tab.id, tier, budget, params.url, startedFlag);
 	}
+	await clearBeforeUnload(tab.id);
 	const updating = chrome.tabs.update(tab.id, { url: params.url });
 	startedFlag.value = true;
 	await updating;
@@ -2145,9 +2160,8 @@ async function cmdFind(params) {
 async function cmdClick(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	const tab = await resolveTab(params.tabId);
-	// Mouse events land on whatever is under the viewport coordinates of the
-	// focused tab; ensure our tab is frontmost so coordinates are meaningful.
-	await activateTabWindow(tab.id);
+	// CDP input lands on a background tab too; never raise the window here.
+	await assertWindowNotMinimized(tab.id);
 	return withCDP(tab.id, async (send) => {
 		const hit = await send('Runtime.evaluate', {
 			expression: `(() => {
@@ -2216,8 +2230,8 @@ async function cmdInput(params) {
 	// internal suggestion state) observe every character. 'fill' (default)
 	// sets the value directly — fast, but bypasses component keystroke logic.
 	const mode = params.mode === 'type' ? 'type' : 'fill';
-	// Real key events require the tab to have OS-level focus; activate first.
-	if (mode === 'type') await activateTabWindow(tab.id);
+	// CDP key events reach a background tab; only guard the minimized case.
+	if (mode === 'type') await assertWindowNotMinimized(tab.id);
 
 	// Locate + focus + clear in one evaluate, shared by both modes.
 	const located = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
@@ -2352,8 +2366,8 @@ async function cmdPress(params) {
 	if (raw.length === 0) throw new Error('params.key is required');
 	const tab = await resolveTab(params.tabId);
 	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
-	// Key events need OS focus; a background tab swallows them silently.
-	await activateTabWindow(tab.id);
+	// CDP key events reach background tabs; do not raise the window.
+	await assertWindowNotMinimized(tab.id);
 	let keyCode, code;
 	if (KEY_CODES[key]) { [keyCode, code] = KEY_CODES[key]; }
 	else if (key.length === 1) {
