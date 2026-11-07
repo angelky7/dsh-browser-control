@@ -76,7 +76,28 @@ async function boot() {
     `focused=${opened.focused}`);
 }
 
-// ---- 5) 最小化窗口的输入仍然有结构化报错（不是静默失败） ----
+// ---- 5) close / nav 之前先清 beforeunload，避免 Chrome 的离开提示抢前台 ----
+{
+  const { model, ctx } = await boot();
+  const leave = model.addTab(1, "https://leave.test/");
+  model.dbg.log.length = 0;
+  await ctx.cmdTabsClose({ tabId: leave });
+  const cleared = model.dbg.log.some((e) => e.method === "Runtime.evaluate"
+    && String(e.params?.expression || "").includes("onbeforeunload"));
+  check("tabs.close 先清 onbeforeunload（Chrome 离开提示会激活窗口）", cleared,
+    JSON.stringify(model.dbg.log.filter((e) => e.method === "Runtime.evaluate").slice(-1)));
+}
+{
+  const { model, ctx } = await boot();
+  const t = model.addTab(1, "https://nav.test/");
+  model.dbg.log.length = 0;
+  await ctx.cmdNav({ url: "https://next.test/", tabId: t, waitUntil: "none" });
+  const cleared = model.dbg.log.some((e) => e.method === "Runtime.evaluate"
+    && String(e.params?.expression || "").includes("onbeforeunload"));
+  check("nav 先清 onbeforeunload（Chrome 离开提示会激活窗口）", cleared, "");
+}
+
+// ---- 6) 最小化窗口的输入仍然有结构化报错（不是静默失败） ----
 {
   const { ctx, tabId } = await boot();
   await ctx.cmdWindowsUpdate({ windowId: 1, state: "minimized" });

@@ -10,6 +10,10 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - `browser_windows` `action:"open"` 不传 `focused` 时**默认不聚焦**；显式 `focused:true` 才抢焦点。
 - 原生弹窗（文件选择器、权限提示、macOS 保存面板）由 Chrome 呈现，可能激活窗口；这不是本扩展的行为，
   能避免时走不弹对话框的路径（例如直接给文件输入设值，而不是点开会弹原生选择器的按钮）。
+- `beforeunload`（页面未保存离开提示）尤其会**把 Chrome 窗口激活到最前**：`tabs.close` / `nav` / `tabs.back` /
+  `tabs.forward` 在对话框策略非 `manual` 时会先清掉页面的 `window.onbeforeunload` / `window.onunload`，
+  因此「关标签/导航」不再把窗口抢到前台；策略为 `manual` 时保留对话框（那是用户要看的东西）。
+  用 `addEventListener('beforeunload', …)` 注册的监听清不掉，遇到时改走「先停顿报告」而不是反复关标签。
 - 实测台：`verify/verify_silent.mjs` 用焦点探针钉住以上契约。
 
 ## 窗口几何不可侵犯

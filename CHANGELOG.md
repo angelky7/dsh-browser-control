@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **beforeunload 不再抢前台（2026-11-07）**：Chrome 在弹出 `beforeunload`（未保存离开提示）的瞬间会把
+  窗口激活到最前——即使调试器已经毫秒级自动应答，用户看到的仍是 Chrome 突然跳到前台。现在
+  `tabs.close` / `tabs.closeMany` / `nav` / `tabs.back` / `tabs.forward` 在对话框策略不是 `manual` 时，
+  会先清掉目标页的 `window.onbeforeunload` / `window.onunload` 再动作；策略为 `manual` 时保持原样。
+  `verify/verify_silent.mjs` 增加两条断言（close / nav 都先清钩子）。
+
 - **不再抢前台（2026-11-06）**：`browser_click` / `browser_type` 的真实键盘模式 / `browser_press`
   过去会在发事件前主动 `chrome.windows.update({focused:true}) + chrome.tabs.update({active:true})`，
   每次交互都把 Chrome 抢到最前。真机实测 CDP 键鼠事件在**后台标签页同样生效**，因此这三处改成只挡

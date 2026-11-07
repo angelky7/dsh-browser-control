@@ -70,6 +70,24 @@ const networkLog = new Map();
  * that call's duration; the default is accept so automation never deadlocks.
  */
 let dialogPolicy = 'accept';
+/** Chrome raises the window the moment a beforeunload dialog opens — the
+ *  debugger answers it within milliseconds, so the user never sees the dialog,
+ *  only Chrome jumping to the front mid-task (2026-11-07, real report). The
+ *  agent has already decided to leave the page (that is why it navigates or
+ *  closes the tab), so when the dialog policy auto-answers, drop the page's own
+ *  beforeunload hook first. Keep it as best effort: a detached debugger or a
+ *  busy renderer must not turn a close/navigate into a failure. */
+async function clearBeforeUnload(tabId) {
+	if (dialogPolicy === 'manual') return;
+	try {
+		await withCDP(tabId, (send) => send('Runtime.evaluate', {
+			expression: 'window.onbeforeunload = null; window.onunload = null; true',
+			awaitPromise: false, returnByValue: true, userGesture: true,
+		}));
+	} catch { /* the action itself reports its failure downstream */ }
+}
+
+
 /** Dialogs answered since attach, surfaced in results for verification. */
 const dialogLog = [];
 
@@ -1787,6 +1805,7 @@ async function cmdTabsCloseMany(params) {
 	if (present.length > 0) {
 		try {
 			// 一次调用、数组形态：一批标签在链路上是一条命令、一份超时预算。
+			for (const id of present) await clearBeforeUnload(id);
 			await chrome.tabs.remove(present);
 		} catch (error) {
 			report = failureText(error);
@@ -1876,6 +1895,7 @@ async function cmdTabsHistory(params, direction) {
 	}
 	const startedFlag = { value: false };
 	const settling = waitForArrival(tab.id, tier, budget, targetUrl ?? '', startedFlag);
+	await clearBeforeUnload(tab.id);
 	if (direction === 'back') await chrome.tabs.goBack(tab.id);
 	else await chrome.tabs.goForward(tab.id);
 	startedFlag.value = true;
@@ -1921,6 +1941,7 @@ async function cmdNav(params) {
 		await ensureAttached(tab.id);
 		settling = waitForArrival(tab.id, tier, budget, params.url, startedFlag);
 	}
+	await clearBeforeUnload(tab.id);
 	const updating = chrome.tabs.update(tab.id, { url: params.url });
 	startedFlag.value = true;
 	await updating;
