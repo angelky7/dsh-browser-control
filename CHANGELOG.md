@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.7.4 (2026-11-04)
+
+**这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。第 27 条工具：**`browser_audit` 操作审计**——「刚才谁动了这个页面」从这一版起有账可查。
+
+- **命令层账本**：每条经 `controller.execute()` 的命令都上账——成功、失败（带 `code`/`effectState`）、被只读档拒绝（`blocked_by_policy`）、被旧扩展闸门预检拒绝（`extension_outdated`）全都在；`browser_cleanup` 这类不走 `execute()` 的本地命令自己记账。模型看不到的内部重试与 browser_drag 一次拖拽打出的 N 次 cdp 往返也如实记，不美化。
+- **脱敏**：`input` 的 value（往页面里打的字，可能是密码）与 `cookies.set` 的 value 一律 `[redacted:N chars]`；token/authorization/password/secret/apikey/cookie 类键打码；eval 表达式只留前 120 字符；单条摘要限 300 字符。审计回答的是「做了什么」，不是「内容是什么」。
+- **边界与查询**：内存环形缓冲 **200 条**、dsh 重启即清（持久化留给「会话恢复」那一版）；seq 不回收——分页时中间缺号本身就是「被挤掉了」的机器可读信号。`browser_audit` 按 tabId / 命令子串 / sinceSeq 过滤，limit 1–200（默认 50，取最新）；纯本地读 ⇒ 只读档下照常可用；它不给自己上账。
+- **台子 `verify_audit.mjs`（30 项）**：账本单元（脱敏/截断/环形缓冲 200 条 seq 不回收/过滤）+ 真实链路（成功·失败·本地 cleanup 按序上账、失败条目带 code/effectState、渲染里明文不出现）+ 策略（只读档拒绝也上账、只读档下审计照常可查、旧扩展预检拒绝记 extension_outdated）。render 契约 +browser_audit 行；兼容矩阵探针 28 → 29（审计是插件本地工具，所有历史面都可用）。
+- `npm run verify` 975 → **1015 项** exit 0；四处变异（吞 input 脱敏 / 失败记成成功 / 环形缓冲挤错端 / 预检拒绝错记命令名）各被不相交断言抓住。
+
 ## v1.7.3 (2026-11-04)
 
 **这一版没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2，装过的不用重装）。这是「扩展一次交付、接口预埋」之后的第一个特性：全部经预埋的 `cdp` 通道驱动，正好实战验证这条路线。

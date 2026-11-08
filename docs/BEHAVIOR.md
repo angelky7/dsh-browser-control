@@ -174,6 +174,18 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 分类 | 改页面状态 ⇒ 写命令族；只读档工具级拒绝；hold 中止态经 `cdp` 被拦；html5 需要页面脚本，`allowScript:false` 时给「改用 mouse」的指引 |
 | 缺扩展 | `requireExtensionCommand('cdp','1.7.2')` 预检：老扩展拿到 extension-outdated + 重装指引，绝不裸 unknown command |
 
+## 操作审计（`browser_audit`，v1.7.4）
+
+插件这一侧的**命令层**账本，回答「刚才谁动了这个页面」。纯本地（不碰扩展），是后面「会话恢复」的地基。
+
+| 维度 | 行为 |
+|---|---|
+| 记什么 | 每条经 `controller.execute()` 的命令：seq / 时间 / 命令名 / tabId / 参数摘要 / ok / code / effectState / 失败描述 / 耗时。**成功、失败、被策略拒绝、被旧扩展闸门预检拒绝，全都上账**；`browser_cleanup` 这种不走 execute() 的本地命令自己记账。模型看不到的内部重试与 browser_drag 一次拖拽打出的 N 次 cdp 往返都在账上，不美化 |
+| 脱敏 | `input` 的 value（往页面里打的字，可能是密码）与 `cookies.set` 的 value 一律 `[redacted:N chars]`；token/authorization/password/secret/apikey/cookie 这些键的值打码；eval 表达式只留前 120 字符；单条摘要限 300 字符 |
+| 边界 | 内存环形缓冲 **200 条**，dsh 重启即清（持久化是「会话恢复」那一版的事）；seq 不回收——分页时中间缺号本身就是「被挤掉了」的机器可读信号 |
+| 查询 | `browser_audit`：按 tabId / 命令子串 / sinceSeq 过滤，limit 1–200（默认 50，取最新）。纯本地读 ⇒ **只读档下照常可用**；它自己不给自己上账 |
+| 与信任层的关系 | 审计不是安全边界，是事后可查；冻结/锁定/策略的**执行**仍在原处，审计只保证「做过什么有账」 |
+
 ## 兼容契约（插件升级 × 旧扩展）
 
 铁律：**dsh 插件 x + 扩展 x-n 的体验 ≥ dsh 插件 x-n + 扩展 x-n**——升级插件永远不许比「那个年代的配套组合」差，逐条功能比。实现与验证：
