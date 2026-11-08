@@ -953,7 +953,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		description: 'Inventory the page\'s interactive elements with stable refs; pass a ref to browser_click/browser_type afterwards. mode:"ax" numbers them by Chrome\'s accessibility tree (role + accessible name), which survives a DOM redesign; the default mode matches CSS selectors.',
 		parameters: {
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
-			limit: { type: 'number', description: 'Max elements returned; defaults to 120, capped at 200.' },
+			offset: { type: 'number', description: 'Skip this many items into the inventory (paging); default 0. Refs are valid for THIS call only — take the next page in the same breath if you need stable refs.' },
+			limit: { type: 'number', description: 'Page size: max items returned by this call; defaults to 120. The extension supplies up to a 200-item window per call.' },
 			mode: { type: 'string', description: '"ax" for the accessibility tree, "dom" (default) for the selector list. "ax" falls back to "dom" with axFallback set if the page gives no a11y tree.' },
 		},
 		output: {
@@ -966,6 +967,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					url: { type: 'string', required: true },
 					mode: { type: 'string' },
 					axFallback: { type: 'string' },
+					offset: { type: 'number', required: true },
+					total: { type: 'number' },
+					returned: { type: 'number' },
+					nextOffset: { type: 'number' },
+					hasMore: { type: 'boolean', required: true },
 					items: {
 						type: 'array',
 						required: true,
@@ -984,7 +990,16 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				},
 			},
 			render: (_args, value) => {
-				const head = `${value.items.length} interactive elements on ${value.title}`
+				const shown = value.items.length
+				const start = value.offset + 1
+				const end = value.offset + shown
+				const totalText = value.total === undefined ? `${value.returned ?? shown} available` : `${value.total} on the page`
+				const range = shown === 0 ? `no items at offset ${value.offset}` : `items ${start}–${end} of ${totalText}`
+				const capped = value.total !== undefined && value.returned !== undefined && value.total > value.returned
+					? ` (this extension returns at most ${value.returned}-item windows — use browser_find/browser_read to reach the rest)`
+					: ''
+				const next = value.nextOffset === undefined ? '' : `; next page: offset ${value.nextOffset}`
+				const head = `${range}${capped}${next}`
 					+ ` (mode ${value.mode ?? 'dom'}); click or fill them by ref:`
 					+ (value.axFallback === undefined ? '' : `\n(mode ax fell back to dom: ${value.axFallback})`)
 				const lines = value.items.map(item => {
@@ -997,8 +1012,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		},
 		presentCall: () => ({ card: 'generic', title: 'Snapshot browser page', kind: 'other' as const }),
 		async execute(args, exec) {
-			const limit = Math.min(200, Math.max(1, args.limit ?? 120))
-			const params: Record<string, unknown> = { limit }
+			const offset = Math.max(0, Math.trunc(typeof args.offset === 'number' && Number.isFinite(args.offset) ? args.offset : 0))
+			const limit = Math.min(200, Math.max(1, typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.trunc(args.limit) : 120))
+			// Ask for the largest window the extension offers (200) and page in the
+			// plugin: older surfaces never learned an offset parameter, and they do
+			// report `total`, so paging stays plugin-side (v1.7.7).
+			const params: Record<string, unknown> = { limit: 200 }
 			if (typeof args.tabId === 'number') params.tabId = args.tabId
 			if (typeof args.mode === 'string') params.mode = args.mode
 			const raw = await controller.execute('snapshot', params, exec.signal) as {
@@ -1008,6 +1027,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				mode?: string
 				axFallback?: string
 				ax?: unknown
+				total?: unknown
 				items?: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
 			}
 			// 版本错位必须说出来：v1.0.10 及更早的扩展没有 AX 快照（1.0.11 才加的），
@@ -1022,13 +1042,36 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				: (requestedAx && !gotAx
 					? 'this extension ignored mode:"ax" and returned CSS-DOM matches (AX mode needs DSH Browser Control extension v1.0.11 or newer) — the names below are tag names, not accessible names'
 					: undefined)
-			return {
+			const window = Array.isArray(raw.items) ? raw.items : []
+			const returned = window.length
+			const reportedTotal = typeof raw.total === 'number' && Number.isFinite(raw.total) ? Math.trunc(raw.total) : undefined
+			const total = reportedTotal === undefined ? undefined : Math.max(returned, reportedTotal)
+			const page = window.slice(offset, offset + limit)
+			const hasMore = offset + page.length < returned
+			const receipt: {
+				tabId: number
+				title: string
+				url: string
+				mode?: string
+				axFallback?: string
+				offset: number
+				total?: number
+				returned: number
+				nextOffset?: number
+				hasMore: boolean
+				items: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
+			} = {
 				tabId: raw.tabId,
 				title: raw.title ?? '',
 				url: raw.url ?? '',
 				...(raw.mode === undefined ? {} : { mode: raw.mode }),
 				...(axFallback === undefined ? {} : { axFallback }),
-				items: (raw.items ?? []).map(item => ({
+				offset,
+				...(total === undefined ? {} : { total }),
+				returned,
+				hasMore,
+				...(hasMore ? { nextOffset: offset + page.length } : {}),
+				items: page.map(item => ({
 					ref: item.ref,
 					tag: item.tag,
 					...(item.role === undefined ? {} : { role: item.role }),
@@ -1036,6 +1079,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					...(item.href === undefined ? {} : { href: item.href }),
 				})),
 			}
+			return receipt
 		},
 	}))
 

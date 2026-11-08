@@ -62,3 +62,4 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_audit.mjs` | 操作审计（v1.7.4，纯插件）：账本单元（脱敏/截断/环形缓冲 200 条 seq 不回收/tabId·命令·sinceSeq·limit 过滤）+ 真实链路（成功/失败/本地 cleanup 按序上账、失败条目带 code/effectState、输入值打码后明文不出现、审计工具不给自己上账）+ 策略（只读档拒绝的写命令也上账、只读档下审计照常可查、旧扩展预检拒绝记 extension_outdated） | v1.7.4 操作审计 |
 | `verify_journal.mjs` | 会话恢复（v1.7.5，纯插件）：journal 单元（追加/读回/坏行跳过/启动裁剪 1000 行/run 编号/过滤）+ **跨重启恢复**（实例 A 跑命令后销毁，同 stateDir 起实例 B：journal 读得回 A 的条目且 run 分组正确，audit 只报 B 自己）+ 扩展离线可读 + 失败命令也落盘 + 只读档可查 + stateDir 默认主目录 | v1.7.5 会话恢复 |
 | `verify_sessions.mjs` | 多 session 隔离（v1.7.6，纯插件）：两个 agent 各自的工作标签页互不串（省略 tabId 落到自己的、不是活动页）；无 agent 身份不注入（旧行为）；tabs.open 结果被收养、工作页被关掉后退回活动页并改记；tabs.list 不参与注入；list/release 语义与 render「你」标记；只读档可查 | v1.7.6 多 session 隔离 |
+| `verify_snapshot_page.mjs` | 快照分页（v1.7.7，纯插件）：每次向扩展要 200 窗口再插件侧切片；默认页 1–120/total 300/next 120、中间页、窗口尾页（不再给 nextOffset）、越界空页、clamp、total 缺失退化、AX 透传；render 区间/下一页/窗口上限文案 | v1.7.7 快照分页 |

@@ -197,13 +197,18 @@ for (const [name, command, args, payload] of EXTENSION_SHAPES) {
   check("browser_snapshot：每条带 role 与可读名字", /e13\] button "Option 13 with whitespace"/.test(out.text), out.text.split("\n")[14]);
   check("browser_snapshot：条目里的换行被压成一行", !out.text.includes("Option 1  with\nwhitespace"));
   check("browser_snapshot：链接把 href 也带出来", out.text.includes("-> https://p.example/page/0"), out.text.split("\n")[1]);
-  const tag = out.text.match(TRUNCATION_TAG);
-  check("browser_snapshot：200 条超预算时带机器可读截断标记", Boolean(tag), out.text.slice(-90));
+  // v1.7.7 分页：默认页 120 条，页头带区间与下一页 offset；不靠整段截断硬塞。
+  check("browser_snapshot：默认页只给 120 条并提示下一页",
+    out.text.includes("next page: offset 120") && out.text.includes("[e0]") && !out.text.includes("[e199]"), out.text.split("\n")[0]);
+  check("browser_snapshot：默认页未超预算（分页而不是截断）", !out.text.includes("renderedTruncated"), out.text.slice(-60));
+  const full = await runTool("browser_snapshot", { limit: 200 }, payload, "snapshot");
+  const tag = full.text.match(TRUNCATION_TAG);
+  check("browser_snapshot：显式要 200 条时超预算仍带机器可读截断标记", Boolean(tag), full.text.slice(-90));
   check("browser_snapshot：正文恰好在 8000 字符预算处切断",
-    tag ? out.text.indexOf("\n… [renderedTruncated") === 8000 && Number(tag[2]) === 8000 : false,
-    tag ? `cutAt=${out.text.indexOf("\n… [renderedTruncated")} limit=${tag[2]}` : "no tag");
+    tag ? full.text.indexOf("\n… [renderedTruncated") === 8000 && Number(tag[2]) === 8000 : false,
+    tag ? `cutAt=${full.text.indexOf("\n… [renderedTruncated")} limit=${tag[2]}` : "no tag");
   check("browser_snapshot：被截掉的确实是尾部而不是头部",
-    out.text.includes("[e0]") && !out.text.includes("[e199]") && Number(tag?.[1] ?? 0) > 0,
+    full.text.includes("[e0]") && !full.text.includes("[e199]") && Number(tag?.[1] ?? 0) > 0,
     `omitted=${tag?.[1]}`);
 
   const few = await runTool("browser_snapshot", {}, { tabId: 3, title: "T", url: "u", items: [{ ref: "e1", tag: "button", name: "OK" }] }, "snapshot");
