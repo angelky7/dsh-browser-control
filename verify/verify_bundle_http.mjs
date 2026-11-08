@@ -42,7 +42,7 @@ const patch = await readFile(new URL("../cordis.patch.yml", import.meta.url), "u
 apply(ctx, Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: /enabled:\s*true/.test(patch), port: PORT, token: "dsh-local" }));
 await new Promise((r) => setTimeout(r, 250));
 
-check("发布产物注册 28 个工具", tools.length === 28, String(tools.length));
+check("发布产物注册 29 个工具", tools.length === 29, String(tools.length));
 check("默认 token 触发启动告警", logs.some((l) => l.includes("insecure token")), logs.filter((l) => l.includes("insecure")).join("|").slice(0, 90));
 
 const open = await new Promise((res) => {

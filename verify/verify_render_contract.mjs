@@ -362,6 +362,8 @@ const GROUND_TRUTH = [
   ["browser_audit", null, {}, null, ["Audit:"]],
   // 会话恢复（v1.7.5）：journal 是磁盘账本，内容由 verify_journal 精确断；这里只验形状
   ["browser_journal", null, { limit: 5 }, null, ["Journal:"]],
+  // 多 session 隔离（v1.7.6）：本地登记簿，内容由 verify_sessions 精确断
+  ["browser_sessions", null, {}, null, ["Sessions:"]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
@@ -380,7 +382,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit", "browser_journal",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit", "browser_journal", "browser_sessions",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

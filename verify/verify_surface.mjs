@@ -55,8 +55,11 @@ check("构建产物与源码工具一致", stale.length === 0, stale.length ? `l
 
 // 5) 源码工具 ↔ 两份 README 的工具表
 for (const [label, doc] of [["README.md", readme], ["README.en.md", readmeEn]]) {
-  const section = doc.slice(doc.indexOf("## 工具清单") >= 0 ? doc.indexOf("## 工具清单") : doc.indexOf("## Tools"));
-  const body = section.slice(0, 4000);
+  const start = doc.indexOf("## 工具清单") >= 0 ? doc.indexOf("## 工具清单") : doc.indexOf("## Tools");
+  // 到下一个二级标题为止：固定 4000 字符窗口会在表变长时把末尾几行挤出扫描范围
+  // （v1.7.6 加第 29 行时就这样假红过一次）。
+  const next = doc.indexOf("\n## ", start + 3);
+  const body = doc.slice(start, next < 0 ? undefined : next);
   const documented = new Set([...body.matchAll(/`(browser_[a-z_]+)`/g)].map((m) => m[1]));
   const missing = [...srcTools].filter((t) => !documented.has(t));
   const phantom = [...documented].filter((t) => !srcTools.has(t));

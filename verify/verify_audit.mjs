@@ -96,7 +96,7 @@ const byName = (n) => tools.find((t) => t.name === n);
 const signal = () => new AbortController().signal;
 const call = (name, args) => byName(name).execute(args, { signal: signal() }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: String(e?.message ?? e) }));
 
-check("browser_audit 已注册（工具面 28 条）", Boolean(byName("browser_audit")) && tools.length === 28, String(tools.length));
+check("browser_audit 已注册（工具面 29 条）", Boolean(byName("browser_audit")) && tools.length === 29, String(tools.length));
 
 await call("browser_navigate", { url: "https://a.test/", tabId: 7 });
 await call("browser_type", { selector: "#q", value: "hunter2-secret", tabId: 7 });

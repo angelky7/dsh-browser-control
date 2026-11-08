@@ -18,12 +18,13 @@
  * @module @deepseek-ai/dsh-browser-bridge
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool as defineHostTool, type DefineToolOptions, type ParameterSchemaSpec, type ToolRunContext, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-invariants'
 import type {} from '@deepseek-ai/dsh-settings'
 import { BridgeServer, cleanupArtifacts } from './server.ts'
@@ -31,6 +32,7 @@ import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
 import { AUDIT_MAX_ENTRIES, AuditLog, summarizeAuditParams, type AuditEntry } from './audit.ts'
 import { Journal, readJournal } from './journal.ts'
+import { SessionRegistry } from './sessions.ts'
 
 /** Navigation wait ceiling (same as browser_wait); the bridge gets this plus BRIDGE_MARGIN_MS. */
 const NAV_MAX_MS = 120_000
@@ -41,6 +43,20 @@ const NAV_MAX_MS = 120_000
  * protocol: a value only one side knows is a lie on the other).
  */
 const NAV_TIERS: Record<string, number> = { none: 0, commit: 4_000, domcontentloaded: 4_000, load: 15_000 }
+
+/**
+ * Commands whose params carry no meaningful single tab: link probes, tab
+ * management, window management and the global dialog policy. Everything else
+ * defaults to the calling session's working tab when tabId is omitted
+ * (v1.7.6 isolation). New tab-scoped commands need no registration here —
+ * they inherit the default, which is the safe direction.
+ */
+const NO_TAB_DEFAULT_COMMANDS: ReadonlySet<string> = new Set([
+	'ping', 'browser.info',
+	'tabs.list', 'tabs.open', 'tabs.group', 'tabs.ungroup',
+	'windows.list', 'windows.open', 'windows.update', 'windows.close', 'windows.moveTab',
+	'dialog',
+])
 /**
  * Extra time handed to the bridge on top of the navigation budget. Without it a
  * caller-requested budget longer than the bridge default (60s) would be beaten by
@@ -48,6 +64,33 @@ const NAV_TIERS: Record<string, number> = { none: 0, commit: 4_000, domcontentlo
  * of a navigation timeout (nothing was touched) - two very different next steps.
  */
 const BRIDGE_MARGIN_MS = 2_000
+
+/**
+ * 每个工具体都跑在调用方 agent 的会话上下文里（exec.agent.id）。控制器用它
+ * 解析「这个会话的工作标签页」。没有 agent 身份的调用（HTTP 面、测试、老宿主）
+ * store 是 undefined，行为与以前完全一致。
+ */
+const TOOL_SESSION = new AsyncLocalStorage<string | undefined>()
+
+/**
+ * 包一层宿主的 defineTool：注册处全部走这里，工具体自动带上会话上下文。
+ * 这是 v1.7.6 多 session 隔离能集中实现、而不用改二十多处 execute 的原因。
+ */
+function defineTool<const S extends ParameterSchemaSpec, const O extends ValueSchemaSpec>(options: DefineToolOptions<S, O>) {
+	// The body is typed through ToolRunContext and cast at both boundaries: letting
+	// TS deep-compare the generic option shape through a spread blows its recursion
+	// budget ("excessive stack depth comparing InferObject").
+	const inner = options.execute as unknown as (args: unknown, exec: ToolRunContext) => Promise<unknown>
+	const execute = ((args: unknown, exec: ToolRunContext) => {
+		const agent = (exec as { agent?: { id?: unknown } }).agent
+		const sessionId = typeof agent?.id === 'string' && agent.id.length > 0 ? agent.id : undefined
+		return TOOL_SESSION.run(sessionId, () => inner(args, exec))
+	}) as unknown as DefineToolOptions<S, O>['execute']
+	// Call the host helper through a non-generic point: re-instantiating its
+	// recursive InferObject types from inside a generic wrapper is what TS chokes on.
+	const hostDefine = defineHostTool as unknown as (o: DefineToolOptions<S, O>) => ReturnType<typeof defineHostTool>
+	return hostDefine({ ...options, execute } as DefineToolOptions<S, O>)
+}
 
 // Re-exported so the policy tables stay testable from the published bundle
 // (verify/verify_policy.mjs reconciles them against the extension's COMMANDS).
@@ -204,6 +247,8 @@ class BridgeController {
 	private journalKey = ''
 	/** 操作审计账本（内存环形缓冲，200 条；命令层记录，见 audit.ts 顶部注释）。 */
 	readonly audit = new AuditLog()
+	/** 多 session 隔离：每个 dsh 会话的工作标签页（见 sessions.ts）。 */
+	readonly sessions = new SessionRegistry()
 
 	constructor(private readonly log: (line: string) => void) {}
 
@@ -347,20 +392,24 @@ class BridgeController {
 	 */
 	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number): Promise<unknown> {
 		const started = Date.now()
-		const summary = summarizeAuditParams(command, params)
-		const tabId = typeof params.tabId === 'number' ? params.tabId : undefined
+		const sessionId = TOOL_SESSION.getStore()
+		const resolved = sessionId === undefined ? params : await this.isolateParams(command, params, sessionId, signal)
+		const summary = summarizeAuditParams(command, resolved)
+		const tabId = typeof resolved.tabId === 'number' ? resolved.tabId : undefined
 		try {
-			this.policyGate(command, params)
+			this.policyGate(command, resolved)
 			const server = this.server
 			if (server === undefined) {
 				throw classify(command, new Error(
 					this.lastError ?? '浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里给 browser-bridge 配 enabled: true（dsh 0.1.7+ 的宿主也会在设置 → 插件 自动列出本插件开关；0.1.2 及更早的宿主没有这张卡片，只能改配置文件）',
 				))
 			}
-			const result = await server.execute(command, params, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
+			const result = await server.execute(command, resolved, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
+			if (sessionId !== undefined) this.noteSession(sessionId, resolved, result)
 			this.recordAudit({ command, tabId, params: summary, ok: true, durationMs: Date.now() - started })
 			return result
 		} catch (error) {
+			if (sessionId !== undefined) this.sessions.touch(sessionId)
 			const code = (error as { code?: unknown }).code
 			const effectState = (error as { effectState?: unknown }).effectState
 			this.recordAudit({
@@ -375,6 +424,39 @@ class BridgeController {
 			})
 			throw error
 		}
+	}
+
+	/**
+	 * Apply per-session tab isolation: when a call omits `tabId`, default it to
+	 * the calling session's working tab — but only after asking the extension
+	 * whether that tab is still open. A stale id must never fail a call that used
+	 * to work; when it is gone we forget it and let the browser's active tab
+	 * answer, exactly like before this feature existed.
+	 */
+	private async isolateParams(command: string, params: Record<string, unknown>, sessionId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+		if (typeof params.tabId === 'number' || NO_TAB_DEFAULT_COMMANDS.has(command)) return params
+		const recorded = this.sessions.workingTab(sessionId)
+		if (recorded === undefined) return params
+		const server = this.server
+		if (server !== undefined) {
+			try {
+				const listing = await server.execute('tabs.list', {}, { signal }) as { tabs?: { id?: unknown }[] }
+				const live = Array.isArray(listing?.tabs) && listing.tabs.some((tab) => tab?.id === recorded)
+				if (!live) {
+					this.sessions.release(sessionId)
+					return params
+				}
+			} catch { /* 列不出来就按旧行为走活动标签页 */ }
+		}
+		return { ...params, tabId: recorded }
+	}
+
+	/** Record the call and adopt the tab it actually touched (params or result). */
+	private noteSession(sessionId: string, params: Record<string, unknown>, result: unknown): void {
+		this.sessions.touch(sessionId)
+		if (typeof params.tabId === 'number') this.sessions.adopt(sessionId, params.tabId)
+		const resultTab = (result as { tabId?: unknown } | null | undefined)?.tabId
+		if (typeof resultTab === 'number') this.sessions.adopt(sessionId, resultTab)
 	}
 
 	/**
@@ -1902,6 +1984,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 	registerDragTool(ctx, controller)
 	registerAuditTool(ctx, controller)
 	registerJournalTool(ctx, controller)
+	registerSessionsTool(ctx, controller)
 }
 
 /* ------------------- browser_drag: composed plugin-side over the cdp channel ------------------- */
@@ -2335,6 +2418,72 @@ function registerJournalTool(ctx: Context, controller: BridgeController): void {
 			if (dir === undefined) throw new Error('browser-bridge is not configured yet — the journal has no stateDir to read')
 			const { total, entries } = await readJournal(dir, { command: args.command, tabId: args.tabId, limit: args.limit })
 			return { total, shown: entries.length, runs: new Set(entries.map((e) => e.run)).size, entries }
+		},
+	}))
+}
+
+function registerSessionsTool(ctx: Context, controller: BridgeController): void {
+	ctx.tools.register(defineTool({
+		name: 'browser_sessions',
+		description: 'List the dsh agent sessions sharing this browser and each one\'s working tab, or release your own working tab ("release"). Isolation: when a browser tool omits tabId, it defaults to THIS session\'s working tab (verified live against the extension) instead of the browser\'s active tab — concurrent sessions stop fighting over whatever tab is active. Explicit tabId always wins. Plugin-local; works read-only.',
+		parameters: {
+			action: { type: 'string', description: '"list" (default) or "release" (forget your working tab).' },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					current: { type: 'string' },
+					sessions: {
+						type: 'array',
+						required: true,
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							properties: {
+								sessionId: { type: 'string', required: true },
+								workingTabId: { type: 'number' },
+								lastActiveAt: { type: 'number', required: true },
+								calls: { type: 'number', required: true },
+							},
+						},
+					},
+					releasedTabId: { type: 'number' },
+				},
+			},
+			render: (_args, value) => {
+				const v = value as unknown as { current?: string; sessions: { sessionId: string; workingTabId?: number; lastActiveAt: number; calls: number }[]; releasedTabId?: number }
+				const short = (id: string) => (id.length <= 18 ? id : `${id.slice(0, 16)}…`)
+				if (v.releasedTabId !== undefined) {
+					return [{ type: 'text', text: `Sessions: released your working tab ${v.releasedTabId} — later calls without tabId follow the browser's active tab again.` }]
+				}
+				if (v.sessions.length === 0) {
+					return [{ type: 'text', text: 'Sessions: 0 — no agent-scoped tool calls yet (calls without an agent identity keep the old active-tab behaviour).' }]
+				}
+				const lines = v.sessions.map((s) => {
+					const me = s.sessionId === v.current ? '* ' : '  '
+					const tab = s.workingTabId === undefined ? 'no working tab' : `tab ${s.workingTabId}`
+					return `${me}${short(s.sessionId)} — ${tab}, ${s.calls} calls, last ${formatClock(s.lastActiveAt)}`
+				})
+				return [{ type: 'text', text: clampRendered(`Sessions: ${v.sessions.length}${v.current === undefined ? '' : ` (you: ${short(v.current)})`}\n${lines.join('\n')}`) }]
+			},
+		},
+		presentCall: args => ({ card: 'generic', title: args.action === 'release' ? 'Release session tab' : 'Browser sessions', kind: 'other' as const }),
+		async execute(args) {
+			const current = TOOL_SESSION.getStore()
+			if (args.action === 'release') {
+				const sessions = controller.sessions.list()
+				if (current === undefined) return { sessions }
+				const released = controller.sessions.release(current)
+				const payload: { current: string; sessions: ReturnType<SessionRegistry['list']>; releasedTabId?: number } = { current, sessions }
+				if (released !== undefined) payload.releasedTabId = released
+				return payload
+			}
+			if (args.action !== undefined && args.action !== 'list') throw new Error(`action must be "list" or "release" — got ${JSON.stringify(args.action)}`)
+			const payload: { current?: string; sessions: ReturnType<SessionRegistry['list']> } = { sessions: controller.sessions.list() }
+			if (current !== undefined) payload.current = current
+			return payload
 		},
 	}))
 }
