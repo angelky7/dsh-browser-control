@@ -211,6 +211,19 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 边界 | 这是**建议性隔离**，不是所有权锁：跨会话看同一页显式传 tabId 即可，无需解锁。硬性归属（borrow/return + 用户仲裁）留给扩展侧那一版 |
 | 查询 | `browser_sessions` list 列出全部会话（最近活跃在前）与工作标签页、调用数；release 清掉自己的。纯本地 ⇒ 只读档可用 |
 
+## 快照分页（`browser_snapshot`，v1.7.7）
+
+大页面元素多，一条快照塞不进模型预算。分页在**插件侧**完成——扩展的快照命令一直没有 offset 参数，但回执里一直带 `total`：
+
+| 维度 | 行为 |
+|---|---|
+| 窗口 | 每次向扩展要最大窗口（200 条），插件按 `offset`/`limit` 切片；`limit` 默认 120、上限 200，`offset` 负数归零 |
+| 回执 | `offset`（本次起点）、`total`（页面可操作元素总数，扩展报什么记什么）、`returned`（窗口里实际有多少条）、`nextOffset`（窗口内还有下一批时才给）、`hasMore` |
+| 页面窗口上限 | `total > returned` 表示页面比扩展给的窗口大：页头如实写「this extension returns at most N-item windows」并指向 `browser_find`/`browser_read`；不假装分页能翻到底 |
+| 越界 | `offset` 越过窗口：空页、不报错，页头点名 offset；窗口耗尽时不再给 `nextOffset`（避免模型原地打转） |
+| ref 的作用域 | ref 是**本次调用**的快照编号：翻页拿到的 ref 直接用于 click/type 有效；两次调用之间页面变了，旧 ref 可能失效——要稳定引用就一次调用里拿到再操作 |
+| total 缺失 | 更老的扩展不报 `total` ⇒ 回执省略该字段，页头写「N available」，不编造页总数 |
+
 ## 兼容契约（插件升级 × 旧扩展）
 
 铁律：**dsh 插件 x + 扩展 x-n 的体验 ≥ dsh 插件 x-n + 扩展 x-n**——升级插件永远不许比「那个年代的配套组合」差，逐条功能比。实现与验证：

@@ -1,5 +1,15 @@
 # 更新日志
 
+## v1.7.7 (2026-11-04)
+
+**这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。`browser_snapshot` 支持**分页**——大页面元素多，一条快照塞不进模型预算，现在可以翻页而不是被整段截断。
+
+- **分页在插件侧**：扩展的快照命令一直没有 offset 参数，但回执里一直带 `total`——插件每次向扩展要最大窗口（200 条），再按 `offset`/`limit` 切片。`limit` 默认 120、上限 200；`offset` 负数归零，越过窗口给空页并点名 offset。
+- **页头说清位置**：「items 121–170 of 300 on the page … next page: offset 170」；页面比扩展窗口大时如实写「this extension returns at most 200-item windows — use browser_find/browser_read to reach the rest」，**不假装能翻到底**；窗口耗尽时不再给 `nextOffset`（避免模型原地打转）。
+- **回执新增** `offset` / `total` / `returned` / `nextOffset` / `hasMore`；更老的扩展不报 `total` 时省略该字段、页头写「N available」，不编造页总数。ref 是**本次调用**的编号，翻页拿到的 ref 直接可用。
+- **台子 `verify_snapshot_page.mjs`（16 项）**：默认页 / 中间页 / 窗口尾页 / 越界空页 / clamp / total 缺失退化 / AX 透传；render 的区间、下一页与窗口上限文案。render 契约里 200 条的截断断言同步改成「默认页分页、显式 200 才截断」。
+- `npm run verify` 1075 → **1093 项** exit 0；三处变异（吞 offset / 下一页 offset 算错 / 吞 total）各被不相交断言抓住。
+
 ## v1.7.6 (2026-11-04)
 
 **这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。第 29 条工具：**`browser_sessions` 多 session 隔离**——多个 dsh 会话共用一个浏览器时，各自的工作标签页不再互相抢。
