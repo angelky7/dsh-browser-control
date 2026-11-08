@@ -58,7 +58,7 @@ async function boot(config, port) {
     tools: { register: (def) => tools.set(def.name, def) },
     systemPrompt: { section: () => {} },
   }
-  apply(ctx, Config({ enabled: true, port, token: 'dsh-local', ...config }))
+  apply(ctx, Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port, token: 'dsh-local', ...config }))
   // apply() 是同步注册工具、异步起监听；等它真的在听，否则「放行」的命令会报
   // bridge_disabled（还没起）而不是 extension_offline（起了但没扩展连上）。
   awaitListening.add(port)

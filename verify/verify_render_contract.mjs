@@ -28,7 +28,7 @@ const disposers = [];
 
 // 截图 / PDF / cleanup 三条会真写文件，所以把 shotsDir 指到临时目录，别脏了仓库
 const SHOTS = await mkdtemp(path.join(tmpdir(), "dsh-render-contract-"));
-const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);
@@ -360,6 +360,8 @@ const GROUND_TRUTH = [
   // 操作审计（v1.7.4）：本地账本，值来自真实控制器而不是扩展——这里只断言
   // render 与 schema 的形状；条目内容由 verify_audit 精确断。
   ["browser_audit", null, {}, null, ["Audit:"]],
+  // 会话恢复（v1.7.5）：journal 是磁盘账本，内容由 verify_journal 精确断；这里只验形状
+  ["browser_journal", null, { limit: 5 }, null, ["Journal:"]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
@@ -378,7 +380,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit", "browser_journal",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

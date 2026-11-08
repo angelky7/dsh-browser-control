@@ -23,7 +23,7 @@ const PORT = 9797;
 const TOKEN = "drag-test";
 const tools = [];
 const disposers = [];
-const config = Config({ enabled: true, port: PORT, token: TOKEN });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN });
 const settingsService = {
   register(_ns, schema, options) {
     const value = schema(options?.base ?? config);
@@ -257,7 +257,7 @@ function installHtml5(page) {
 function makeInstance({ port, token, configOverrides = {} }) {
   const instTools = [];
   const instDisposers = [];
-  const cfg = Config({ enabled: true, port, token, ...configOverrides });
+  const cfg = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port, token, ...configOverrides });
   const settings = { register(_ns, schema, options) { const v = schema(options?.base ?? cfg); return { get: () => v, watch: () => {}, set: () => {} }; } };
   const c = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },

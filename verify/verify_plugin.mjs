@@ -59,7 +59,7 @@ const ctx = {
 };
 
 const patch = await readFile(new URL("../cordis.patch.yml", import.meta.url), "utf8");
-const config = Config({ enabled: /enabled:\s*true/.test(patch), port: PORT, token: "dsh-local" });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: /enabled:\s*true/.test(patch), port: PORT, token: "dsh-local" });
 
 console.log(`mode=${MODE}  config.enabled=${config.enabled}  port=${config.port}`);
 try {
@@ -83,14 +83,14 @@ console.log("桥接日志:", logs.slice(0, 4).join(" | "));
 
 // 回归：老宿主上「设置改动 -> 桥接实时收敛」这条链不能被我改坏
 if (MODE === "legacy" && legacyScope) {
-  legacyScope.set(Config({ enabled: false, port: PORT, token: "dsh-local" }));
+  legacyScope.set(Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: false, port: PORT, token: "dsh-local" }));
   await new Promise((r) => setTimeout(r, 400));
   const stillOpen = await new Promise((res) => {
     const s = net.connect(PORT, "127.0.0.1", () => { s.end(); res(true); });
     s.on("error", () => res(false));
   });
   console.log("回归：把 enabled 改成 false 后端口应关闭 ->", stillOpen ? "仍监听（错）" : "已关闭（对）");
-  legacyScope.set(Config({ enabled: true, port: PORT, token: "dsh-local" }));
+  legacyScope.set(Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: "dsh-local" }));
   await new Promise((r) => setTimeout(r, 400));
   const reopened = await new Promise((res) => {
     const s = net.connect(PORT, "127.0.0.1", () => { s.end(); res(true); });

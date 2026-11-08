@@ -20,7 +20,7 @@ const TOKEN = "nav-report-test";
 const tools = [];
 const disposers = [];
 
-const config = Config({ enabled: true, port: PORT, token: TOKEN });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN });
 const settingsService = {
   // dsh-settings 0.1.2-rc.1 形状：register(ns, schema, { base, validate }) -> scope{ get, watch }
   register(_ns, schema, options) {

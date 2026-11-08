@@ -126,7 +126,7 @@ const PORT = 9785; // 9777 装机默认 / 9779 扩展端到端台 / 9781 导航�
 const TOKEN = "tabs-close-many-test";
 const tools = [];
 const disposers = [];
-const config = Config({ enabled: true, port: PORT, token: TOKEN });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);

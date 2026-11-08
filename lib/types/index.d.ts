@@ -40,7 +40,14 @@ export interface Config {
     /**
      * Directory screenshots are written to and `cleanup` clears. Relative paths
      * resolve against the process working directory at resolve time.
-     */ shotsDir?: string;
+     */
+    shotsDir?: string;
+    /**
+     * Directory the command journal is written to (v1.7.5 session recovery).
+     * Defaults to `~/.dsh-browser-control` — stable across restarts regardless
+     * of the process working directory.
+     */
+    stateDir?: string;
     /**
      * Read-only mode: refuse every command that would change the page or the
      * browser (click / input / press / nav / scroll / tabs.* / emulate / dialog /

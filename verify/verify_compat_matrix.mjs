@@ -49,6 +49,7 @@ const PROBES = [
   { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
   { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
   { tool: 'browser_audit', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
+  { tool: 'browser_journal', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'any' },
   { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'any' },
   { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'any' },
@@ -91,7 +92,7 @@ for (const tag of SURFACES) {
   const TOKEN = `compat-${tag.slice(1)}`
   const tools = []
   const disposers = []
-  const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: new URL('../.compat-cache/shots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
+  const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: new URL('../.compat-cache/shots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
   const settingsService = { register: (_n, schema, o) => ({ get: () => schema(o?.base ?? config), watch: () => {}, set: () => {} }) }
   const pctx = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -192,6 +193,7 @@ function commandOfTool(tool, args) {
     case 'browser_click': return 'click'
     case 'browser_drag': return 'cdp'
     case 'browser_audit': return null // 插件本地工具，不经扩展
+    case 'browser_journal': return null // 纯本地磁盘读
     case 'browser_cleanup': return null // 插件本地命令，不经扩展
     default: return null
   }

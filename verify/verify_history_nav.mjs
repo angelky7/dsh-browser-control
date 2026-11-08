@@ -102,7 +102,7 @@ const PORT = 9789;
 const TOKEN = "history-test";
 const tools = [];
 const disposers = [];
-const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: "C:\\Users\\gzx\\AppData\\Local\\Temp\\dsh-history-bench" });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: "C:\\Users\\gzx\\AppData\\Local\\Temp\\dsh-history-bench" });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);

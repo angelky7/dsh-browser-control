@@ -43,7 +43,7 @@ const SHOTS = "verify-tmp-archive";
 const tools = [];
 const disposers = [];
 
-const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);

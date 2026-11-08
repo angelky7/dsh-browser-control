@@ -93,7 +93,7 @@ const PORT = 9790;
 const TOKEN = "metrics-test";
 const tools = [];
 const disposers = [];
-const config = Config({ enabled: true, port: PORT, token: TOKEN });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);
@@ -113,7 +113,7 @@ await new Promise((r) => setTimeout(r, 400));
 
 const metricsTool = tools.find((t) => t.name === "browser_metrics");
 const emulateTool = tools.find((t) => t.name === "browser_emulate");
-check("browser_metrics 已注册（工具面 27 条）", Boolean(metricsTool) && tools.length === 27, String(tools.length));
+check("browser_metrics 已注册（工具面 28 条）", Boolean(metricsTool) && tools.length === 28, String(tools.length));
 
 const seenCommands = [];
 const seenParams = [];

@@ -19,6 +19,6 @@ for (const c of cases) {
 const patch = await readFile(new URL("../cordis.patch.yml", import.meta.url), "utf8");
 const line = patch.split(/\r?\n/).find((l) => l.trim().startsWith("enabled:"));
 console.log("\n仓库 cordis.patch.yml:", line?.trim());
-const mounted = Config({ enabled: /enabled:\s*true/.test(patch), port: 9777, token: "dsh-local" });
+const mounted = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: /enabled:\s*true/.test(patch), port: 9777, token: "dsh-local" });
 console.log("=> 按这份 patch 挂载后，插件 apply() 拿到的 enabled =", mounted.enabled);
 console.log("=> reconcile 是否 bind 端口:", mounted.enabled ? "会监听 127.0.0.1:" + mounted.port : "不会监听（issue #4 的现象）");

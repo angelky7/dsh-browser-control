@@ -55,7 +55,7 @@ const TOKEN = "audit-test";
 const SHOTS = await mkdtemp(path.join(tmpdir(), "dsh-audit-"));
 const tools = [];
 const disposers = [];
-const config = Config({ enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
 const settingsService = {
   register(_ns, schema, options) {
     const value = schema(options?.base ?? config);
@@ -96,7 +96,7 @@ const byName = (n) => tools.find((t) => t.name === n);
 const signal = () => new AbortController().signal;
 const call = (name, args) => byName(name).execute(args, { signal: signal() }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, error: String(e?.message ?? e) }));
 
-check("browser_audit 已注册（工具面 27 条）", Boolean(byName("browser_audit")) && tools.length === 27, String(tools.length));
+check("browser_audit 已注册（工具面 28 条）", Boolean(byName("browser_audit")) && tools.length === 28, String(tools.length));
 
 await call("browser_navigate", { url: "https://a.test/", tabId: 7 });
 await call("browser_type", { selector: "#q", value: "hunter2-secret", tabId: 7 });
@@ -144,7 +144,7 @@ disposers.reverse().forEach(([fn]) => { try { fn(); } catch {} });
 function makeInstance({ port, token, configOverrides = {}, helloVersion = "1.7.2", capabilities = null }) {
   const instTools = [];
   const instDisposers = [];
-  const cfg = Config({ enabled: true, port, token, shotsDir: SHOTS, ...configOverrides });
+  const cfg = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port, token, shotsDir: SHOTS, ...configOverrides });
   const settings = { register(_ns, schema, options) { const v = schema(options?.base ?? cfg); return { get: () => v, watch: () => {}, set: () => {} }; } };
   const c = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
