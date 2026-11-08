@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；这一版新增 cdp 通道与 capabilities 握手，**必须重装——也是最后一次因功能更新而重装**，此后 CDP 层新能力只更 dsh 插件） |
-| [dsh-browser-control-plugin-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/dsh-browser-control-plugin-v1.7.2.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；**扩展从 v1.7.2 起不再随功能更新**：v1.7.3 没有动扩展，装过 v1.7.2 的不用重装） |
+| [dsh-browser-control-plugin-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/dsh-browser-control-plugin-v1.7.3.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.2"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.3"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -260,11 +260,12 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_archive` | 整页存成单文件 MHTML（正文/图片/样式全内联，可当文本 grep 的离线证据；是快照，内嵌脚本不会跑，v1.5.0+） |
 | `browser_emulate` | 切设备视口（移动 / 桌面 / 自定义，v1.0.7+）；v1.7.1 起还能限速：`network` slow3g/fast3g/offline/reset + `cpuThrottlingRate`（1–20），回执写明生效数值，`device:"reset"` 一并还原 |
 | `browser_metrics` | 读性能计数器（DOM 节点数 / JS 堆 / 布局与脚本耗时，Performance.getMetrics，只读；让「这页面很重」有数字说话，v1.7.1+） |
+| `browser_drag` | 拖拽：from/to 用选择器或视口坐标；`auto` 对 `draggable="true"` 的源走 html5 事件合成（dragstart→dragover→drop，未接受就不 drop），其余走真实鼠标输入（按下→插值移动→抬起，滑杆/画布/排序组件用这个）。**纯插件实现**（经 v1.7.2 预埋的 cdp 通道），v1.7.3+ |
 | `browser_windows` | 窗口控制：清单/开窗/改状态与几何/关整窗/跨窗挪标签（唯一能碰窗口几何的工具，v1.6.0+） |
 | `browser_cleanup` | 清理临时文件 |
 | `browser_info` | 报告实际连上的浏览器与扩展版本（排障先跑它，v1.0.9+） |
 
-共 25 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
+共 26 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
 
 ## 架构
 
@@ -296,7 +297,7 @@ Chrome 浏览器
 | 实测台 `verify_extension_e2e`：真桥 + 真扩展代码 + 真 WebSocket 端到端（帧契约、命令可达、错误分类） | ✅ 2026-10-11，只有 `chrome.*` 是假的；视觉与真实 CDP 行为仍需实机确认 |
 | 实测台 `verify_cdp_retry`：CDP 会话被抢走后的恢复 / 重放不许把副作用做两遍 / 重试有界（6 场景） | ✅ 2026-10-11，真实 `background.js` + 有状态假 `chrome.debugger`；另用合并预览文件交叉验证过 |
 | 实测台 `verify_render_contract`：每条工具的真实返回值同时喂给宿主的输出校验器与它自己的 `render`，断言「模型可见文本里有这次调用真正要的数据」 | ✅ 2026-10-12，真桥 + 假扩展 + 宿主 `validateJsonSchemaValue`；这一层此前**零覆盖**，所以两类缺陷活了 12 / 5 个版本 |
-| 实测台 `verify_compat_matrix`：兼容矩阵——从 git 标签物化**真实历史扩展代码**（v1.2.0–v1.7.1），当前插件对每个面跑 27 个探针逐格验收「≥ 当年组合」；新工具报带重装指引的 extension-outdated、绝不许 unknown command 冒充；命令面 append-only（扩展升级对旧插件也纯增益） | ✅ 2026-11-04，5 面 × 150 项；老 hello 无 capabilities ⇒ 版本映射兜底路径的实测 |
+| 实测台 `verify_compat_matrix`：兼容矩阵——从 git 标签物化**真实历史扩展代码**（v1.2.0–v1.7.2），当前插件对每个面跑 28 个探针逐格验收「≥ 当年组合」；新工具报带重装指引的 extension-outdated、绝不许 unknown command 冒充；命令面 append-only（扩展升级对旧插件也纯增益） | ✅ 2026-11-04，6 面 × 186 项；老 hello 无 capabilities ⇒ 版本映射兜底路径的实测，v1.7.2 面实测 capabilities 精确握手 |
 | **真实宿主 × 真实浏览器**：本机 dsh `0.2.0-rc.2` 用隔离 `DSH_HOME` 挂载本插件，用户的真实 Chrome 连上桥，9 条只读工具全部走真实代码路径 | ✅ 2026-10-12，Chrome 153 + 扩展 1.0.10：`browser_read` 交出 1341 字符真实正文、`browser_snapshot` 交出 14 条带 ref 的清单、输出 schema 零违规；**也正是这一跑发现了旧扩展会静默忽略 `mode:"ax"`**（本机扩展是 1.0.10，早于 AX 快照的 1.0.11）——已改成插件侧显式回报 `axFallback` |
 | `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
 

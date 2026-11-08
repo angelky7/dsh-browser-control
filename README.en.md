@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; this release adds the cdp channel and capabilities handshake — **reinstall required, and the last one a feature update will ever ask for**: CDP-level features now ship plugin-side) |
-| [dsh-browser-control-plugin-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/dsh-browser-control-plugin-v1.7.2.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; **the extension no longer changes with feature updates from v1.7.2 on**: v1.7.3 does not touch the extension — skip this if v1.7.2 is already loaded) |
+| [dsh-browser-control-plugin-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/dsh-browser-control-plugin-v1.7.3.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.2"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.3"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -267,10 +267,11 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_windows` | Window control: list / open / update state & geometry / close a whole window / move tabs across windows (the only tool that may touch window geometry, v1.6.0+) |
 | `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+); v1.7.1+ adds throttling: `network` slow3g/fast3g/offline/reset + `cpuThrottlingRate` (1–20), the receipt states the applied numbers, `device:"reset"` clears them too |
 | `browser_metrics` | Read performance counters (DOM nodes / JS heap / layout & script durations, Performance.getMetrics, read-only; puts numbers behind "this page is heavy", v1.7.1+) |
+| `browser_drag` | Drag from/to a selector or viewport point: `auto` synthesizes html5 dragstart→dragover→drop for `draggable="true"` sources (no drop unless accepted), otherwise sends real mouse input (press, interpolated moves, release — sliders/canvas/sortable widgets). **Plugin-side only** over the cdp channel embedded in extension v1.7.2, v1.7.3+ |
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-25 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+26 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 

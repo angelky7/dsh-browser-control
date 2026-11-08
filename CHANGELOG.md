@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.7.3 (2026-11-04)
+
+**这一版没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2，装过的不用重装）。这是「扩展一次交付、接口预埋」之后的第一个特性：全部经预埋的 `cdp` 通道驱动，正好实战验证这条路线。
+
+- **新工具 `browser_drag`（第 26 条）**：from/to 用 CSS 选择器（仅顶层文档）或视口坐标。**mouse 模式**发真实输入：悬停源中心 → 左键按下（buttons=1）→ N 步线性插值移动（全程按住）→ 靶中心抬起 → 落定移动——滑杆/画布/SortableJS 这类指针事件组件用它。**html5 模式**在页面里按浏览器顺序合成 dragstart → dragenter/dragover → drop → dragend（共用一个 DataTransfer）：**drop 只在 dragover 被 preventDefault 时派发**，dragstart 被页面取消就整场不拖，回执分别报 `startCancelled`/`overPrevented`/`dropFired`/`dropPrevented`——合成事件是 untrusted，页面检查 isTrusted 会忽略，这一条写进了工具描述，不装成功。**auto**（默认）按源元素的 `draggable="true"` 属性选模式，检测走 CDP `DOM.getAttributes`，不执行页面 JS。
+- **端点解析零页面 JS**：选择器端点先 `DOM.scrollIntoViewIfNeeded` 再 `DOM.getBoxModel` 取中心——所以 `allowScript:false` 下 mouse 模式照常可用；html5 模式需要页面脚本，工具级拒绝并指向「改用 mouse」。只读档工具级拒绝并点名开关；`requireExtensionCommand('cdp','1.7.2')` 预检让老扩展拿到 extension-outdated + 重装指引，绝不裸 unknown command。
+- **台子 `verify_drag.mjs`（39 项）**：真 background.js + 真桥 + 假 chrome，cdp 通道把 `Input.dispatchMouseEvent` 序列逐条送到，断言事件顺序/坐标插值/按钮标志（少一个 `buttons:1` 页面就不认为在拖）；html5 合成函数**在另一个 vm 里真的被执行**（假 DOM + 假 DragEvent/DataTransfer），按浏览器规则断言「dragover 不接受就没有 drop」「dragstart 被取消就整场不拖」；另测坐标端点零 DOM 查询、六种错误文案、只读档/allowScript 拒绝、旧扩展指引。
+- **兼容矩阵扩到 6 个面**（新增 v1.7.2 面——第一次实测 capabilities 精确握手路径；老面继续实测版本映射兜底）：探针 27 → 28，150 → **186 项**；render 契约新增 browser_drag 行（4 项）。`npm run verify` 896 → **975 项** exit 0。
+
 ## v1.7.2 (2026-11-04)
 
 **这一版改了 `extension/`（新增 `cdp` 命令 + hello 带 capabilities）——扩展必须重装；这也是最后一次「功能更新要求重装」**：从这一版起握手让插件知道扩展有什么，CDP 层的新能力（路线图上的拖拽 / mock / iframe / screencast……）此后全部只更插件。同时把用户定的铁律钉成机器可查的台子：**dsh 插件 x + 扩展 x-n ≥ dsh 插件 x-n + 扩展 x-n**，逐条功能比，从此不许倒退。

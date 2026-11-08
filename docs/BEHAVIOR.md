@@ -161,6 +161,19 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，
 才是模型够不到的那一层。
 
+## 拖拽（`browser_drag`，v1.7.3）
+
+纯插件实现：没有新扩展命令，全部经 v1.7.2 预埋的 `cdp` 通道驱动——这也是「扩展一次交付」之后的第一个纯插件特性。
+
+| 维度 | 行为 |
+|---|---|
+| mouse 模式 | 真实输入序列：悬停源中心 → 左键按下（buttons=1）→ N 步线性插值移动（全程按住）→ 靶中心抬起 → 落定移动。滑杆、画布、SortableJS 这类按指针事件工作的组件用它 |
+| html5 模式 | 在页面里合成浏览器顺序的事件：dragstart(源) → dragenter/dragover(靶) → drop(靶) → dragend(源)，共用一个 DataTransfer。**drop 只在 dragover 被 preventDefault 时派发**（浏览器规则）；dragstart 被页面取消就整场不拖。回执分别报 `startCancelled` / `overPrevented` / `dropFired` / `dropPrevented`，不装成功。合成事件是 untrusted——页面若检查 `isTrusted` 会忽略，工具描述里写明 |
+| auto | 源元素带 `draggable="true"` → html5，否则 mouse。检测走 CDP `DOM.getAttributes`，不执行页面 JS |
+| 端点 | 选择器（仅顶层文档）或视口坐标；选择器端点先 `DOM.scrollIntoViewIfNeeded` 再 `DOM.getBoxModel` 取中心，全程零页面 JS ⇒ `allowScript:false` 下 mouse 模式照常可用 |
+| 分类 | 改页面状态 ⇒ 写命令族；只读档工具级拒绝；hold 中止态经 `cdp` 被拦；html5 需要页面脚本，`allowScript:false` 时给「改用 mouse」的指引 |
+| 缺扩展 | `requireExtensionCommand('cdp','1.7.2')` 预检：老扩展拿到 extension-outdated + 重装指引，绝不裸 unknown command |
+
 ## 兼容契约（插件升级 × 旧扩展）
 
 铁律：**dsh 插件 x + 扩展 x-n 的体验 ≥ dsh 插件 x-n + 扩展 x-n**——升级插件永远不许比「那个年代的配套组合」差，逐条功能比。实现与验证：
