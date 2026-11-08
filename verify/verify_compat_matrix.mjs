@@ -47,13 +47,14 @@ const PROBES = [
   { tool: 'browser_type', args: (tab) => ({ tabId: tab, selector: '.none', value: 'x' }), since: null, expect: 'any' },
   { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'any' },
   { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
+  { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
   { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'any' },
   { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'any' },
   { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'any' },
   { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: null, expect: 'any' },
 ]
 
-const SURFACES = ['v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1']
+const SURFACES = ['v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1', 'v1.7.2']
 
 // 物化历史扩展代码（git 里的原文，不是模拟）
 const cacheDir = new URL('../.compat-cache/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
@@ -110,6 +111,19 @@ for (const tag of SURFACES) {
   })
   const TAB = model.addTab(1, 'https://start.test/')
 
+  // browser_drag（纯插件特性）经 cdp 通道驱动 DOM/Input 域：给假会话一套最小语义。
+  // 老表面的闸门在碰任何 CDP 之前就抛 extension-outdated，这些假件用不到。
+  Object.assign(model.dbg.results, {
+    'DOM.getDocument': () => ({ root: { nodeId: 1 } }),
+    'DOM.querySelector': (p) => ({ nodeId: p.selector === '.a' ? 11 : p.selector === '.b' ? 22 : 0 }),
+    'DOM.scrollIntoViewIfNeeded': () => ({}),
+    'DOM.getAttributes': () => ({ attributes: [] }),
+    'DOM.getBoxModel': (p) => ({ model: p.nodeId === 11
+      ? { content: [0, 0, 10, 0, 10, 10, 0, 10], width: 10, height: 10 }
+      : { content: [20, 20, 30, 20, 30, 30, 20, 30], width: 10, height: 10 } }),
+    'Input.dispatchMouseEvent': () => ({}),
+  })
+
   // 等 hello：/api/status 里能看到扩展报的版本（历史扩展没有 capabilities 字段
   // ⇒ 插件走版本映射兜底——这正是这张台要实测的路径）
   let helloVersion = null
@@ -122,7 +136,12 @@ for (const tag of SURFACES) {
     } catch { /* 桥还没起来，再等 */ }
   }
   check(`${tag}: hello 到位且报的是历史版本`, helloVersion?.version === tag.slice(1), JSON.stringify(helloVersion))
-  check(`${tag}: 历史 hello 无 capabilities（版本映射兜底路径被实测）`, helloVersion?.capabilities === undefined)
+  if (tag === 'v1.7.2') {
+    // 第一个带 capabilities 的版本：精确握手路径在这张台上被实测。
+    check(`${tag}: hello 带 capabilities（精确握手路径被实测）`, Array.isArray(helloVersion?.capabilities) && helloVersion.capabilities.includes('cdp'), JSON.stringify(helloVersion?.capabilities?.slice(0, 6)))
+  } else {
+    check(`${tag}: 历史 hello 无 capabilities（版本映射兜底路径被实测）`, helloVersion?.capabilities === undefined)
+  }
 
   const signal = () => new AbortController().signal
   for (const probe of PROBES) {
@@ -170,6 +189,7 @@ function commandOfTool(tool, args) {
     case 'browser_type': return 'input'
     case 'browser_scroll': return 'scroll'
     case 'browser_click': return 'click'
+    case 'browser_drag': return 'cdp'
     case 'browser_cleanup': return null // 插件本地命令，不经扩展
     default: return null
   }

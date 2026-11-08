@@ -346,6 +346,17 @@ const GROUND_TRUTH = [
   // 性能指标：数字本身就是产出（v1.7.1）
   ["browser_metrics", "metrics", {},
     { tabId: 3, metrics: { Nodes: 456, JSHeapUsedSize: 10_485_760, JSHeapTotalSize: 20_971_520, LayoutCount: 7, ScriptDuration: 2.5, TaskDuration: 4 } }, ["nodes=456", "heap=10.0/20.0MB", "layouts=7"]],
+  // 拖拽（v1.7.3，纯插件经 cdp 通道）：步数与派发数必须进模型可见文本。
+  // 假扩展按 cdp 的 method 路由——这正是纯插件特性的形状：一条命令，多次往返。
+  ["browser_drag", "cdp", { tabId: 3, from: ".drag-src", to: ".drag-dst", steps: 5 },
+    (p) => p.method === "DOM.getDocument" ? { root: { nodeId: 1 } }
+      : p.method === "DOM.querySelector" ? { nodeId: p.params.selector === ".drag-src" ? 11 : 22 }
+      : p.method === "DOM.getBoxModel" ? { model: p.params.nodeId === 11
+        ? { content: [10, 20, 110, 20, 110, 60, 10, 60], width: 100, height: 40 }
+        : { content: [200, 100, 300, 100, 300, 200, 200, 200], width: 100, height: 100 } }
+      : p.method === "DOM.getAttributes" ? { attributes: [] }
+      : {},
+    ["mouse input", "5 steps", "9 dispatches"]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
@@ -364,7 +375,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

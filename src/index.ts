@@ -195,6 +195,15 @@ class BridgeController {
 		return this.current === undefined ? undefined : path.resolve(this.current.shotsDir)
 	}
 
+	/**
+	 * Current policy flags. Tools that compose several commands (browser_drag
+	 * runs `cdp`/`eval`) read this to refuse with a tool-level message; the
+	 * per-command gate in execute() stays as the enforcement backstop.
+	 */
+	get policy(): { readOnly: boolean; allowScript: boolean } {
+		return { readOnly: this.current?.readOnly === true, allowScript: this.current?.allowScript !== false }
+	}
+
 	/** Version the connected extension reported in its hello frame, if any. */
 	extensionVersion(): string | undefined {
 		return this.server?.status.hello?.version
@@ -1792,6 +1801,308 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			controller.requireExtensionCommand('metrics', '1.7.1')
 			return await controller.execute('metrics', params, exec.signal) as MetricsPayload
 		},
+	}))
+
+	registerDragTool(ctx, controller)
+}
+
+/* ------------------- browser_drag: composed plugin-side over the cdp channel ------------------- */
+
+/** One CDP round-trip over the embedded `cdp` passthrough (extension v1.7.2+). */
+async function cdpCall<T>(
+	ctrl: BridgeController,
+	tabId: number,
+	method: string,
+	params: Record<string, unknown>,
+	signal: AbortSignal,
+): Promise<T> {
+	return await ctrl.execute('cdp', { method, params, tabId }, signal) as T
+}
+
+interface DragTargetArgs {
+	selector?: string
+	x?: number
+	y?: number
+}
+
+interface ResolvedDragPoint {
+	selector?: string
+	x: number
+	y: number
+	width?: number
+	height?: number
+	nodeId?: number
+}
+
+function dragTargetArgs(selector: string | undefined, x: number | undefined, y: number | undefined, side: 'from' | 'to'): DragTargetArgs {
+	const hasSel = typeof selector === 'string' && selector.length > 0
+	const hasX = typeof x === 'number' && Number.isFinite(x)
+	const hasY = typeof y === 'number' && Number.isFinite(y)
+	if (hasSel && (hasX || hasY)) throw new Error(`${side}: give either "${side}" (CSS selector) or "${side}X"/"${side}Y" coordinates, not both`)
+	if (!hasSel && !(hasX && hasY)) throw new Error(`${side}: needs a CSS selector ("${side}") or both "${side}X" and "${side}Y" coordinates`)
+	if (hasSel) return { selector }
+	return { x, y }
+}
+
+/**
+ * Resolve a drag endpoint. Selector endpoints become viewport coordinates via
+ * the CDP DOM domain — no page JavaScript, so mouse mode also works with
+ * `allowScript: false`. Top document only; cross-origin iframes are a later
+ * iteration.
+ */
+async function resolveDragPoint(ctrl: BridgeController, tabId: number, target: DragTargetArgs, signal: AbortSignal): Promise<ResolvedDragPoint> {
+	if (target.selector === undefined) return { x: target.x as number, y: target.y as number }
+	const selector = target.selector
+	const doc = await cdpCall<{ root?: { nodeId?: number } }>(ctrl, tabId, 'DOM.getDocument', { depth: 0 }, signal)
+	const rootId = doc?.root?.nodeId
+	if (typeof rootId !== 'number') throw new Error('DOM.getDocument returned no root node')
+	const found = await cdpCall<{ nodeId?: number }>(ctrl, tabId, 'DOM.querySelector', { nodeId: rootId, selector }, signal)
+	const nodeId = found?.nodeId ?? 0
+	if (nodeId === 0) throw new Error(`no element matches selector ${JSON.stringify(selector)} (top document only)`)
+	await cdpCall<unknown>(ctrl, tabId, 'DOM.scrollIntoViewIfNeeded', { nodeId }, signal)
+	let box: { model?: { content?: number[]; width?: number; height?: number } } | undefined
+	try {
+		box = await cdpCall<{ model?: { content?: number[]; width?: number; height?: number } }>(ctrl, tabId, 'DOM.getBoxModel', { nodeId }, signal)
+	} catch (error) {
+		throw new Error(`cannot measure ${JSON.stringify(selector)} — hidden, zero-size or detached? (${error instanceof Error ? error.message : String(error)})`)
+	}
+	const q = box?.model?.content
+	if (!Array.isArray(q) || q.length < 8) throw new Error(`DOM.getBoxModel returned no quad for ${JSON.stringify(selector)}`)
+	const x = (q[0] + q[2] + q[4] + q[6]) / 4
+	const y = (q[1] + q[3] + q[5] + q[7]) / 4
+	const width = typeof box?.model?.width === 'number' ? box.model.width : Math.hypot(q[2] - q[0], q[3] - q[1])
+	const height = typeof box?.model?.height === 'number' ? box.model.height : Math.hypot(q[4] - q[2], q[5] - q[3])
+	return { selector, x, y, width, height, nodeId }
+}
+
+/** Whether the source declares the native HTML5 `draggable` attribute. */
+async function sourceIsDraggable(ctrl: BridgeController, tabId: number, nodeId: number, signal: AbortSignal): Promise<boolean> {
+	const attrs = await cdpCall<{ attributes?: unknown }>(ctrl, tabId, 'DOM.getAttributes', { nodeId }, signal)
+	const list = Array.isArray(attrs?.attributes) ? attrs.attributes.map(String) : []
+	const at = list.indexOf('draggable')
+	return at >= 0 && list[at + 1] === 'true'
+}
+
+/**
+ * Synthesize a native-order HTML5 drag in the page: dragstart on the source,
+ * dragenter/dragover on the target, drop only when dragover was prevented
+ * (the browser's own rule), dragend on the source, all sharing one DataTransfer.
+ * Untrusted events — pages that gate on `event.isTrusted` will ignore them,
+ * which the tool description states instead of pretending otherwise.
+ */
+function html5DragExpression(fromSelector: string, to: DragTargetArgs): string {
+	const toExpr = to.selector !== undefined
+		? `document.querySelector(${JSON.stringify(to.selector)})`
+		: `document.elementFromPoint(${to.x}, ${to.y})`
+	return `(() => {
+  const src = document.querySelector(${JSON.stringify(fromSelector)});
+  if (!src) return { error: 'no element matches from selector ' + ${JSON.stringify(fromSelector)} };
+  const dst = ${toExpr};
+  if (!dst) return { error: 'target element not found' };
+  const dt = new DataTransfer();
+  const log = [];
+  const sr = src.getBoundingClientRect();
+  const dr = dst.getBoundingClientRect();
+  const sx = sr.left + sr.width / 2, sy = sr.top + sr.height / 2;
+  const tx = dr.left + dr.width / 2, ty = dr.top + dr.height / 2;
+  const fire = (type, target, cx, cy) => {
+    const ev = new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: cx, clientY: cy });
+    target.dispatchEvent(ev);
+    log.push({ type, defaultPrevented: ev.defaultPrevented });
+    return ev.defaultPrevented;
+  };
+  const startCancelled = fire('dragstart', src, sx, sy);
+  let dragenterDefaultPrevented = false, overPrevented = false, dropFired = false, dropPrevented = false;
+  if (!startCancelled) {
+    dragenterDefaultPrevented = fire('dragenter', dst, tx, ty);
+    overPrevented = fire('dragover', dst, tx, ty);
+    if (overPrevented) {
+      dropFired = true;
+      dropPrevented = fire('drop', dst, tx, ty);
+    }
+  }
+  fire('dragend', src, sx, sy);
+  return { startCancelled, dragenterDefaultPrevented, overPrevented, dropFired, dropPrevented, events: log.length, log };
+})()`
+}
+
+function roundDragPoint(p: ResolvedDragPoint): { selector?: string; x?: number; y?: number; width?: number; height?: number } {
+	const out: { selector?: string; x?: number; y?: number; width?: number; height?: number } = {
+		x: Math.round(p.x * 100) / 100,
+		y: Math.round(p.y * 100) / 100,
+	}
+	if (p.selector !== undefined) out.selector = p.selector
+	if (p.width !== undefined) out.width = Math.round(p.width * 100) / 100
+	if (p.height !== undefined) out.height = Math.round(p.height * 100) / 100
+	return out
+}
+
+interface DragReceipt {
+	tabId: number
+	mode: 'mouse' | 'html5'
+	from: { selector?: string; x?: number; y?: number; width?: number; height?: number }
+	to: { selector?: string; x?: number; y?: number; width?: number; height?: number }
+	steps?: number
+	dispatched?: number
+	startCancelled?: boolean
+	dragenterDefaultPrevented?: boolean
+	overPrevented?: boolean
+	dropFired?: boolean
+	dropPrevented?: boolean
+	events?: number
+	elapsedMs: number
+}
+
+function registerDragTool(ctx: Context, controller: BridgeController): void {
+	ctx.tools.register(defineTool({
+	name: 'browser_drag',
+	description: 'Drag a page element or point onto another with real input. mode "mouse" sends trusted press→moves→release input via CDP (canvas, sliders, sortable widgets); mode "html5" synthesizes dragstart/dragover/drop in the page for [draggable] elements and needs page scripting; "auto" (default) picks html5 only when the source declares draggable="true". Endpoints are CSS selectors (top document) or fromX/fromY + toX/toY viewport coordinates. Needs browser extension v1.7.2+ (embedded cdp channel).',
+	parameters: {
+		from: { type: 'string', description: 'CSS selector of the drag source; use fromX/fromY instead for raw coordinates.' },
+		to: { type: 'string', description: 'CSS selector of the drop target; use toX/toY instead for raw coordinates.' },
+		fromX: { type: 'number', description: 'Viewport x of the drag start point (with fromY).' },
+		fromY: { type: 'number', description: 'Viewport y of the drag start point (with fromX).' },
+		toX: { type: 'number', description: 'Viewport x of the drop point (with toY).' },
+		toY: { type: 'number', description: 'Viewport y of the drop point (with toX).' },
+		tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
+		mode: { type: 'string', description: '"auto" (default), "mouse" or "html5" — see the tool description.' },
+		steps: { type: 'number', description: 'Intermediate mouse moves in mouse mode, 1–50 (default 12).' },
+	},
+	output: {
+		schema: {
+			type: 'object',
+			additionalProperties: false,
+			properties: {
+				tabId: { type: 'number', required: true },
+				mode: { type: 'string', required: true },
+				from: {
+					type: 'object',
+					additionalProperties: false,
+					properties: {
+						selector: { type: 'string' },
+						x: { type: 'number' },
+						y: { type: 'number' },
+						width: { type: 'number' },
+						height: { type: 'number' },
+					},
+				},
+				to: {
+					type: 'object',
+					additionalProperties: false,
+					properties: {
+						selector: { type: 'string' },
+						x: { type: 'number' },
+						y: { type: 'number' },
+						width: { type: 'number' },
+						height: { type: 'number' },
+					},
+				},
+				steps: { type: 'number' },
+				dispatched: { type: 'number' },
+				startCancelled: { type: 'boolean' },
+				dragenterDefaultPrevented: { type: 'boolean' },
+				overPrevented: { type: 'boolean' },
+				dropFired: { type: 'boolean' },
+				dropPrevented: { type: 'boolean' },
+				events: { type: 'number' },
+				elapsedMs: { type: 'number', required: true },
+			},
+		},
+		render: (_args, value) => {
+			const v = value as unknown as DragReceipt
+			const d = (p: { selector?: string; x?: number; y?: number } | undefined) =>
+				p?.selector !== undefined ? p.selector : `(${p?.x ?? '?'},${p?.y ?? '?'})`
+			if (v.mode === 'mouse') {
+				return [{ type: 'text', text: `Tab ${v.tabId}: dragged ${d(v.from)} → ${d(v.to)} with mouse input (${v.steps} steps, ${v.dispatched} dispatches, ${v.elapsedMs}ms)` }]
+			}
+			const verdict = v.startCancelled === true
+				? 'dragstart was cancelled by the page — nothing dropped'
+				: v.overPrevented === true
+					? (v.dropPrevented === true ? 'drop fired and was handled' : 'drop fired but no drop handler ran')
+					: 'target did not accept the drop (no dragover preventDefault)'
+			return [{ type: 'text', text: `Tab ${v.tabId}: dragged ${d(v.from)} → ${d(v.to)} with html5 events (${v.events} events, ${v.elapsedMs}ms) — ${verdict}` }]
+		},
+	},
+	presentCall: args => ({
+		card: 'generic',
+		title: `Drag ${args.from ?? `(${args.fromX},${args.fromY})`} → ${args.to ?? `(${args.toX},${args.toY})`}`,
+		kind: 'other' as const,
+	}),
+	async execute(args, exec) {
+		const mode = args.mode === undefined ? 'auto' : args.mode
+		if (mode !== 'auto' && mode !== 'mouse' && mode !== 'html5') throw new Error(`mode must be "auto", "mouse" or "html5" — got ${JSON.stringify(mode)}`)
+		const from = dragTargetArgs(args.from, args.fromX, args.fromY, 'from')
+		const to = dragTargetArgs(args.to, args.toX, args.toY, 'to')
+		controller.requireExtensionCommand('cdp', '1.7.2')
+		if (controller.policy.readOnly) throw new Error('browser_drag changes page state and read-only mode is on — turn readOnly off in the browser-bridge config to drag')
+		let tabId = args.tabId
+		if (tabId === undefined) {
+			const listing = await controller.execute('tabs.list', {}, exec.signal) as { activeTabId?: number }
+			if (typeof listing?.activeTabId !== 'number') throw new Error('could not resolve the active tab — pass tabId explicitly')
+			tabId = listing.activeTabId
+		}
+		const started = Date.now()
+		let resolvedMode: 'mouse' | 'html5' = mode === 'auto' ? 'mouse' : mode
+		let source: ResolvedDragPoint | undefined
+		if (mode !== 'html5') source = await resolveDragPoint(controller, tabId, from, exec.signal)
+		if (mode === 'auto' && source?.nodeId !== undefined && await sourceIsDraggable(controller, tabId, source.nodeId, exec.signal)) {
+			resolvedMode = 'html5'
+		}
+		if (resolvedMode === 'mouse') {
+			const target = await resolveDragPoint(controller, tabId, to, exec.signal)
+			const steps = Math.min(50, Math.max(1, Math.trunc(typeof args.steps === 'number' ? args.steps : 12)))
+			const sx = source!.x, sy = source!.y, tx = target.x, ty = target.y
+			const dispatch = async (params: Record<string, unknown>): Promise<void> => {
+				await cdpCall<unknown>(controller, tabId, 'Input.dispatchMouseEvent', params, exec.signal)
+			}
+			await dispatch({ type: 'mouseMoved', x: sx, y: sy, button: 'none', buttons: 0 })
+			await dispatch({ type: 'mousePressed', x: sx, y: sy, button: 'left', buttons: 1, clickCount: 1 })
+			for (let i = 1; i <= steps; i++) {
+				const f = i / steps
+				await dispatch({ type: 'mouseMoved', x: sx + (tx - sx) * f, y: sy + (ty - sy) * f, button: 'left', buttons: 1 })
+			}
+			await dispatch({ type: 'mouseReleased', x: tx, y: ty, button: 'left', buttons: 0, clickCount: 1 })
+			await dispatch({ type: 'mouseMoved', x: tx, y: ty, button: 'none', buttons: 0 })
+			const receipt: DragReceipt = {
+				tabId,
+				mode: 'mouse',
+				from: roundDragPoint(source!),
+				to: roundDragPoint(target),
+				steps,
+				dispatched: steps + 4,
+				elapsedMs: Date.now() - started,
+			}
+			return receipt
+		}
+		if (from.selector === undefined) throw new Error('html5 mode needs a CSS selector for "from" (a point has no draggable element)')
+		if (!controller.policy.allowScript) throw new Error('html5 drag synthesizes DOM events and needs page scripting — allowScript is off; use mode:"mouse" or re-enable the script switch')
+		const raw = await controller.execute('eval', { expression: html5DragExpression(from.selector, to), tabId }, exec.signal) as { tabId?: number; value?: unknown }
+		const outcome = raw?.value as {
+			error?: string
+			startCancelled?: boolean
+			dragenterDefaultPrevented?: boolean
+			overPrevented?: boolean
+			dropFired?: boolean
+			dropPrevented?: boolean
+			events?: number
+		} | undefined
+		if (outcome === undefined || typeof outcome !== 'object') throw new Error('html5 drag expression returned no outcome — page may have navigated mid-drag')
+		if (typeof outcome.error === 'string') throw new Error(outcome.error)
+		const receipt: DragReceipt = {
+			tabId: typeof raw?.tabId === 'number' ? raw.tabId : tabId,
+			mode: 'html5',
+			from: from.selector !== undefined ? { selector: from.selector } : roundDragPoint(from as unknown as ResolvedDragPoint),
+			to: to.selector !== undefined ? { selector: to.selector } : { x: to.x, y: to.y },
+			startCancelled: outcome.startCancelled === true,
+			dragenterDefaultPrevented: outcome.dragenterDefaultPrevented === true,
+			overPrevented: outcome.overPrevented === true,
+			dropFired: outcome.dropFired === true,
+			dropPrevented: outcome.dropPrevented === true,
+			events: typeof outcome.events === 'number' ? outcome.events : 0,
+			elapsedMs: Date.now() - started,
+		}
+		return receipt
+	},
 	}))
 }
 
