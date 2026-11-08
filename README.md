@@ -262,11 +262,12 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_metrics` | 读性能计数器（DOM 节点数 / JS 堆 / 布局与脚本耗时，Performance.getMetrics，只读；让「这页面很重」有数字说话，v1.7.1+） |
 | `browser_drag` | 拖拽：from/to 用选择器或视口坐标；`auto` 对 `draggable="true"` 的源走 html5 事件合成（dragstart→dragover→drop，未接受就不 drop），其余走真实鼠标输入（按下→插值移动→抬起，滑杆/画布/排序组件用这个）。**纯插件实现**（经 v1.7.2 预埋的 cdp 通道），v1.7.3+ |
 | `browser_audit` | 读本次插件会话的内存审计账本：发过/被拒的每条命令（参数脱敏、`code`/`effectState`、耗时），最多 200 条、dsh 重启即清；输入的文字与 cookie 值打码、eval 表达式截断。纯本地读，只读档下照常可用（v1.7.4+） |
+| `browser_journal` | 读**跨 dsh 重启**的持久命令账本（`<stateDir>/journal.jsonl`，最多 1000 条，按运行分组）——重启后先问它「上个会话在哪个标签页干了什么」；同样的脱敏规则；纯本地磁盘读，**扩展离线也能用**（v1.7.5+） |
 | `browser_windows` | 窗口控制：清单/开窗/改状态与几何/关整窗/跨窗挪标签（唯一能碰窗口几何的工具，v1.6.0+） |
 | `browser_cleanup` | 清理临时文件 |
 | `browser_info` | 报告实际连上的浏览器与扩展版本（排障先跑它，v1.0.9+） |
 
-共 27 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
+共 28 个工具。`browser_wait` / `browser_find` / `browser_dialog` / `browser_info` 在 v1.0.8 及以前是「扩展里已实现、但没注册成工具」，agent 调不到；`browser_network_clear` 则是代码里有、这张表漏了。这些现在由 `verify/verify_surface.mjs` 做三方对账（扩展命令表 ↔ 插件调用 ↔ 文档表 ↔ 构建产物），漂移会直接让 `npm run verify` 失败。
 
 ## 架构
 
