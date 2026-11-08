@@ -270,10 +270,11 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_drag` | Drag from/to a selector or viewport point: `auto` synthesizes html5 dragstart→dragover→drop for `draggable="true"` sources (no drop unless accepted), otherwise sends real mouse input (press, interpolated moves, release — sliders/canvas/sortable widgets). **Plugin-side only** over the cdp channel embedded in extension v1.7.2, v1.7.3+ |
 | `browser_audit` | Read this plugin session's in-memory audit trail — every command sent or refused (redacted params, `code`/`effectState`, duration), capped at 200 entries and wiped on restart; typed text and cookie values are redacted, eval expressions truncated. Plugin-local read, works in read-only mode (v1.7.4+) |
 | `browser_journal` | Read the **persistent journal across dsh restarts** (`<stateDir>/journal.jsonl`, last 1000 entries, grouped by run) — ask it after a restart "what was I doing in which tab"; same redaction; plugin-local disk read that works with the extension offline (v1.7.5+) |
+| `browser_sessions` | Multi-session isolation: list the dsh sessions sharing this browser and each one's **working tab**; `action:"release"` forgets yours. Calls that omit tabId default to THIS session's working tab (verified live) — concurrent sessions stop fighting over the active tab; explicit tabId always wins. Plugin-local, v1.7.6+ |
 | `browser_cleanup` | Clean up temp files |
 | `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
 
-28 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+29 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
 
 ## Architecture
 
