@@ -48,6 +48,7 @@ const PROBES = [
   { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'any' },
   { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
   { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
+  { tool: 'browser_audit', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'any' },
   { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'any' },
   { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'any' },
@@ -190,6 +191,7 @@ function commandOfTool(tool, args) {
     case 'browser_scroll': return 'scroll'
     case 'browser_click': return 'click'
     case 'browser_drag': return 'cdp'
+    case 'browser_audit': return null // 插件本地工具，不经扩展
     case 'browser_cleanup': return null // 插件本地命令，不经扩展
     default: return null
   }

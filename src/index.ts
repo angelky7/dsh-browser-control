@@ -28,6 +28,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import { BridgeServer, cleanupArtifacts } from './server.ts'
 import { BridgeError, classify } from './errors.ts'
 import { policyRefusal } from './policy.ts'
+import { AUDIT_MAX_ENTRIES, AuditLog, summarizeAuditParams, type AuditEntry } from './audit.ts'
 
 /** Navigation wait ceiling (same as browser_wait); the bridge gets this plus BRIDGE_MARGIN_MS. */
 const NAV_MAX_MS = 120_000
@@ -187,6 +188,8 @@ class BridgeController {
 	private lastError: string | undefined
 	private chain: Promise<void> = Promise.resolve()
 	private current: ResolvedConfig | undefined
+	/** 操作审计账本（内存环形缓冲，200 条；命令层记录，见 audit.ts 顶部注释）。 */
+	readonly audit = new AuditLog()
 
 	constructor(private readonly log: (line: string) => void) {}
 
@@ -232,6 +235,16 @@ class BridgeController {
 	 */
 	requireExtensionCommand(command: string, since: string): void {
 		if (this.hasExtensionCommand(command)) return
+		// 预检拒绝也要上账：这是「升级插件后模型发现功能不可用」的最常见现场。
+		this.audit.record({
+			command,
+			params: '',
+			ok: false,
+			code: 'extension_outdated',
+			effectState: 'not_started',
+			error: `connected extension v${this.extensionVersion() ?? '?'} lacks ${command} (added in ${since})`,
+			durationMs: 0,
+		})
 		throw extensionOutdatedError(this.extensionVersion(), command, since)
 	}
 
@@ -293,14 +306,35 @@ class BridgeController {
 	 * @returns the extension's result payload verbatim.
 	 */
 	async execute(command: string, params: Record<string, unknown>, signal: AbortSignal, timeoutMs?: number): Promise<unknown> {
-		this.policyGate(command, params)
-		const server = this.server
-		if (server === undefined) {
-			throw classify(command, new Error(
-				this.lastError ?? '浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里给 browser-bridge 配 enabled: true（dsh 0.1.7+ 的宿主也会在设置 → 插件 自动列出本插件开关；0.1.2 及更早的宿主没有这张卡片，只能改配置文件）',
-			))
+		const started = Date.now()
+		const summary = summarizeAuditParams(command, params)
+		const tabId = typeof params.tabId === 'number' ? params.tabId : undefined
+		try {
+			this.policyGate(command, params)
+			const server = this.server
+			if (server === undefined) {
+				throw classify(command, new Error(
+					this.lastError ?? '浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里给 browser-bridge 配 enabled: true（dsh 0.1.7+ 的宿主也会在设置 → 插件 自动列出本插件开关；0.1.2 及更早的宿主没有这张卡片，只能改配置文件）',
+				))
+			}
+			const result = await server.execute(command, params, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
+			this.audit.record({ command, tabId, params: summary, ok: true, durationMs: Date.now() - started })
+			return result
+		} catch (error) {
+			const code = (error as { code?: unknown }).code
+			const effectState = (error as { effectState?: unknown }).effectState
+			this.audit.record({
+				command,
+				tabId,
+				params: summary,
+				ok: false,
+				code: typeof code === 'string' ? code : undefined,
+				effectState: typeof effectState === 'string' ? effectState : undefined,
+				error: errorMessage(error),
+				durationMs: Date.now() - started,
+			})
+			throw error
 		}
-		return server.execute(command, params, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
 	}
 
 	/**
@@ -327,17 +361,35 @@ class BridgeController {
 	 * @returns counts and names of what was removed.
 	 */
 	async cleanup(): Promise<{ shotsRemoved: number; scratchRemoved: readonly string[] }> {
-		// cleanup() 不经过 execute()，所以它必须自己站一次闸门：否则只读档下
-		// 模型仍能用 browser_cleanup 删掉用户的整个截图目录。
-		this.policyGate('cleanup')
-		const dir = this.shotsDir
-		if (dir === undefined) throw classify('cleanup', new Error('browser-bridge is not configured yet —— 浏览器控制尚未加载配置，无法确定清理目录'))
+		const started = Date.now()
 		try {
-			return await cleanupArtifacts({ shotsDir: dir })
+			// cleanup() 不经过 execute()，所以它必须自己站一次闸门：否则只读档下
+			// 模型仍能用 browser_cleanup 删掉用户的整个截图目录。
+			this.policyGate('cleanup')
+			const dir = this.shotsDir
+			if (dir === undefined) throw classify('cleanup', new Error('browser-bridge is not configured yet —— 浏览器控制尚未加载配置，无法确定清理目录'))
+			try {
+				const result = await cleanupArtifacts({ shotsDir: dir })
+				this.audit.record({ command: 'cleanup', params: '{}', ok: true, durationMs: Date.now() - started })
+				return result
+			} catch (error) {
+				// 删除是逐条进行的，中途失败时前面的文件已经没了；不包一层分类，
+				// 模型拿到的就是一句没有 code / effectState 的裸 fs 错误。
+				throw classify('cleanup', error)
+			}
 		} catch (error) {
-			// 删除是逐条进行的，中途失败时前面的文件已经没了；不包一层分类，
-			// 模型拿到的就是一句没有 code / effectState 的裸 fs 错误。
-			throw classify('cleanup', error)
+			const code = (error as { code?: unknown }).code
+			const effectState = (error as { effectState?: unknown }).effectState
+			this.audit.record({
+				command: 'cleanup',
+				params: '{}',
+				ok: false,
+				code: typeof code === 'string' ? code : undefined,
+				effectState: typeof effectState === 'string' ? effectState : undefined,
+				error: errorMessage(error),
+				durationMs: Date.now() - started,
+			})
+			throw error
 		}
 	}
 
@@ -1804,6 +1856,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 	}))
 
 	registerDragTool(ctx, controller)
+	registerAuditTool(ctx, controller)
 }
 
 /* ------------------- browser_drag: composed plugin-side over the cdp channel ------------------- */
@@ -2103,6 +2156,72 @@ function registerDragTool(ctx: Context, controller: BridgeController): void {
 		}
 		return receipt
 	},
+	}))
+}
+
+function registerAuditTool(ctx: Context, controller: BridgeController): void {
+	ctx.tools.register(defineTool({
+		name: 'browser_audit',
+		description: 'Read this plugin session\'s in-memory audit trail: every command sent to the browser extension (and every policy/gate refusal), with redacted params, outcome code and duration. Newest last; capped at 200 entries and wiped when dsh restarts. Values typed into pages and cookie values are redacted; eval expressions are truncated. Plugin-local read — works in read-only mode.',
+		parameters: {
+			command: { type: 'string', description: 'Only entries whose command contains this substring (e.g. "nav", "cookies", "tabs").' },
+			tabId: { type: 'number', description: 'Only entries that carried this tabId.' },
+			sinceSeq: { type: 'number', description: 'Only entries with seq greater than this (paging).' },
+			limit: { type: 'number', description: `Max entries to return (newest last), 1–${AUDIT_MAX_ENTRIES}; default 50.` },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					total: { type: 'number', required: true },
+					shown: { type: 'number', required: true },
+					entries: {
+						type: 'array',
+						required: true,
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							properties: {
+								seq: { type: 'number', required: true },
+								t: { type: 'number', required: true },
+								command: { type: 'string', required: true },
+								tabId: { type: 'number' },
+								params: { type: 'string', required: true },
+								ok: { type: 'boolean', required: true },
+								code: { type: 'string' },
+								effectState: { type: 'string' },
+								error: { type: 'string' },
+								durationMs: { type: 'number', required: true },
+							},
+						},
+					},
+				},
+			},
+			render: (_args, value) => {
+				const v = value as unknown as { total: number; shown: number; entries: AuditEntry[] }
+				if (v.entries.length === 0) {
+					return [{ type: 'text', text: `Audit: ${v.total} entries, none match — the trail starts when a command is executed.` }]
+				}
+				const lines = v.entries.map((e) => {
+					const tab = e.tabId === undefined ? '' : ` tab ${e.tabId}`
+					const outcome = e.ok ? 'ok' : `FAIL ${e.code ?? 'error'}${e.effectState ? `/${e.effectState}` : ''}`
+					const err = e.ok || e.error === undefined ? '' : ` — ${e.error}`
+					return `#${e.seq} ${formatClock(e.t)} ${e.command}${tab} ${outcome} ${e.durationMs}ms ${e.params}${err}`
+				})
+				return [{ type: 'text', text: clampRendered(`Audit: ${v.total} entries (showing ${v.shown})\n${lines.join('\n')}`) }]
+			},
+		},
+		presentCall: () => ({ card: 'generic', title: 'Browser audit', kind: 'other' as const }),
+		async execute(args) {
+			const entries = controller.audit.list({
+				tabId: args.tabId,
+				command: args.command,
+				sinceSeq: args.sinceSeq,
+				limit: args.limit,
+			})
+			return { total: controller.audit.size(), shown: entries.length, entries }
+		},
 	}))
 }
 

@@ -113,7 +113,7 @@ await new Promise((r) => setTimeout(r, 400));
 
 const metricsTool = tools.find((t) => t.name === "browser_metrics");
 const emulateTool = tools.find((t) => t.name === "browser_emulate");
-check("browser_metrics 已注册（工具面 26 条）", Boolean(metricsTool) && tools.length === 26, String(tools.length));
+check("browser_metrics 已注册（工具面 27 条）", Boolean(metricsTool) && tools.length === 27, String(tools.length));
 
 const seenCommands = [];
 const seenParams = [];

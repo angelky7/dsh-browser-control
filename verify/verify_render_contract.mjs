@@ -357,6 +357,9 @@ const GROUND_TRUTH = [
       : p.method === "DOM.getAttributes" ? { attributes: [] }
       : {},
     ["mouse input", "5 steps", "9 dispatches"]],
+  // 操作审计（v1.7.4）：本地账本，值来自真实控制器而不是扩展——这里只断言
+  // render 与 schema 的形状；条目内容由 verify_audit 精确断。
+  ["browser_audit", null, {}, null, ["Audit:"]],
   // 盖不住的场合：模型必须看得见 covered:false 与原因（只看 active 会把「盖不住」当成「盖住了」）
   ["browser_hold", "hold", { action: "on", note: "改档中" },
     { tabId: 3, action: "on", active: false, covered: false, note: "改档中", reason: "error-page" },
@@ -375,7 +378,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));
