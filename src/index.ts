@@ -368,7 +368,15 @@ class BridgeController {
 			this.lastError = undefined
 			return
 		}
-		const server = new BridgeServer({ port: config.port, token: config.token, shotsDir, log: this.log })
+		const server = new BridgeServer({
+			port: config.port,
+			token: config.token,
+			shotsDir,
+			log: this.log,
+			// HTTP /api/command 与工具走同一条闸门与账本：裸 server.execute() 会绕开
+			// 只读档/allowScript，而且不在审计里留下痕迹（默认 token 还是公开的那一个）。
+			httpCommand: (command, params, options) => this.execute(command, params, new AbortController().signal, options.timeoutMs),
+		})
 		try {
 			await server.start()
 		} catch (error) {

@@ -114,6 +114,12 @@ export interface BridgeServerOptions {
   readonly scratchDir?: string
   /** Optional line logger for lifecycle diagnostics. */
   readonly log?: (line: string) => void
+  /**
+   * Executor for the HTTP command face. The plugin passes its controller so
+   * `/api/command` goes through the same policy gate and audit trail as tools;
+   * without it (bare BridgeServer users, tests) the face stays raw.
+   */
+  readonly httpCommand?: (command: string, params: Record<string, unknown>, options: BridgeExecuteOptions) => Promise<unknown>
 }
 
 /** Agent scratch-file convention: `__name.mjs`-style temp artifacts at the top level only. */
@@ -160,7 +166,12 @@ export class BridgeServer {
   private connectedAt: Date | undefined
   private readonly pending = new Map<string, PendingEntry>()
   private lastError: string | undefined
-  private continuationRemainder = ''
+  /**
+   * Payloads of the message being reassembled. **Buffers, not strings**: decoding
+   * each fragment with `toString('utf8')` corrupts any multi-byte character that
+   * straddles a fragment boundary. Decode once, at FIN.
+   */
+  private continuationChunks: Buffer[] = []
   private continuationOpen = false
 
   constructor(options: BridgeServerOptions) {
@@ -432,28 +443,42 @@ export class BridgeServer {
     })
     req.on('end', () => {
       if (aborted) return
-      let parsed: { command?: unknown; params?: unknown; timeoutMs?: unknown }
+      let parsed: unknown
       try {
-        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof parsed
+        parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       } catch (error) {
         this.respondJson(res, 400, { ok: false, error: `invalid JSON body: ${errorMessage(error)}` })
         return
       }
-      if (typeof parsed.command !== 'string' || parsed.command.length === 0) {
+      // `null` parses fine and is NOT an object: without this guard the property
+      // reads below throw a TypeError inside an event callback (uncaught).
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
         this.respondJson(res, 400, { ok: false, error: 'body must be {"command": "...", "params": {...}}' })
         return
       }
-      const timeoutMs = typeof parsed.timeoutMs === 'number' ? parsed.timeoutMs : undefined
-      this.execute(parsed.command, (parsed.params ?? {}) as Record<string, unknown>, timeoutMs === undefined ? {} : { timeoutMs }).then(
+      const body = parsed as { command?: unknown; params?: unknown; timeoutMs?: unknown }
+      if (typeof body.command !== 'string' || body.command.length === 0) {
+        this.respondJson(res, 400, { ok: false, error: 'body must be {"command": "...", "params": {...}}' })
+        return
+      }
+      const timeoutMs = typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined
+      const options: BridgeExecuteOptions = timeoutMs === undefined ? {} : { timeoutMs }
+      // The plugin's controller carries the read-only / script gates and the audit
+      // trail; the raw execute() below is only the fallback for bare users.
+      const run = this.options.httpCommand ?? ((command, params, opts) => this.execute(command, params, opts))
+      run(body.command, (body.params ?? {}) as Record<string, unknown>, options).then(
         (result) => this.respondJson(res, 200, { ok: true, result }),
         (error) => {
           if (error instanceof BridgeError) {
-            // 503 = 现在根本没法工作；504 = 超时且结果未知；502 = 扩展报了具体失败
+            // 503 = 现在根本没法工作；504 = 超时且结果未知；403 = 本机策略拦下（零副作用）；
+            // 502 = 扩展报了具体失败
             const status = error.code === 'extension_offline' || error.code === 'bridge_disabled' || error.code === 'not_configured'
               ? 503
               : error.code === 'command_timeout' || error.code === 'link_lost'
                 ? 504
-                : 502
+                : error.code === 'blocked_by_policy'
+                  ? 403
+                  : 502
             this.respondJson(res, status, error.toJSON())
             return
           }
@@ -512,11 +537,19 @@ export class BridgeServer {
     this.clientSocket = socket
     this.hello = undefined
     this.connectedAt = new Date()
-    this.continuationRemainder = ''
+    this.continuationChunks = []
     this.continuationOpen = false
     this.log(`extension connected from ${socket.remoteAddress}:${socket.remotePort}`)
     const reader = new FrameReader()
     socket.on('data', (chunk: Buffer) => {
+      // A replaced connection can still deliver buffered frames. Without this
+      // guard its pong/frames would be applied to the NEW link, and its close
+      // event could tear the new socket down (the close handler already checks,
+      // the data handler did not).
+      if (this.clientSocket !== socket) {
+        socket.destroy()
+        return
+      }
       reader.push(chunk)
       try {
         reader.drain((frame) => this.handleFrame(frame))
@@ -540,7 +573,7 @@ export class BridgeServer {
     switch (frame.opcode) {
       case 0x1:
       case 0x0:
-        this.handleText(frame.payload.toString('utf8'), frame.fin, frame.opcode)
+        this.handleText(frame.payload, frame.fin, frame.opcode)
         return
       case 0x8:
         this.closeClientSocket(1000, '')
@@ -553,14 +586,16 @@ export class BridgeServer {
     }
   }
 
-  private handleText(text: string, fin: boolean, opcode: number): void {
+  private handleText(payload: Buffer, fin: boolean, opcode: number): void {
     if (opcode === 0x0 && !this.continuationOpen) return // stray continuation
-    if (opcode === 0x1) this.continuationRemainder = ''
+    if (opcode === 0x1) this.continuationChunks = []
     this.continuationOpen = opcode === 0x0 || !fin
-    this.continuationRemainder += text
+    this.continuationChunks.push(payload)
     if (!fin) return
-    const full = this.continuationRemainder
-    this.continuationRemainder = ''
+    // Decode only the complete message: per-fragment toString('utf8') splits
+    // multi-byte characters at fragment boundaries and corrupts the JSON.
+    const full = Buffer.concat(this.continuationChunks).toString('utf8')
+    this.continuationChunks = []
     this.continuationOpen = false
     let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown; capabilities?: unknown }
     try {

@@ -90,6 +90,12 @@ export interface BridgeServerOptions {
     readonly scratchDir?: string;
     /** Optional line logger for lifecycle diagnostics. */
     readonly log?: (line: string) => void;
+    /**
+     * Executor for the HTTP command face. The plugin passes its controller so
+     * `/api/command` goes through the same policy gate and audit trail as tools;
+     * without it (bare BridgeServer users, tests) the face stays raw.
+     */
+    readonly httpCommand?: (command: string, params: Record<string, unknown>, options: BridgeExecuteOptions) => Promise<unknown>;
 }
 /**
  * Clear the screenshots directory and delete agent scratch files. Only the
@@ -116,7 +122,12 @@ export declare class BridgeServer {
     private connectedAt;
     private readonly pending;
     private lastError;
-    private continuationRemainder;
+    /**
+     * Payloads of the message being reassembled. **Buffers, not strings**: decoding
+     * each fragment with `toString('utf8')` corrupts any multi-byte character that
+     * straddles a fragment boundary. Decode once, at FIN.
+     */
+    private continuationChunks;
     private continuationOpen;
     constructor(options: BridgeServerOptions);
     /** Current link state, also served verbatim as `/api/status`. */
