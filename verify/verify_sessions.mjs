@@ -78,7 +78,7 @@ const run = (name, args, agentId) => tool(name).execute(args, {
 }).then((r) => ({ ok: true, value: r }), (e) => ({ ok: false, error: String(e?.message ?? e) }));
 const last = () => received[received.length - 1];
 
-check("browser_sessions 已注册（工具面 29 条）", Boolean(tool("browser_sessions")) && tools.length === 29, String(tools.length));
+check("browser_sessions 已注册（工具面 30 条）", Boolean(tool("browser_sessions")) && tools.length === 30, String(tools.length));
 
 /* ============ 1. 隔离核心 ============ */
 await run("browser_navigate", { url: "https://a.test/", tabId: 100 }, "agent-a");

@@ -68,7 +68,7 @@ await new Promise((r) => {
 await new Promise((r) => setTimeout(r, 100));
 
 const snap = tools.find((t) => t.name === "browser_snapshot");
-check("browser_snapshot 已注册（工具面仍是 29 条）", Boolean(snap) && tools.length === 29, String(tools.length));
+check("browser_snapshot 已注册（工具面仍是 30 条）", Boolean(snap) && tools.length === 30, String(tools.length));
 check("参数表加了 offset", snap?.parameters?.properties?.offset !== undefined, Object.keys(snap?.parameters?.properties ?? {}).join(","));
 const signal = () => new AbortController().signal;
 const call = (args) => snap.execute(args, { signal: signal() }).then((r) => ({ ok: true, value: r }), (e) => ({ ok: false, error: String(e?.message ?? e) }));
