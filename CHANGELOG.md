@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.7.9 (2026-11-09)
+
+**这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。把评审清单里**插件侧剩下的四条**补齐：审计真脱敏、journal 降级可见、矩阵探针收紧、真扩展输出→schema→render 全链。
+
+- **审计真脱敏**：以前只有输入值/cookie 值/令牌键打码与表达式截断——URL 的查询值（`?token=…&code=…`）和错误文本里的 URL 会以明文进内存账本与 `journal.jsonl`。现在保留 scheme/host/path 与参数名，查询值一律 `[redacted:N chars]`；SPA 路由片段（`#/inbox`）保留，含 `=` 或 token 字样的片段整体打码；**错误文本入账前走同一遍**。脱敏在 `AuditLog.record` 的单一入口完成，内存与磁盘同一份。
+- **journal 降级可见**：`Journal.open` 失败以前只写一行日志，纯内存运行和正常落盘在工具面上长得一样。`browser_audit` / `browser_journal` 现在回执带 `journal: {enabled, error?}`，render 末尾追加 `Journal write: disabled — … this run is memory-only`。坏 `stateDir` 的台子同时验两个工具与两处 render。
+- **矩阵 `expect:any` 收紧为 `answered`**：只认「真成功」或扩展回话的功能性失败 `[command_failed]`；unknown-command / extension-outdated / 断链 / 离线 / 策略拦截 / 超时 / 插件侧裸异常一律不算「管道通」。能稳定成功的探针（find/press/cookies/dialog/hold/windows/screenshot/pdf/archive）升级为 `expect:'ok'`。
+- **真扩展输出→schema→render 全链**：每个成功探针的**实际扩展产出**现在直接喂给工具自己的 `output.schema`（宿主 `validateJsonSchemaValue`）与 `render`——不再只靠 render 契约台里手写的回包。为此假件补了 `Page.captureScreenshot`/`printToPDF`/`captureSnapshot` 的默认载荷；否则截图会抛裸 TypeError、PDF/存档只有功能性失败。这条链第一跑就抓出 `browser_scroll` 的假件回 `null`、输出过不了自己的 object schema（真页面回滚动状态对象），假件语义已补。
+- `npm run verify` 1134 → **1295 项** exit 0。三处变异（脱敏函数直通 / `journalStatus` 恒报 enabled / 摘掉假件截图载荷）各被不相交断言抓住。
+- **仍未动**：扩展侧 5 条（硬锁竞态/在途复查/dialog 拦锁、ref 代次+快照串行、事件按 sessionId 过滤）仍在 v1.8.0 那一次扩展更新里；届时只重装一次。
+
 ## v1.7.8 (2026-11-09)
 
 **这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。外部代码评审交来一份缺陷清单，这一版把其中**插件侧确定性的 6 类问题**全部修掉，并补上评审点名的测试缺口。

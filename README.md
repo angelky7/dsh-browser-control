@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；**扩展从 v1.7.2 起不再随功能更新**：v1.7.3–v1.7.8 都没有动扩展，装过 v1.7.2 的不用重装） |
-| [dsh-browser-control-plugin-v1.7.8.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.8/dsh-browser-control-plugin-v1.7.8.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；**扩展从 v1.7.2 起不再随功能更新**：v1.7.3–v1.7.9 都没有动扩展，装过 v1.7.2 的不用重装） |
+| [dsh-browser-control-plugin-v1.7.9.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.9/dsh-browser-control-plugin-v1.7.9.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.8"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.9"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
