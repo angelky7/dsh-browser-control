@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.7.10 (2026-11-09)
+
+**会话级修复（issue #26）：页面文本截断不再切出半个 emoji。** 半个 emoji（孤立 UTF-16 代理项）经 `JSON.stringify` 变成裸 `\ud83d`，模型的 JSON 解析器会拒收**整个请求体**，坏字符随会话历史每轮重放，`/compact` 也救不回。这一版把插件侧的热修发出来——**装过 v1.7.2 扩展的用户只升级插件即可，不用重装扩展**。
+
+- **插件侧**：所有截断走 `sliceWellFormed()`（切点落在高位代理项时退一格）；`defineTool` 包装层对**每条 render 文本与错误文本**做 `toWellFormed()` 兜底（U+FFFD），因此旧扩展回传的孤立代理项也进不了请求体；`browser_read` 的窗口切片同样修好；`omittedChars` 按实际展示长度报（退掉的半个代理对算进省略，可见 + 省略 = 总长）。`browser_evaluate` 的 4000 边界即使正好切在 emoji 中间也不会再毒化会话。
+- **扩展侧（已进 main，随下一次扩展更新发布）**：7 处页面文本截断（find 的 class/text、click 回执、DOM 快照 name/value、AX 快照 name/value）与 SW 侧浮层正文/网络日志 postData/错误页正文改用注入的 `pageClipWellFormed`；测试包曾以 manifest `1.7.2.1` 验证，**不是本次必须重装的版本**。
+- **验证**：新增 `verify_text_safety.mjs`（20 项，含从真实 `background.js` 抽出 helper 执行、4000 边界报数对账）；`npm run verify` 1295 → **1312 项** exit 0。三处变异（plain slice / 摘掉 render 兜底 / 扩展 helper 改回 slice）各被不相交断言抓住。
+- **AI 验收**：扩展 1.7.2.1 + 插件 1.7.10，按验收单跑完环境/截断/审计脱敏/wait(fn)/拖拽/快照分页/核心工具，全部 PASS，全程无 `INVALID_REQUEST`/400/会话中断；`SUPERSECRET123` 在 audit/journal 中均为 `[redacted:N chars]`。
+
 ## v1.7.9 (2026-11-09)
 
 **这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。把评审清单里**插件侧剩下的四条**补齐：审计真脱敏、journal 降级可见、矩阵探针收紧、真扩展输出→schema→render 全链。

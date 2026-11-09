@@ -64,8 +64,8 @@ In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin pane
 
 | File | Purpose |
 |---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; **the extension no longer changes with feature updates from v1.7.2 on**: v1.7.3–v1.7.9 do not touch the extension — skip this if v1.7.2 is already loaded) |
-| [dsh-browser-control-plugin-v1.7.9.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.9/dsh-browser-control-plugin-v1.7.9.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; **the extension no longer changes with feature updates from v1.7.2 on**: v1.7.3–v1.7.10 need no extension reinstall; the v1.7.10 session fix is plugin-side only (extension clipping improvements ship with the next extension update)) |
+| [dsh-browser-control-plugin-v1.7.10.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.10/dsh-browser-control-plugin-v1.7.10.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
 
 ## Install the Chrome extension (30 seconds)
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # Straight from GitHub
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.9"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.10"
 
 # Local checkout for debugging (note: the explicit file: prefix is required)
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
