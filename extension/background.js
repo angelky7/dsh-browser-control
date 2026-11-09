@@ -476,7 +476,7 @@ async function persistHoldEntry(tabId, entry) {
 function holdNoteOf(params) {
 	const raw = typeof params?.note === 'string' ? params.note : ''
 	const flat = raw.replace(/\s+/g, ' ').trim()
-	return flat.length > HOLD_NOTE_MAX ? `${flat.slice(0, HOLD_NOTE_MAX)}…` : flat
+	return flat.length > HOLD_NOTE_MAX ? `${clipText(flat, HOLD_NOTE_MAX)}…` : clipText(flat, HOLD_NOTE_MAX)
 }
 
 /**
@@ -645,6 +645,30 @@ function pageHtmlWithoutHold() {
 	} catch (err) {
 		return document.documentElement.outerHTML
 	}
+}
+
+/**
+ * UTF-16-safe clip（issue #26）：页面文本按码元切会留下半个代理对，JSON.stringify
+ * 把它写成裸 `\ud83d`，模型的 JSON 解析器会拒收**整个请求体**，且坏字符随会话历史
+ * 每轮重放。切点落在高位代理项上时退一格；toWellFormed 兜底页面自带的坏字符。
+ *
+ * 这个函数也在**页面里**跑（快照/点击/查找的注入表达式），所以像 pageIsHoldNode
+ * 一样以源码形式注入（CLIP_FN_SOURCE），不要引用闭包变量。
+ */
+function pageClipWellFormed(text, maxChars) {
+	const s = String(text === undefined || text === null ? '' : text);
+	const safe = typeof s.toWellFormed === 'function' ? s.toWellFormed() : s;
+	if (safe.length <= maxChars) return safe;
+	let end = maxChars;
+	const unit = safe.charCodeAt(end - 1);
+	if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
+	return safe.slice(0, Math.max(0, end));
+}
+/** 注入页面表达式的源码形式：`const clip = ${CLIP_FN_SOURCE};` */
+const CLIP_FN_SOURCE = `(${pageClipWellFormed.toString()})`;
+/** Service-worker 侧同名入口（浮层正文、网络日志 postData 等）。 */
+function clipText(text, maxChars) {
+	return pageClipWellFormed(text, maxChars);
 }
 
 /** 在页面里跑一段自包含函数，返回它的返回值。 */
@@ -1046,7 +1070,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 			url: params.request.url,
 			headers: params.request.headers,
 			resourceType: params.type,
-			postData: typeof post === 'string' && post.length > POST_LIMIT ? post.slice(0, POST_LIMIT) + '…(truncated)' : post,
+			postData: typeof post === 'string' && post.length > POST_LIMIT ? clipText(post, POST_LIMIT) + '…(truncated)' : typeof post === 'string' ? clipText(post, POST_LIMIT) : post,
 			initiator: params.initiator && params.initiator.url,
 			wallTime: params.wallTime,
 		};
@@ -1957,7 +1981,7 @@ async function cmdNav(params) {
 	let siteUnreachable;
 	if (/^chrome-error:/.test(landedUrl)) {
 		const errText = await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
-			expression: 'document.body ? document.body.innerText.slice(0, 4000) : ""',
+			expression: `(() => { const clip = ${CLIP_FN_SOURCE}; return document.body ? clip(document.body.innerText, 4000) : ""; })()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
 		}).then((r) => String(r.result?.value ?? ''))), 2000, '');
 		// Error-page copy is localized (zh-CN shows 无法找到 … 的 DNS 地址,
@@ -2121,6 +2145,7 @@ async function cmdFind(params) {
 	const tab = await resolveTab(params.tabId);
 	const payload = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
 		expression: `(() => {
+			const clip = ${CLIP_FN_SOURCE};
 			const els = [...document.querySelectorAll(${JSON.stringify(String(params.selector))})]
 				.filter((el) => !(${pageIsHoldNode.toString()})(el));
 			return JSON.stringify({
@@ -2129,8 +2154,8 @@ async function cmdFind(params) {
 					const r = el.getBoundingClientRect();
 					return {
 						tag: el.tagName.toLowerCase(), id: el.id || undefined,
-						class: String(el.className || '').slice(0, 120) || undefined,
-						text: (el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 160) || undefined,
+						class: clip(String(el.className || ''), 120) || undefined,
+						text: clip((el.textContent || '').trim().replace(/\\s+/g, ' '), 160) || undefined,
 						href: el instanceof Element && el.hasAttribute('href') ? el.getAttribute('href') : undefined,
 						rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
 					};
@@ -2151,6 +2176,7 @@ async function cmdClick(params) {
 	return withCDP(tab.id, async (send) => {
 		const hit = await send('Runtime.evaluate', {
 			expression: `(() => {
+				const clip = ${CLIP_FN_SOURCE};
 				const el = document.querySelector(${JSON.stringify(String(params.selector))});
 				if (!el) return null;
 				el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -2173,7 +2199,7 @@ async function cmdClick(params) {
 					isTop = clear === el || el.contains(clear);
 				}
 				const after = bypassedOwnOverlay ? document.elementFromPoint(x, y) : topEl;
-				return { x, y, tag: el.tagName.toLowerCase(), text: (el.textContent || '').trim().slice(0, 120),
+				return { x, y, tag: el.tagName.toLowerCase(), text: clip((el.textContent || '').trim(), 120),
 					hitTag: after ? after.tagName.toLowerCase() : null, isTop, bypassedOwnOverlay };
 			})()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
@@ -2460,6 +2486,7 @@ async function snapshotViaDom(send, tab, limit) {
 	const payload = await send('Runtime.evaluate', {
 		expression: `(() => {
 			const ATTR = 'data-dsh-ref';
+			const clip = ${CLIP_FN_SOURCE};
 			document.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
 			const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})]
 				.filter((el) => !(${pageIsHoldNode.toString()})(el));
@@ -2476,9 +2503,9 @@ async function snapshotViaDom(send, tab, limit) {
 					ref, tag: el.tagName.toLowerCase(),
 					type: el.getAttribute('type') || undefined,
 					role: el.getAttribute('role') || undefined,
-					name: (el.getAttribute('aria-label') || el.getAttribute('placeholder')
-						|| (el.textContent || '').trim().replace(/\\s+/g, ' ')).slice(0, 80) || undefined,
-					value: isField || el instanceof HTMLSelectElement ? String(el.value ?? '').slice(0, 60) : undefined,
+					name: clip(el.getAttribute('aria-label') || el.getAttribute('placeholder')
+						|| (el.textContent || '').trim().replace(/\\s+/g, ' '), 80) || undefined,
+					value: isField || el instanceof HTMLSelectElement ? clip(String(el.value ?? ''), 60) : undefined,
 					href: el.hasAttribute('href') ? el.href : undefined,
 					rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
 				});
@@ -2515,6 +2542,7 @@ const AX_ACTIONABLE_ROLES = new Set([
  * what the DOM node actually is. One round trip per kept element.
  */
 const AX_STAMP_FN = 'function(ref){'
+	+ 'var clip = ' + CLIP_FN_SOURCE + ';'
 	+ 'var r = this.getBoundingClientRect();'
 	+ 'if (r.width === 0 && r.height === 0) return null;'
 	// 接管浮层自己也是「可操作」的（卡片上有个按钮），但它属于扩展、不属于页面：
@@ -2526,7 +2554,7 @@ const AX_STAMP_FN = 'function(ref){'
 	+ ' tag: this.tagName.toLowerCase(),'
 	+ ' type: (this.type ? String(this.type) : undefined),'
 	+ ' href: (this.href ? String(this.href) : undefined),'
-	+ ' value: (this.value === undefined || this.value === null) ? undefined : String(this.value).slice(0, 60),'
+	+ ' value: (this.value === undefined || this.value === null) ? undefined : clip(String(this.value), 60),'
 	+ ' rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }'
 	+ '};'
 	+ '}';
@@ -2587,7 +2615,7 @@ async function snapshotViaAx(send, tab, limit) {
 			ref,
 			tag: geo.tag,
 			role: String(node.role && node.role.value || '').toLowerCase() || undefined,
-			name: String(node.name && node.name.value || '').replace(/\s+/g, ' ').slice(0, 80) || undefined,
+			name: clipText(String(node.name && node.name.value || '').replace(/\s+/g, ' '), 80) || undefined,
 			type: geo.type,
 			href: geo.href,
 			value: geo.value,

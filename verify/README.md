@@ -32,6 +32,7 @@ node verify/verify_plugin.mjs new     # 单独跑一个
 | `verify_protocol.mjs` | `hello` 帧的 `protocol` 握手：老扩展不声明或声明 0 视为兼容，扩展比桥新判不兼容并在 `/api/status` 给出说明 | 协议版本 |
 | `verify_http.mjs` | 起真实 `BridgeServer` + 假扩展 WebSocket 客户端：所有响应无 `Access-Control-Allow-*`；无 token / 错 token 的 `/api/command`、`/api/cleanup` 一律 401；带 token 仍能真正驱动扩展；`Host` 非回环与网页 `Origin` 的升级握手被 403，扩展来源与无 Origin 的 101 | #3、#6 |
 | `verify_server_hardening.mjs` | 桥接边界加固（专家评审 P1）：手工 RFC6455 帧驱动——分片消息按**字节**累积（多字节 UTF-8 跨片不碎）、被顶掉的旧连接再发 close 不许关掉新连接、HTTP 非对象 body（`null`/数组）回 400 且服务不崩、`/api/command` 与工具走同一道策略闸门与同一本审计账（只读档写命令 403 + 账本有记录） | 专家评审 P1 |
+| `verify_text_safety.mjs` | UTF-16 截断安全（#26）：半个 emoji（孤立代理项）会让模型请求体整包 400 且随会话历史每轮重放。断言 `sliceWellFormed` 的边界（ASCII/恰好上限/完整 emoji/切点退格/limit 0/坏字符→U+FFFD）、工具 render 包装层把纯文本 render 修成 well-formed、4000 边界退一格且 `omittedChars` 与实际省略量一致（可见+省略=总长）、失败文本同样 well-formed；并从**真实扩展文件**里抽出 `pageClipWellFormed` 执行，核对评审列出的 7 处页面截断全部改走 clip | #26 |
 | `verify_bundle_http.mjs` | 同样的鉴权，但跑的是 **发布产物 `lib/index.js`**（npm 用户实际拿到的那份），并确认默认 token 会在日志告警、`/api/status` 报 `insecureToken` | #3、#6、#8 |
 | `verify_release_links.mjs` | README 里每个 `releases/download/...` 都对应一个真实存在的资产，防「文档指向 404 的包」复发（需先抓一份 releases JSON，脚本头部有命令） | #2 |
 | `verify_nav_timeout.mjs` | `browser_navigate` 的 `timeoutMs` 真的在参数表里、真的传到扩展（默认 15000、显式优先、上限 120000），且**桥的命令超时 = 导航预算 + 2s**：预算 300ms 时桥在 2303ms 处超时（而不是撑到默认 60s），文案里带的是 2300ms；`browser_evaluate` 的同款旋钮也在这里对账（默认不带、显式钳到 [100,120000]、桥 +2s） | 超时文案里那句「raise timeoutMs」过去是空头承诺（参数表里没有这个键）；evaluate 的扩展侧竞速同理，工具面从不传 budget，等于死代码 |

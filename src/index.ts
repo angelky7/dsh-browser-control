@@ -33,6 +33,7 @@ import { policyRefusal } from './policy.ts'
 import { AUDIT_MAX_ENTRIES, AuditLog, summarizeAuditParams, type AuditEntry } from './audit.ts'
 import { Journal, readJournal } from './journal.ts'
 import { SessionRegistry } from './sessions.ts'
+import { sliceWellFormed, toWellFormed } from './text.ts'
 
 /** Navigation wait ceiling (same as browser_wait); the bridge gets this plus BRIDGE_MARGIN_MS. */
 const NAV_MAX_MS = 120_000
@@ -84,12 +85,31 @@ function defineTool<const S extends ParameterSchemaSpec, const O extends ValueSc
 	const execute = ((args: unknown, exec: ToolRunContext) => {
 		const agent = (exec as { agent?: { id?: unknown } }).agent
 		const sessionId = typeof agent?.id === 'string' && agent.id.length > 0 ? agent.id : undefined
-		return TOOL_SESSION.run(sessionId, () => inner(args, exec))
+		return TOOL_SESSION.run(sessionId, () => inner(args, exec)).catch((error: unknown) => {
+			// 错误文本同样进入模型请求体：页面异常可能带孤立代理项（issue #26）。
+			// 原地改 message 而不是包一层，保留 BridgeError 的 code/effectState。
+			if (error instanceof Error) error.message = toWellFormed(error.message)
+			throw error
+		})
 	}) as unknown as DefineToolOptions<S, O>['execute']
+	// 模型可见文本的最后一道路障（issue #26）：任何 render 产出的 text 在交给宿主前
+	// 都修成 well-formed。扩展侧旧版本还在用码元截断，这里必须兜住；否则半个 emoji
+	// 会让整个请求体 400，且坏字符会随会话历史每轮重放。
+	const rawRender = (options.output as unknown as {
+		render?: (args: unknown, value: unknown) => { type: string; text?: string }[]
+	} | undefined)?.render
+	const output = rawRender === undefined
+		? options.output
+		: {
+			...options.output,
+			render: (args: unknown, value: unknown) => rawRender(args, value).map((part) => (
+				part.type === 'text' && typeof part.text === 'string' ? { ...part, text: toWellFormed(part.text) } : part
+			)),
+		}
 	// Call the host helper through a non-generic point: re-instantiating its
 	// recursive InferObject types from inside a generic wrapper is what TS chokes on.
 	const hostDefine = defineHostTool as unknown as (o: DefineToolOptions<S, O>) => ReturnType<typeof defineHostTool>
-	return hostDefine({ ...options, execute } as DefineToolOptions<S, O>)
+	return hostDefine({ ...options, execute, output } as DefineToolOptions<S, O>)
 }
 
 // Re-exported so the policy tables stay testable from the published bundle
@@ -587,9 +607,13 @@ function errorMessage(error: unknown): string {
  */
 const MAX_RENDERED_CHARS = 4_000
 function clampRendered(text: string, maxChars = MAX_RENDERED_CHARS): string {
-	if (text.length <= maxChars) return text
-	const omitted = text.length - maxChars
-	return `${text.slice(0, maxChars)}\n… [renderedTruncated omittedChars=${omitted} limitChars=${maxChars}] narrow the query and call again to see the rest`
+	// 页面文本可能自带孤立代理项，也可能是上一次按码元切出来的；先修好再判断长度。
+	const safe = toWellFormed(text)
+	if (safe.length <= maxChars) return safe
+	const cut = sliceWellFormed(safe, maxChars)
+	// 报数按**实际展示**的长度算：退掉的半个代理对算进 omitted，可见 + omitted = 总长。
+	const omitted = safe.length - cut.length
+	return `${cut}\n… [renderedTruncated omittedChars=${omitted} limitChars=${maxChars}] narrow the query and call again to see the rest`
 }
 
 /** Model-facing budget for one snapshot listing; `limit` narrows the listing. */
@@ -599,8 +623,8 @@ const LOG_RENDER_MAX_CHARS = 6_000
 
 /** Collapse one page-supplied field to a single line inside a rendered listing. */
 function flattenOneLine(value: string, maxChars: number): string {
-	const flat = value.replace(/\s+/g, ' ').trim()
-	return flat.length <= maxChars ? flat : `${flat.slice(0, maxChars)}…`
+	const flat = toWellFormed(value.replace(/\s+/g, ' ').trim())
+	return flat.length <= maxChars ? flat : `${sliceWellFormed(flat, maxChars)}…`
 }
 
 /** `HH:MM:SS` in UTC from an epoch-milliseconds stamp. */
@@ -978,7 +1002,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				exec.signal,
 			) as { tabId: number; title?: string; url?: string; content?: string }
 			const full = raw.content ?? ''
-			const content = full.slice(offset, offset + limit)
+			// 码元窗口可能切在代理对中间；修成 well-formed，长度不变（U+FFFD 也是一码元），
+			// offset/truncated 的算术保持原语义。
+			const content = toWellFormed(full.slice(offset, offset + limit))
 			return {
 				tabId: raw.tabId,
 				mode,
@@ -2628,7 +2654,7 @@ function registerSessionsTool(ctx: Context, controller: BridgeController): void 
 			},
 			render: (_args, value) => {
 				const v = value as unknown as { current?: string; sessions: { sessionId: string; workingTabId?: number; lastActiveAt: number; calls: number }[]; releasedTabId?: number }
-				const short = (id: string) => (id.length <= 18 ? id : `${id.slice(0, 16)}…`)
+				const short = (id: string) => (id.length <= 18 ? id : `${sliceWellFormed(id, 16)}…`)
 				if (v.releasedTabId !== undefined) {
 					return [{ type: 'text', text: `Sessions: released your working tab ${v.releasedTabId} — later calls without tabId follow the browser's active tab again.` }]
 				}

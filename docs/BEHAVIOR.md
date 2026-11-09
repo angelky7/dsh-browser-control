@@ -102,6 +102,7 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - 因此：`browser_read` 把页面正文放进 render（不再只报「N chars」），`browser_snapshot` 把 `[e13] button "Save"` 逐条列出来（不再只报「N interactive elements」），两条日志工具把条目本身列出来（不再只报计数）。
 - 每类内容有自己的预算：页面正文每次 20 000 字符、快照列表 8 000、日志列表 6 000、其它 JSON 结果 4 000。
 - 超预算时追加一行**机器可读**标记：`… [renderedTruncated omittedChars=N limitChars=L] narrow the query and call again to see the rest`。标记是在切片之后拼上去的，所以它一定活着。看到它的正确反应是缩小查询（`limit` / `pattern` / `urlPattern` / `offset`），不是假设页面就这么长。
+- **截断不许切半个代理对**（issue #26）：页面文本/render 文本按码元 `slice` 会留下孤立代理项，`JSON.stringify` 后是裸 `\ud83d`，模型的 JSON 解析器会拒收**整个请求体**，坏字符还会随会话历史每轮重放。插件侧所有截断走 `sliceWellFormed`（切点落高位代理项时退一格），`defineTool` 包装层再把每条 render 文本与错误文本修成 well-formed（兜住页面自带的坏字符，U+FFFD）；扩展侧页面截断用注入的 `pageClipWellFormed`。实测：`verify_text_safety.mjs`。
 - `browser_read` 用窗口读取：头部写 `chars 0-20000 of 43210; call again with offset=20000`，`value` 里带 `offset` / `totalChars`。**一次调用不会把整站灌进上下文**，长页面靠 `offset` 走。
 - 日志列表的时间统一 UTC 秒（`HH:MM:SS`），`count < total` 时明说「只给了最新的 N 条」。`headers` / `responseHeaders` / `postData` 不进结果：它们到不了模型，只会把载荷变大。
 - 封闭 `output.schema` 必须逐字段声明扩展真实回传的东西。宿主 `checkValue`（`lib/index.js:468-470`）对 `additionalProperties:false` 是**逐键判违规**，少声明一个字段等于这条工具每次调用都失败（`properties:{}` + `additionalProperties:false` = 任何键都违规——`browser_console_log` / `browser_network_log` 从 v1.0.7 到 v1.0.11 就一直栽在这)。
