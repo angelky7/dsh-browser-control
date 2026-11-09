@@ -1,328 +1,107 @@
+<div align="center">
+
+<img src="extension/icons/icon128.png" width="100" alt="DSH Browser Control">
+
 # DSH Browser Control
 
-<p align="center">
-  <img src="extension/icons/icon128.png" width="100" alt="DSH Browser Control">
-</p>
+**Let AI work in your own browser — logged-in accounts, visible actions, local files.**
 
-<p align="center">
-  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
-</p>
+[![简体中文](https://img.shields.io/badge/lang-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-red.svg)](README.md) [![English](https://img.shields.io/badge/lang-English-blue.svg)](README.en.md)
 
-<p align="center">
-  <a href="https://github.com/angelky7/dsh-browser-control/releases"><img src="https://img.shields.io/github/v/release/angelky7/dsh-browser-control" alt="release"></a>
-  <a href="https://github.com/angelky7/dsh-browser-control/blob/main/LICENSE"><img src="https://img.shields.io/github/license/angelky7/dsh-browser-control" alt="license"></a>
-  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
-  <a href="https://developer.chrome.com/docs/extensions/develop/migrate/mv2-deprecation-timeline"><img src="https://img.shields.io/badge/Chrome-MV3-yellow" alt="chrome mv3"></a>
-  <a href="https://github.com/topics/dsh-plugin"><img src="https://img.shields.io/badge/DSH-Plugin-purple" alt="dsh plugin"></a>
-  <img src="https://img.shields.io/badge/CDP-powered-orange" alt="cdp">
-  <img src="https://img.shields.io/badge/tools-11-red" alt="11 browser tools">
-  <img src="https://img.shields.io/badge/tests-29%2F29-brightgreen" alt="tests">
-</p>
+[![npm version](https://img.shields.io/npm/v/@angelky7/dsh-browser-control?style=flat&label=version&color=2EA44F)](https://www.npmjs.com/package/@angelky7/dsh-browser-control)
+[![downloads](https://img.shields.io/npm/dm/@angelky7/dsh-browser-control?style=flat&label=downloads&color=2EA44F)](https://www.npmjs.com/package/@angelky7/dsh-browser-control)
+[![CI](https://github.com/angelky7/dsh-browser-control/actions/workflows/ci.yml/badge.svg)](https://github.com/angelky7/dsh-browser-control/actions/workflows/ci.yml)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![license](https://img.shields.io/badge/license-AGPL--3.0-2EA44F?style=flat)](LICENSE)
 
-A Chrome extension + DeepSeek Harness plugin that lets AI agents drive your real browser like a human.
+</div>
 
-<p align="center">
-  <img src="assets/banner.png" width="480" alt="DSH Browser Control — a whale searching Google with a mouse">
-</p>
+## What it is
 
-## What is this
+A dsh plugin plus a Chrome extension. The extension dials back to dsh over loopback (default `127.0.0.1:9777`), and the model drives **the Chrome you actually use**: navigate, read, click, type, drag, upload, screenshot, export PDF/MHTML, read and write cookies, inspect performance counters.
 
-Not a headless browser, not Puppeteer — your **real Chrome**, with your logins and cookies. The AI drives tabs through the Chrome DevTools Protocol while you watch every step on screen.
+No headless browser, no copying login state around, no MCP — it drives the signed-in Chrome on your screen.
 
-```
-You say one sentence to the AI
-      ↓
-Agent calls browser_* tools
-      ↓
-DSH plugin (WebSocket bridge)
-      ↓
-Chrome extension (CDP)
-      ↓
-Your real browser performs the action
-      ↓
-Result returns to the Agent
-```
+- 30 `browser_*` tools, usable from natural language
+- Visible: tabs the agent opens join a `DSH` group; one-click lock in the extension popup
+- Local gates: read-only / no arbitrary JS / upload allowlist
+- Auditable: in-memory audit trail plus a cross-restart journal
+- Install the extension once: regular feature updates since v1.7.3 are plugin-only (security/platform fixes may still update it)
 
-## How it differs from MCP browser solutions
+## Install
 
-Browsers via MCP (Playwright MCP, Puppeteer MCP, browser-use…) share one trait: they launch a **fresh browser instance they downloaded themselves**. This project takes the other road:
+### 1. Chrome extension
 
-| | This project | Playwright / Puppeteer MCP |
-|---|---|---|
-| Browser | The real Chrome you are using | Separate auto-downloaded instance |
-| Logins / Cookies | ✅ Fully inherited, no re-login | ❌ Fresh profile every time |
-| CAPTCHAs / QR login | Rarely hit — your sessions stay logged in | Frequently stuck at login walls |
-| Visibility | Live on your screen, tabs the agent opens land in a `DSH` group, grab the mouse anytime | Headless or separate window |
-| Environment deps | No Node / npx / Python needed | Needs npx or uvx runtime |
-| Setup | Load extension + settings toggle | Edit MCP client JSON config |
-| Disk usage | Reuses existing Chrome, zero extra | Downloads hundreds of MB |
-| Integration depth | Native dsh plugin (status page / cleanup button; whether a settings card exists depends on the host version, see below) | Generic MCP server |
+Download [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
 
-In one line: **for "use MY browser" tasks (logged-in Bilibili, Zhihu, admin panels), use this project; for generic cross-browser test automation, use MCP.**
+> Already on v1.7.2? No reinstall needed: the feature updates in v1.7.3–v1.7.10 do not touch the extension.
 
-## Download
-
-| File | Purpose |
-|---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome extension (unzip and load; **the extension no longer changes with feature updates from v1.7.2 on**: v1.7.3–v1.7.10 need no extension reinstall; the v1.7.10 session fix is plugin-side only (extension clipping improvements ship with the next extension update)) |
-| [dsh-browser-control-plugin-v1.7.10.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.10/dsh-browser-control-plugin-v1.7.10.zip) | dsh plugin (offline fallback; online installs use Option A/B) |
-
-## Install the Chrome extension (30 seconds)
-
-Download the zip → unzip to a fixed folder (don't delete it) → open `chrome://extensions` → enable Developer mode → click "Load unpacked" → pick the unzipped folder.
-
-Whale icon in the toolbar = success. Requires Chrome 116+.
-
-## Install the dsh plugin
-
-📦 This package is a bundle (`package.json` points `dsh.bundle.patch` at `cordis.patch.yml`). A successful `dsh plugin add` registers it under the profile's `dsh.profile.bundles`; a restart loads it.
-
-Prerequisite: `dsh plugin` forwards to pnpm, so pnpm must be on PATH; the target profile is initialized automatically on first use.
-
-### Option A: install from npm (recommended)
+### 2. dsh plugin
 
 ```bash
-# Install from the npm registry and register it with the profile
 dsh plugin --profile web add @angelky7/dsh-browser-control
 ```
 
-If you manage the profile's node_modules yourself, plain npm works there too:
+Or from a GitHub tag:
 
 ```bash
-npm install @angelky7/dsh-browser-control
-```
-
-> **A version published minutes ago may not install yet, and that is not a broken package.** `dsh plugin add` pins the dependency to an **exact version**, while pnpm resolves it from **your configured registry** — for many users that is `registry.npmmirror.com`, which syncs from the official registry with a delay (measured: the official registry had 1.0.10 published while the mirror's `latest` still said 1.0.8). If you hit `ERR_PNPM_NO_MATCHING_VERSION ... while fetching it from https://registry.npmmirror.com/`, pick one:
->
-> 1. Use the official registry for this install: `dsh plugin --profile web add @angelky7/dsh-browser-control@<version> --registry=https://registry.npmjs.org/`
-> 2. Use the offline asset from the Release, `dsh-browser-control-plugin-v<version>.zip`: unzip it, then point `dsh plugin --profile web add file:<…>` at **the layer that contains `package.json`** (some releases wrapped the entries in an extra folder — point at the layer that contains `package.json`)
-> 3. Wait for the mirror and retry: `curl -s https://registry.npmmirror.com/@angelky7/dsh-browser-control` — once the version appears there and `dist-tags.latest` moved, the plain command works
->
-> **A second failure looks similar but has the opposite cause — do not touch your registry for it.** dsh profiles ship a 24-hour package-age supply-chain gate (`minimumReleaseAge: 1440` in `node_modules/.pnpm-workspace-state-v1.json`). A version younger than that is rejected with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, and the message quotes `was published at …, within the minimumReleaseAge cutoff (…)` — the version **does** exist, it is just too new. Waiting past the cutoff is the only fix. Discriminator: `NO_MATCHING_VERSION` = your registry does not have that version; `NO_MATURE_MATCHING_VERSION` = it has it, but the version is younger than 24h.
-
-### Option B: install from GitHub or a local directory
-
-```bash
-# Straight from GitHub
 dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.10"
-
-# Local checkout for debugging (note: the explicit file: prefix is required)
-dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
 ```
 
-Restart DSH to load it. Uninstall:
+Offline asset: [dsh-browser-control-plugin-v1.7.10.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.10/dsh-browser-control-plugin-v1.7.10.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
 
-```bash
-dsh plugin --profile web remove @angelky7/dsh-browser-control
-```
+Restart dsh afterwards. The bridge is on by default; status page <http://127.0.0.1:9777/>. If a just-published version will not install (mirror lag / 24-hour package-age gate), see [Install troubleshooting](docs/INSTALL.md).
 
-> ⚠️ Always use the `file:` prefix for local directories. Bare / relative paths
-> are treated as the `link:` protocol by pnpm, which does not materialize into
-> node_modules top-level under hoisted layouts and fails to resolve at boot.
+## Quick start
 
-After installing and restarting, the bridge is on by default (v1.0.6+); no manual enable step. The status page at http://127.0.0.1:9777/ confirms the listener is up.
+Once installed, just ask the agent:
 
-> To opt out: in your profile override layer `$DSH_HOME/profiles/<name>/cordis.patch.yml`, write
-> `- id: browser-bridge` with `config: { enabled: false }` (see [dsh-config/README.md](dsh-config/README.md)).
-> Do not change the in-package `cordis.patch.yml` back to `enabled: false` — that value overrides the
-> schema default and shows up as "nothing listens on 9777 after install" (issue #4).
+> Use browser_snapshot to look at the current page, then click the login button by ref.
 
-### Option C: copy into the harness tree (legacy, v1.0.2 and earlier)
+Common entry points: `browser_snapshot` first, `browser_read` for the text, `browser_click` / `browser_type` by ref, `browser_screenshot` for images. See [Tools](docs/TOOLS.en.md) and [Behavior](docs/BEHAVIOR.md) for details.
 
-```bash
-git clone https://github.com/angelky7/dsh-browser-control.git
-cd dsh-browser-control
-git checkout v1.0.2   # legacy layout lives at the v1.0.2 tag
-./install.sh /path/to/deepseek-harness
-```
+## Safety gates
 
-The script only copies plugin files into place — **you still need the three manual config edits**, then restart dsh:
-
-Download [`dsh-browser-bridge-plugin-v1.0.2.zip`](https://github.com/angelky7/dsh-browser-control/releases/download/v1.0.2/dsh-browser-bridge-plugin-v1.0.2.zip) and unzip into `deepseek-harness/packages/web/browser-bridge/`.
-
-Then add three pieces of config:
-
-1. In `packages/bundle/base/package.json` dependencies:
-
-```json
-"@deepseek-ai/dsh-browser-bridge": "workspace:^"
-```
-
-2. In `cordis.patch.yml` plugins list:
-
-```yaml
-- id: browser-bridge
-  name: '@deepseek-ai/dsh-browser-bridge'
-  config:
-    enabled: false
-```
-
-3. In `tsconfig.host.json` references:
-
-```json
-{ "path": "./packages/web/browser-bridge" }
-```
-
-Restart dsh. Details in [dsh-config/README.md](dsh-config/README.md) (this path targets the pre-v1.0.3 layout, where `enabled: false` really was the default).
-
-## Usage
-
-1. It is already on after install (v1.0.6+); no manual enable step
-2. The extension connects automatically (port 9777, default token dsh-local)
-3. Talk in natural language; the agent drives the browser
-
-### Whether a settings card exists depends on the host (issue #5)
-
-The published bundle ships only the host-side `lib/index.js`; there is no browser-side module, so the card is not drawn by this plugin:
-
-| Host | Settings page | How to change config |
-|---|---|---|
-| dsh 0.1.7+ / 0.2.x (dsh-settings 0.1.7-rc.2 onwards) | Yes — the host projects this plugin's own `Config` schema into a section | Settings page, or the profile override layer |
-| dsh 0.1.2 and earlier | No entry (no client half claims the namespace, so nothing renders) | Profile override layer only: `$DSH_HOME/profiles/<name>/cordis.patch.yml` |
-
-The config file works on both; see [dsh-config/README.md](dsh-config/README.md).
-
-Visit `http://127.0.0.1:9777/` for connection status.
-
-### Read-only mode and a separate script switch
-
-In your profile overlay, on `browser-bridge`:
+In your profile override (`$DSH_HOME/profiles/<name>/cordis.patch.yml`), configure `browser-bridge`:
 
 ```yaml
 config:
-  readOnly: true      # reads only: click/input/press/nav/scroll/tabs/emulate/… are refused
-  allowScript: false  # also turn off browser_evaluate (arbitrary JS in the page)
+  readOnly: true          # refuse everything that changes the page/browser
+  allowScript: false      # turn off arbitrary JS in browser_evaluate
+  allowUpload: true       # off by default; requires uploadDir
+  uploadDir: C:\Users\me\uploads
 ```
 
-Refused commands are **never sent to the browser** (zero side effects), come back with
-`blocked_by_policy`, and say which field to change. `readOnly` alone does **not** remove arbitrary
-script execution — `browser_evaluate` can do everything the other tools can, which is why it is a
-separate switch. These two govern the tool surface the model drives; the HTTP face (token-gated) is
-your own channel and is unaffected.
+Blocked commands are **never sent to the browser** (zero side effects) and fail with `blocked_by_policy`. `browser_upload` is the only tool that can hand local files to a page: off by default, limited to files inside `uploadDir` (symlinks are resolved first). Field reference and host-version differences: [dsh-config/README.md](dsh-config/README.md).
 
-### What agent tabs look like (automatic DSH group)
+## Tools (30)
 
-Tabs the agent **opens** are collected into a blue `DSH` tab group, one per window, so at a glance you can tell which pages a machine is driving and sweep them away afterwards:
+Grouped by purpose; inputs, receipts and edge cases are in the [full tool reference](docs/TOOLS.en.md).
 
-- `browser_tabs` `action: "ungroup"` dissolves the group (pass `windowId` for one window, omit it for all) — it releases the grouping, it does not close the tabs.
-- `browser_tabs` `action: "open"` with `group: false` keeps a new tab ungrouped; `action: "group"` pulls an already-existing loose tab in.
-- Grouping is a nicety, never a prerequisite: on an old Chrome, without the `tabGroups` permission, or when Chrome's own tab bookkeeping wins the race, **opening the tab still succeeds** and the result carries `grouped: false` plus a reason. Grouping never changes page content, so retrying it is safe.
-- `browser_tabs` `action: "close"` takes one tab (`tabId`) or a batch (`tabIds`), and a batch goes out as **one command**. The result accounts for every id — `closed` / `alreadyGone` (already gone = idempotent success, safe to retry) / `failed` (with the error) — so a partial failure is never swallowed, and single and batch share one shape.
+- Page: `browser_navigate` `browser_read` `browser_snapshot` `browser_find` `browser_click` `browser_type` `browser_press` `browser_scroll` `browser_wait` `browser_evaluate` `browser_drag` `browser_upload`
+- Tabs & windows: `browser_tabs` `browser_windows` `browser_sessions`
+- Browser state: `browser_cookies` `browser_dialog` `browser_hold` `browser_emulate` `browser_metrics` `browser_console_log` `browser_network_log` `browser_network_clear`
+- Files: `browser_screenshot` `browser_pdf` `browser_archive` `browser_cleanup`
+- Ledger: `browser_audit` `browser_journal`
+- Identity: `browser_info`
 
-### One-click freeze: the extension popup's lock
+> `browser_upload` ships with the next plugin release; npm 1.7.10 currently has 29 tools.
 
-Click the extension icon and hit **锁定** in the middle of the button row — a single click is enough.
-Every browser command is then refused before it runs (click, input, press, navigation, script
-execution), while the WebSocket stays up: a caller sees "reachable but frozen", not a dropped link,
-so it does not retry what looks like a network failure.
+## Docs
 
-- There is exactly one way out: click the same button (now **已锁定**) in that popup. The bridge has no
-  unlock command and neither does the tool surface.
-- The flag lives in `chrome.storage.local`, so an MV3 service-worker eviction cannot silently unfreeze it.
-- If that flag cannot be **read**, the extension freezes anyway (fail closed): a panic switch that is
-  believed-on but actually off is worth nothing. The refusal and the popup then say "lock state unreadable"
-  instead of blaming you for a lock you never pressed, and one click in the popup still writes a definite state.
-- The toolbar badge shows a red `LOCK` while frozen instead of a reassuring green `ON`.
-- Why this lives in the client rather than the bridge: the bridge token sits in the profile's
-  `cordis.patch.yml`, which the agent can read *and* rewrite. A freeze that only a human can lift has to
-  be enforced somewhere the agent cannot reach.
-
-### Calling the HTTP face from a script
-
-`/api/command` and `/api/cleanup` now require the token — the same value the extension presents on the WebSocket:
-
-```bash
-curl -X POST http://127.0.0.1:9777/api/command \
-  -H 'Authorization: Bearer <your token>' \
-  -H 'Content-Type: application/json' \
-  -d '{"command":"nav","params":{"url":"https://example.com"}}'
-```
-
-`?token=<your token>` and `X-Token: <your token>` work too. Missing or wrong token is a 401; `/` and `/api/status` stay unauthenticated read-only. What used to work without a token no longer does (issue #3 / #6). The cleanup button on the status page asks for the token once and keeps it in the browser session only.
-
-## Tools
-
-| Tool | Purpose |
+| Document | Contents |
 |---|---|
-| `browser_navigate` | Navigate to a URL |
-| `browser_read` | Read page text/HTML — the text itself, in an `offset`/`limit` window |
-| `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
-| `browser_click` | Click an element (by ref / selector) |
-| `browser_type` | Type into inputs |
-| `browser_press` | Send keyboard keys (Enter, Tab, arrows, and combinations like "Ctrl+A" / "Shift+ArrowRight"; one press inserts exactly once) |
-| `browser_scroll` | Scroll the page |
-| `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
-| `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
-| `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
-| `browser_hold` | Put or remove a cancellable take-over overlay on a tab (tells the user, stops mis-clicks); `covered:false` says why it could not cover the page. A soft layer, not a security boundary |
-| `browser_cookies` | Read/set/remove cookies visible to a tab (`action: get/set/remove`; get takes a `domain` filter, set/remove need a `url` or `domain` anchor, remove re-checks and reports `remaining`). **Cookie values are credentials** — a get puts them fully into the model-visible text; see SECURITY.md |
-| `browser_tabs` | Tab management (list/open/close/activate/group/ungroup; v1.7.0+ history back/forward — same arrival judging as navigate, reports unchanged at the history edge) |
-| `browser_evaluate` | Run arbitrary JS |
-| `browser_screenshot` | Capture page screenshot (v1.7.0+ receipt carries the real pixel size; fullPage captures the whole scrollable page, selector captures one element) |
-| `browser_console_log` | Captured console entries, listed with their text (v1.0.7+) |
-| `browser_network_log` | Captured HTTP requests, listed with method/status/URL (v1.0.7+) |
-| `browser_network_clear` | Clear the network log buffer on its own (v1.0.7+) |
-| `browser_pdf` | Export the current page as PDF (v1.0.7+) |
-| `browser_archive` | Save the whole page as a single-file MHTML (text/images/styles inline; a greppable offline evidence snapshot — embedded scripts do not run, v1.5.0+) |
-| `browser_windows` | Window control: list / open / update state & geometry / close a whole window / move tabs across windows (the only tool that may touch window geometry, v1.6.0+) |
-| `browser_emulate` | Switch to a device viewport (mobile / desktop / custom, v1.0.7+); v1.7.1+ adds throttling: `network` slow3g/fast3g/offline/reset + `cpuThrottlingRate` (1–20), the receipt states the applied numbers, `device:"reset"` clears them too |
-| `browser_metrics` | Read performance counters (DOM nodes / JS heap / layout & script durations, Performance.getMetrics, read-only; puts numbers behind "this page is heavy", v1.7.1+) |
-| `browser_drag` | Drag from/to a selector or viewport point: `auto` synthesizes html5 dragstart→dragover→drop for `draggable="true"` sources (no drop unless accepted), otherwise sends real mouse input (press, interpolated moves, release — sliders/canvas/sortable widgets). **Plugin-side only** over the cdp channel embedded in extension v1.7.2, v1.7.3+ |
-| `browser_upload` | Set local files on a page's file input through CDP `DOM.setFileInputFiles` (no native picker). **Off by default**: set `allowUpload: true` + `uploadDir` (an absolute directory) in the browser-bridge config; only files inside that directory are accepted (symlinks are resolved first). The receipt carries each file's real byte size. v1.8.0+ |
-| `browser_audit` | Read this plugin session's in-memory audit trail — every command sent or refused (redacted params, `code`/`effectState`, duration), capped at 200 entries and wiped on restart; typed text and cookie values are redacted, eval expressions truncated. Plugin-local read, works in read-only mode (v1.7.4+) |
-| `browser_journal` | Read the **persistent journal across dsh restarts** (`<stateDir>/journal.jsonl`, last 1000 entries, grouped by run) — ask it after a restart "what was I doing in which tab"; same redaction; plugin-local disk read that works with the extension offline (v1.7.5+) |
-| `browser_sessions` | Multi-session isolation: list the dsh sessions sharing this browser and each one's **working tab**; `action:"release"` forgets yours. Calls that omit tabId default to THIS session's working tab (verified live) — concurrent sessions stop fighting over the active tab; explicit tabId always wins. Plugin-local, v1.7.6+ |
-| `browser_cleanup` | Clean up temp files |
-| `browser_info` | Which browser and extension build is attached (run it first when debugging, v1.0.9+) |
+| [Tools](docs/TOOLS.en.md) | Inputs, receipts and edge cases for all 30 tools |
+| [Behavior](docs/BEHAVIOR.md) | Navigation arrival, snapshot, lock, overlay, drag, upload |
+| [Install troubleshooting](docs/INSTALL.md) | Mirror lag, 24-hour gate, offline asset, local checkout |
+| [Security](SECURITY.md) | Token, permissions, threat boundaries |
+| [Verification benches](verify/README.md) | What each bench covers |
+| [Changelog](CHANGELOG.md) | Version history |
 
-30 tools in total. `browser_wait`, `browser_find`, `browser_dialog` and `browser_info` existed inside the extension up to v1.0.8 but were never registered as tools, so the agent could not reach them; `browser_network_clear` existed in code and was simply missing from this table. `verify/verify_surface.mjs` now reconciles the extension command table, the commands the plugin calls, this table and the built bundle, so any drift fails `npm run verify`.
+## Compatibility
 
-## Architecture
-
-```
-Chrome browser
-  └─ DSH Browser Control extension (MV3)
-       └─ chrome.debugger (CDP)
-            └─ WebSocket ──────→ DSH plugin (browser-bridge)
-                                      └─ browser_* tools → Agent
-```
-
-**Key design:**
-- Extension dials out to the bridge (no native messaging host)
-- Off by default; enabled manually from Settings
-- Persistent debugger attachment — banner stays visible during control
-- Listens on 127.0.0.1 only; the command surface (WebSocket and HTTP) shares one token, and no cross-origin access is granted
-- The wire protocol has its own version, bumped only when the frame contract changes; a mismatch is named on the status page
-- **Plugin upgrades never regress old extensions** (iron rule: plugin x + extension x-n ≥ plugin x-n + extension x-n): from v1.7.2 the hello frame carries capabilities for an exact handshake, old extensions fall back to the version map, and a missing command is refused pre-flight with an actionable reinstall pointer instead of a raw unknown command — CDP-level features now ship plugin-side
-
-## Verified
-
-| Scenario | Result |
-|---|---|
-| Baidu search → extract result titles | ✅ |
-| Bilibili user search → send DM | ✅ |
-| Bilibili search → count video cards + screenshot | ✅ (real browser, 1.0.x era) |
-| `npm run verify` harness: config resolution, three host shapes, HTTP auth and upgrade origin, published-bundle behaviour | ✅ 2026-10-10, see [verify/README.md](verify/README.md) |
-| `verify_tab_groups` harness: group creation / reuse / backoff retry / stale cache / per-window dissolve / graceful degrade | ✅ 2026-10-11, node:vm plus a stateful fake `chrome.tabs`/`chrome.tabGroups` — **not re-run in a real Chrome** |
-| `verify_extension_e2e` harness: real bridge + real extension code + real WebSocket end to end (frame contract, command reachability, error classification) | ✅ 2026-10-11 — only `chrome.*` is faked; visuals and real CDP behaviour still need a live browser |
-| `verify_cdp_retry` harness: session recovery after Chrome steals the attach, replay must not re-run side effects, bounded retries (6 scenarios) | ✅ 2026-10-11, real `background.js` against a stateful fake `chrome.debugger`; cross-checked on a merge-preview build |
-| `verify_render_contract` harness: every tool's real return value goes through the host's own output validator **and** its own `render`, asserting the model-facing text actually contains the data the call asked for | ✅ 2026-10-12, real bridge + fake extension + host `validateJsonSchemaValue`; this layer had **zero coverage** before, which is how two defect classes survived 12 / 5 released versions |
-| `verify_compat_matrix` harness: materializes **real historical extension code from git tags** (v1.2.0–v1.7.1) and runs 27 probes per surface against the current plugin, cell-by-cell asserting “≥ the matched pair from that era”; newer tools must fail with the actionable extension-outdated pointer, never a raw unknown command; append-only command surface (extension upgrades are pure gains for old plugins too) | ✅ 2026-11-04, 5 surfaces × 150 checks; exercises the version-map fallback path real old hellos take |
-| **Real host × real browser**: local dsh `0.2.0-rc.2` mounted this plugin from an isolated `DSH_HOME`, the user's actual Chrome attached to the bridge, and 9 read-only tools ran through the real code path | ✅ 2026-10-12, Chrome 153 + extension 1.0.10: `browser_read` returned 1,341 chars of real page text, `browser_snapshot` returned 14 ref-bearing lines, zero output-schema violations; **this is also the run that exposed an older extension silently ignoring `mode:"ax"`** (local extension was 1.0.10, predating the 1.0.11 AX snapshot) — the plugin now reports `axFallback` explicitly |
-| `tsc --noEmit` + `publint` | ✅ 2026-10-10 |
-
-There have been no unit tests since v1.0.4 removed `tests/`; the three browser rows above are historical runs that were not repeated for this change, while every claim in this release comes from the repeatable harness under `verify/`.
-
-## Changelog
-
-See [CHANGELOG.md](CHANGELOG.md).
+The command surface is append-only: **plugin x + extension x-n never regresses** (the compatibility matrix replays real historical extension code). Extension v1.7.2 keeps working with the latest plugin; multi-instance routing comes in a later release.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
-
-- **Personal / academic / non-commercial use**: completely free — use, modify, and distribute freely under AGPL-3.0 terms
-- **Enterprise / commercial use**: AGPL-3.0 treats networked use as distribution, requiring derivative code to be published. If you want to embed this project in closed-source products or build a SaaS on it without open-sourcing, contact the author for a **commercial license** (terms negotiated separately)
-- **Commercial licensing inquiries**: [GitHub Issues](https://github.com/angelky7/dsh-browser-control/issues) or email **caob2333@outlook.com**
-
-See the [LICENSE](LICENSE) file for the full license text (AGPL-3.0).
+**AGPL-3.0.** Free for personal / academic / non-commercial use; embedding it in a closed-source product or offering it as a SaaS without releasing your derivative code requires a separate commercial license. Commercial licensing: GitHub Issues or caob2333@outlook.com. See [LICENSE](LICENSE).
