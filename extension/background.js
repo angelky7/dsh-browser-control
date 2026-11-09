@@ -943,13 +943,27 @@ function withBudget(promise, ms, fallback) {
 	]);
 }
 
+/**
+ * Post-wait probes share the command's own deadline (issue #21): the wait may
+ * have consumed the whole budget, and the two probes used to add up to 4s
+ * (error page: 6s) on top — past the bridge's `budget + 2s` margin, so the
+ * caller got command_timeout/effectState=unknown instead of the loadPending
+ * receipt that was ready. Returns 0 when there is no time left: skip the probe
+ * (a missing readyState is honest; a misleading timeout is not).
+ */
+function probeBudget(deadline, cap = 2000) {
+	const remaining = deadline - Date.now();
+	return remaining <= 0 ? 0 : Math.min(cap, remaining);
+}
+
 /** 回执里的 `document.readyState`。探针与其它导航后探针一样带预算：提交前卡死的
  *  导航会让 CDP 闭嘴，不设上限的 await 会活过命令自己的超时。探测失败就不带这个
- *  字段——宁可少说也不猜。 */
-async function probeReadyState(tabId) {
+ *  字段——宁可少说也不猜。预算为 0（等待已用完命令死线）时直接跳过，不发 CDP。 */
+async function probeReadyState(tabId, budgetMs = 2000) {
+	if (budgetMs <= 0) return undefined;
 	const value = await withBudget(withCDP(tabId, (send) => send('Runtime.evaluate', {
 		expression: 'document.readyState', awaitPromise: false, returnByValue: true, userGesture: true,
-	}).then((r) => String(r.result?.value ?? ''))), 2000, '');
+	}).then((r) => String(r.result?.value ?? ''))), budgetMs, '');
 	return value === '' ? undefined : value;
 }
 
@@ -1743,6 +1757,8 @@ async function cmdTabsOpen(params) {
 		active: params.active !== undefined ? Boolean(params.active) : true,
 	});
 	const started = Date.now();
+	// Post-wait work must finish inside the caller's budget (issue #21).
+	const deadline = started + budget;
 	const startedFlag = { value: false };
 	let settling = Promise.resolve(true);
 	if (tier !== 'none') {
@@ -1758,7 +1774,7 @@ async function cmdTabsOpen(params) {
 	// A pending navigation is not visible in `url` (a tab that has not committed
 	// anything yet reports an empty url); `pendingUrl` is where it is heading.
 	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh.url ? fresh.pendingUrl : undefined;
-	const readyState = tier === 'none' ? undefined : await probeReadyState(created.id);
+	const readyState = tier === 'none' ? undefined : await probeReadyState(created.id, probeBudget(deadline));
 	// 归组失败不该让「打开标签」这件事失败，只把结果带回去。
 	const group = params.group === false ? { grouped: false, reason: 'group:false' } : await addToAgentGroup(created.id);
 	return {
@@ -1941,6 +1957,10 @@ async function cmdNav(params) {
 	const tier = navTierOf(params);
 	const budget = navBudgetOf(params, tier);
 	const started = Date.now();
+	// Post-wait probes share this deadline (issue #21): wait + probes must fit
+	// inside the bridge's budget + 2s margin, or the caller sees a timeout
+	// instead of the loadPending receipt.
+	const deadline = started + budget;
 	// Arm the waiter BEFORE triggering the navigation — the order decides the
 	// answer. 事件驱动依赖 debugger 附着：ensureAttached 先落位（Page.enable 在里面
 	// 已经开了），frameNavigated 才到得了。startedFlag 在**发起**导航那一刻置真，
@@ -1975,15 +1995,17 @@ async function cmdNav(params) {
 	// chrome-error://. Probe it so callers can react structurally. Both probes
 	// are budgeted: CDP stays silent while a navigation is stuck before commit,
 	// and an unbounded await there outlives the command's own timeout.
-	const landedUrl = await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
+	const landedBudget = probeBudget(deadline);
+	const landedUrl = landedBudget <= 0 ? '' : await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
 		expression: 'location.href', awaitPromise: false, returnByValue: true, userGesture: true,
-	}).then((r) => String(r.result?.value ?? ''))), 2000, '');
+	}).then((r) => String(r.result?.value ?? ''))), landedBudget, '');
 	let siteUnreachable;
 	if (/^chrome-error:/.test(landedUrl)) {
-		const errText = await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
+		const errBudget = probeBudget(deadline);
+		const errText = errBudget <= 0 ? '' : await withBudget(withCDP(tab.id, (send) => send('Runtime.evaluate', {
 			expression: `(() => { const clip = ${CLIP_FN_SOURCE}; return document.body ? clip(document.body.innerText, 4000) : ""; })()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
-		}).then((r) => String(r.result?.value ?? ''))), 2000, '');
+		}).then((r) => String(r.result?.value ?? ''))), errBudget, '');
 		// Error-page copy is localized (zh-CN shows 无法找到 … 的 DNS 地址,
 		// en-US shows ERR_NAME_NOT_RESOLVED); match either plus any bare DNS
 		// mention such as DNS_PROBE_STARTED.
@@ -1995,7 +2017,7 @@ async function cmdNav(params) {
 	// a tab that has not committed anything yet) and the destination only exists
 	// in `pendingUrl` — report it so "still going to X" is visible.
 	const pendingUrl = fresh?.pendingUrl && fresh.pendingUrl !== fresh?.url ? fresh.pendingUrl : undefined;
-	const readyState = await probeReadyState(tab.id);
+	const readyState = await probeReadyState(tab.id, probeBudget(deadline));
 	return {
 		tabId: tab.id,
 		url: siteUnreachable ? params.url : (fresh?.url ?? params.url),

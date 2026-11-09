@@ -14,6 +14,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - **到达是事件判定的**：`Page.frameNavigated`（仅主框架）= 提交、`Page.domContentEventFired` / `Page.loadEventFired` = 相应时点。**「地址变了」不能当判据**——同站往返（www.bing.com → cn.bing.com → 回原地址）会让「变了」永远为假，只能干等满预算；事件没有这个盲区。dcl/load 事件必须发生在已认领的 commit 之后才算数（旧文档迟到的 load 不是新文档完成）；`tabs.open` 先把标签生在 about:blank、attach 完成后再发起真正的导航（否则快页的 commit 事件在 attach 前就没了），出生那次提交发生在发起标志置真之前，冒领不了。
 - 轮询兜底只兜事件看不见的两种情况：**压根不会提交**的导航（链接变成下载、目标被 Chrome 拒载——宽限 1.2s 后拿标签**真正落到的 URL** 与请求的目标比对（忽略 hash 片段与末尾斜杠），不等就报 `loadPending`，不许 0ms 伪装成成功）；和本来就停在目的地的同文档跳转（hash 变化走 `navigatedWithinDocument` 事件，以 sameDocument 到达）。**导航到已经开着的那个地址**仍然算成功（不误报）。
 - 预算耗尽时结果带 `loadPending: true` 与 `pendingUrl`，文案会说「仍在加载」而不是「已显示」，模型不该把没落地的导航当成功；回执 `waitUntil` / `waitedMs` / `readyState` 如实回报（探测失败就不带 readyState——宁可少说也不猜）。
+- **等待结束后的探针也吃同一条死线**（#21）：`location.href`、错误页正文、`readyState` 共享导航预算，等待已用完预算时直接跳过（缺 `readyState` 是诚实的），不再各自加 2s 越过桥的 `budget + 2s` 余量、把准备好的 `loadPending` 换成 `command_timeout/unknown`。`tabs.open` 的 `readyState` 同理。实测：`verify_nav_headroom.mjs`。
 - `tabs.open` 走**同一份**到达等待器；旧开关 `wait:false` 等价 `waitUntil:'none'`。等待期间 debugger 会附着到该标签（「正受控制」横幅出现）——事件判定的代价，`none` 档不附着。
 - **不保证** SPA 路由或懒渲染内容就绪——导航返回后再用 `browser_wait` 显式等目标元素。实测台：`verify/verify_nav_landing.mjs`（落地诚实性）+ `verify/verify_nav_waituntil.mjs`（分档/事件/回执）。
 - `browser_wait` 的 `fn` 参数是**在页面里执行任意 JS**，因此按脚本调用管：`allowScript:false` 拒，`readOnly:true` 时也拒（只放行 `selector` / `text` 两种纯查询）。失败分类同样按写调用对待：超时/取消报 `effectState=unknown`（谓词可能已经跑过），而不是「重试安全」。扩展侧的轮询条件由 `(fn)()` 求值，函数与裸布尔表达式都接受。
