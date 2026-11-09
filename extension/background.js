@@ -70,6 +70,30 @@ const networkLog = new Map();
  * that call's duration; the default is accept so automation never deadlocks.
  */
 let dialogPolicy = 'accept';
+
+/**
+ * Chrome raises the window the moment a `beforeunload` dialog opens — the
+ * debugger answers it within milliseconds, so the user never sees the dialog,
+ * only Chrome jumping to the front mid-task (real report, #25). The agent has
+ * already decided to leave the page (that's why it navigates or closes the
+ * tab), so when the dialog policy auto-answers, drop the page's own
+ * `window.onbeforeunload` / `window.onunload` first. Best effort: a detached
+ * debugger or a busy renderer must not turn a close/navigate into a failure.
+ * This cannot remove `addEventListener('beforeunload', …)` listeners; such
+ * pages may still raise the window once (documented).
+ */
+async function clearBeforeUnload(tabId, budgetMs = 1000) {
+	if (dialogPolicy === 'manual' || budgetMs <= 0) return;
+	try {
+		// Bounded: a stuck renderer makes Runtime.evaluate hang forever, and the
+		// action itself must still happen (best effort, never a new hostage).
+		await withBudget(withCDP(tabId, (send) => send('Runtime.evaluate', {
+			expression: 'window.onbeforeunload = null; window.onunload = null; true',
+			awaitPromise: false, returnByValue: true, userGesture: true,
+		})), budgetMs, undefined);
+	} catch { /* the action itself reports its failure downstream */ }
+}
+
 /** Dialogs answered since attach, surfaced in results for verification. */
 const dialogLog = [];
 
@@ -967,13 +991,14 @@ async function probeReadyState(tabId, budgetMs = 2000) {
 	return value === '' ? undefined : value;
 }
 
-/** Bring the tab and its window forward so real input can land. This path only
- *  FOCUSES — it never touches geometry or window state; explicit window control
- *  is the browser_windows tool's job and nothing else. A minimized window keeps
- *  its 0x0 viewport where real input cannot land — report that and let the
+/** Refuse real input on a minimized window (0×0 viewport) — and nothing else.
+ *  This path NEVER focuses or activates anything: CDP input reaches a background
+ *  tab just as well as a foreground one, and silently raising the window on
+ *  every click/keystroke interrupts the user mid-task (#25). A minimized window
+ *  keeps its 0x0 viewport where real input cannot land — report that and let the
  *  agent restore it explicitly with browser_windows (focused:true restores
  *  without un-maximizing; state:'normal' would also un-maximize). */
-async function activateTabWindow(tabId) {
+async function assertWindowNotMinimized(tabId) {
 	let win;
 	try {
 		const tab = await chrome.tabs.get(tabId);
@@ -986,10 +1011,6 @@ async function activateTabWindow(tabId) {
 		err.code = 'window_minimized';
 		throw err;
 	}
-	try {
-		await chrome.windows.update(win.id, { focused: true });
-		await chrome.tabs.update(tabId, { active: true });
-	} catch { /* tab may be closing; input will fail downstream anyway */ }
 }
 
 /* ---------------------------------------------------------- debugger (CDP) — persistent attachment */
@@ -1833,6 +1854,7 @@ async function cmdTabsCloseMany(params) {
 	if (present.length > 0) {
 		try {
 			// 一次调用、数组形态：一批标签在链路上是一条命令、一份超时预算。
+			for (const id of present) await clearBeforeUnload(id);
 			await chrome.tabs.remove(present);
 		} catch (error) {
 			report = failureText(error);
@@ -1922,6 +1944,7 @@ async function cmdTabsHistory(params, direction) {
 	}
 	const startedFlag = { value: false };
 	const settling = waitForArrival(tab.id, tier, budget, targetUrl ?? '', startedFlag);
+	await clearBeforeUnload(tab.id, probeBudget(started + budget, 1000));
 	if (direction === 'back') await chrome.tabs.goBack(tab.id);
 	else await chrome.tabs.goForward(tab.id);
 	startedFlag.value = true;
@@ -1970,6 +1993,10 @@ async function cmdNav(params) {
 	if (tier !== 'none') {
 		await ensureAttached(tab.id);
 		settling = waitForArrival(tab.id, tier, budget, params.url, startedFlag);
+		// `waitUntil:'none'` promises zero debugger attach, so the beforeunload
+		// hook is only cleared on tiers that already attach (#25). The clear gets
+		// what's left of the command deadline so a stuck renderer cannot extend it.
+		await clearBeforeUnload(tab.id, probeBudget(deadline, 1000));
 	}
 	const updating = chrome.tabs.update(tab.id, { url: params.url });
 	startedFlag.value = true;
@@ -2194,7 +2221,7 @@ async function cmdClick(params) {
 	const tab = await resolveTab(params.tabId);
 	// Mouse events land on whatever is under the viewport coordinates of the
 	// focused tab; ensure our tab is frontmost so coordinates are meaningful.
-	await activateTabWindow(tab.id);
+	await assertWindowNotMinimized(tab.id);
 	return withCDP(tab.id, async (send) => {
 		const hit = await send('Runtime.evaluate', {
 			expression: `(() => {
@@ -2265,7 +2292,7 @@ async function cmdInput(params) {
 	// sets the value directly — fast, but bypasses component keystroke logic.
 	const mode = params.mode === 'type' ? 'type' : 'fill';
 	// Real key events require the tab to have OS-level focus; activate first.
-	if (mode === 'type') await activateTabWindow(tab.id);
+	if (mode === 'type') await assertWindowNotMinimized(tab.id);
 
 	// Locate + focus + clear in one evaluate, shared by both modes.
 	const located = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
@@ -2401,7 +2428,7 @@ async function cmdPress(params) {
 	const tab = await resolveTab(params.tabId);
 	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
 	// Key events need OS focus; a background tab swallows them silently.
-	await activateTabWindow(tab.id);
+	await assertWindowNotMinimized(tab.id);
 	let keyCode, code;
 	if (KEY_CODES[key]) { [keyCode, code] = KEY_CODES[key]; }
 	else if (key.length === 1) {

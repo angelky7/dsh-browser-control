@@ -59,8 +59,15 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - 所有涉及页面交互的命令接受 `timeoutMs`（毫秒）：`browser_navigate` 预算按 `waitUntil` 档位（load 15000 / commit·domcontentloaded 4000 / none 0），显式值优先、上限 120000（桥侧另加 2s 余量，保证「导航超时」先于「桥超时」发生——前者没动过页面，后者结果未知，处置不同），wait 默认 15000 上限 120000（桥侧余量 10s），evaluate 默认 60000、显式上限 120000（桥侧余量 2s；不传时由桥接默认 60s 兜底，桥接层硬上限 300000）；`tabs.open` 的预算同 `browser_navigate` 档位，在同一份等待器里生效。
 
 ## 后台标签页节流
-
 Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务注入在后台标签会显著变慢甚至超时——需要精确计时的注入先 `browser_tabs activate` 切到前台。
+
+## 不抢前台（v1.8.0）
+
+- `click` / `type(mode:"type")` / `press` 不再 `windows.update({focused:true})` + `tabs.update({active:true})`：CDP 输入在后台标签页同样生效，每次交互把 Chrome 拉到最前会打断用户。最小化窗口仍报 `window_minimized`（0×0 视口收不到真实输入），指向 `browser_windows`。
+- `tabs.open` 默认仍**前台**（开标签是显式动作）；传 `active:false` 后台打开。`windows.open` 的 `focused` 默认不变，`focused:false` 可显式后台开窗。
+- `beforeunload` 弹窗一出现 Chrome 就会激活窗口：`tabs.close` / `tabs.closeMany` / `nav` / `back` / `forward` 在对话框策略不是 `manual` 时先清目标页的 `window.onbeforeunload` / `window.onunload`（best effort）。`waitUntil:"none"` 承诺零 debugger 附着，**不清**——那一路仍可能被 beforeunload 抢一次前台。
+- 页面用 `addEventListener('beforeunload', …)` 注册的监听无法从页面侧移除；这类页面仍可能弹一次。Chrome 原生文件选择器/权限提示等浏览器 UI 也可能激活窗口，扩展拦不住。
+- 实测：`verify_silent.mjs`（真 background.js + 焦点探针）。
 
 ## 死站点检测
 
