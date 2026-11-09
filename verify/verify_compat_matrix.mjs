@@ -52,6 +52,9 @@ const PROBES = [
   { tool: 'browser_journal', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_sessions', args: () => ({}), since: null, expect: 'ok' },
   { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'any' },
+  // dialog 以前只出现在 commandOfTool 里、没有一个探针真的调它（评审点名的矩阵缺口）。
+  // 读当前策略不带模式：所有历史面都有 dialog 命令。
+  { tool: 'browser_dialog', args: () => ({}), since: null, expect: 'any' },
   { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'any' },
   { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'any' },
   { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: null, expect: 'any' },
@@ -163,6 +166,14 @@ for (const tag of SURFACES) {
       check(`${label}: 管道通（错误只能是功能性的）`, !/unknown command|extension-outdated/.test(error), out.ok ? 'ok' : error.slice(0, 90))
     }
   }
+  // 假件自检（评审点名）：上次把 wait 谓词一律演成 true，任何 fn 都「成立」，
+  // 失败路径永远测不到。这里用一个恒假谓词要求它真的超时。
+  const waitTool = tools.find((t) => t.name === 'browser_wait')
+  const falseWait = await waitTool.execute({ tabId: TAB, fn: 'false', timeoutMs: 150 }, { signal: signal() })
+    .then(() => ({ ok: true }), (e) => ({ ok: false, error: String(e?.message ?? e) }))
+  check(`${tag} × browser_wait(fn:false): 谓词为假必须超时（假件不许自动回 true）`,
+    falseWait.ok === false && /wait timeout/.test(falseWait.error), falseWait.error?.slice(0, 90))
+
   disposers.reverse().forEach(([fn]) => { try { fn(); } catch {} })
 }
 

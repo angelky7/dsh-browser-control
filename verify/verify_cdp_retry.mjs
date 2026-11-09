@@ -97,10 +97,17 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 
 /* S5 —— 只有一条 send 的读命令：允许被救回，但尝试次数仍然有界 */
 {
-  const w = await warm({ failPlan: (method, nth) => (method === "Runtime.evaluate" && nth === 1 ? DETACHED_MIDWAY : null) });
+  // 旧写法 failPlan 判 `nth === 1`，但 warm() 自己已经打过一次 Runtime.evaluate，
+  // 下一条永远是 nth=2 —— 故障从未注入，断言只是在空转（评审点名）。用「装好剧本后
+  // 的第一次调用」作判据，并要求它真的被救回（恰好 2 次）。
+  let fired = 0;
+  const w = await warm({ failPlan: (method) => (method === "Runtime.evaluate" && ++fired === 1 ? DETACHED_MIDWAY : null) });
   const outcome = await w.ctx.withCDP(w.tabId, (send) => send("Runtime.evaluate", {})).then(() => "成功", () => "报错");
   const evaluate = delta(w.sends, w.base, "Runtime.evaluate");
-  check("S5 单条 send 的读命令最多打 2 次", evaluate <= 2, `实际 ${evaluate} 次，结果=${outcome}`);
+  const extraAttach = w.model.dbg.attachCount - w.attaches;
+  check("S5 单条 send 的读命令：故障真的注入，重连后恰好打 2 次并成功",
+    evaluate === 2 && extraAttach >= 1 && outcome === "成功",
+    `实际 ${evaluate} 次，attach 新增 ${extraAttach}，结果=${outcome}`);
 }
 
 /* S6 —— 假 debugger 本身要够真：没附着时 sendCommand 必须报「not attached」，且带上正确的 tabId */

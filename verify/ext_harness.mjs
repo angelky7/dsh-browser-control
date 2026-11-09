@@ -156,8 +156,29 @@ function cdpResult(model, method, params, tabId) {
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
       if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };
       // cmdWait 的轮询条件固定包一层 `(() => { const f = (...); return typeof f ===
-      // 'function' ? ... })()`：按「谓词在页里为真」演，否则 wait 在默认假件下永远超时。
-      if (expression.includes("typeof f === 'function'")) return { result: { value: true } };
+      // 'function' ? ... })()`：**真的求值**，而不是一律回 true。一律回 true 会让
+      // 任何谓词（包括恒假）都「成立」，wait 的失败路径永远测不到（评审点名）。
+      // 默认页面是空文档：选择器找不到、正文为空，需要非空页面的用例自己覆盖
+      // `model.page.innerText` / `model.dbg.results['Runtime.evaluate']`。
+      if (expression.includes("typeof f === 'function'")) {
+        const sandbox = vm.createContext({
+          Math, String, Number, Object, Array, JSON, Boolean, isNaN, parseInt, parseFloat,
+          document: { querySelector: () => null, body: { innerText: model.page.innerText ?? "" } },
+          window: {},
+          location: { href: model.page.url },
+        });
+        try {
+          const value = vm.runInContext(expression, sandbox, { filename: "wait-condition.js" });
+          return { result: { value: value === undefined ? null : value } };
+        } catch (error) {
+          return { exceptionDetails: { text: String(error?.message ?? error) } };
+        }
+      }
+      // 选择器 / 文本条件（不带 fn 包装）：默认空页 ⇒ false，同样与真页面一致。
+      if (expression.startsWith("!!document.querySelector(")
+        || expression.startsWith("(document.body && document.body.innerText.includes(")) {
+        return { result: { value: false } };
+      }
       return { result: { value: null } };
     }
     case "Page.getNavigationHistory": {
