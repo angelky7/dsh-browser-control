@@ -164,6 +164,19 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，
 才是模型够不到的那一层。
 
+## 文件上传（`browser_upload`，v1.8.0）
+
+把本机文件设到页面的 `input[type=file]` 上，不弹原生文件选择器。这是**唯一能把本机文件内容交给页面**的工具，所以默认关闭。
+
+| 维度 | 行为 |
+|---|---|
+| 闸门 | `allowUpload` 默认 **false**；设为 true 还必须配 `uploadDir`（绝对目录）。任一缺失都在**发命令前**拒绝，零副作用。只读档同样拒绝。 |
+| 白名单 | 只接受 `uploadDir` 内的文件：绝对路径 → `realpath` → 必须在目录内；`..` 穿越与指向目录外的符号链接都按真实路径拒绝。单次最多 20 个文件。 |
+| 链路 | 先 `tabs.list`（省略 tabId 时）→ `DOM.getDocument` → `DOM.querySelector` → `DOM.setFileInputFiles`，三步 cdp 同一 tabId；selector 未命中不发 setFileInputFiles。 |
+| 回执 | 每个文件的绝对路径与**真实字节数**、总字节数；render 写明文件数/字节/路径，提示用 `browser_read` / `browser_evaluate` 核验页面确实收下了文件。 |
+| 兼容 | 走 v1.7.2 预埋的 `cdp` 通道；旧扩展报 `extension-outdated` + 重装指引，零命令。 |
+| 风险边界 | 开启后，拿到工具面的模型可以把白名单目录内的文件交给**任意页面**。用户应把 `uploadDir` 指向专门的素材目录，不要指向主目录/凭据目录。 |
+
 ## 拖拽（`browser_drag`，v1.7.3）
 
 纯插件实现：没有新扩展命令，全部经 v1.7.2 预埋的 `cdp` 通道驱动——这也是「扩展一次交付」之后的第一个纯插件特性。

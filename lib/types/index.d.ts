@@ -63,6 +63,19 @@ export interface Config {
      * alone does not take arbitrary code off the table.
      */
     allowScript?: boolean;
+    /**
+     * Opt-in for `browser_upload` (v1.8.0). Off by default: this is the only tool
+     * that can hand local file contents to an arbitrary page, so enabling it is
+     * an explicit trust decision. Requires `uploadDir`; the tool refuses to run
+     * until both are set.
+     */
+    allowUpload?: boolean;
+    /**
+     * Absolute directory `browser_upload` may read from. Paths are realpath'd and
+     * must stay inside it — a symlink pointing elsewhere is refused. Required
+     * whenever `allowUpload` is true.
+     */
+    uploadDir?: string;
 }
 export declare const Config: z<Config>;
 /** Cordis plugin entry: wire the settings-driven lifecycle plus the model-facing tools. */

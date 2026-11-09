@@ -19,7 +19,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
@@ -180,6 +180,19 @@ export interface Config {
 	 * alone does not take arbitrary code off the table.
 	 */
 	allowScript?: boolean
+	/**
+	 * Opt-in for `browser_upload` (v1.8.0). Off by default: this is the only tool
+	 * that can hand local file contents to an arbitrary page, so enabling it is
+	 * an explicit trust decision. Requires `uploadDir`; the tool refuses to run
+	 * until both are set.
+	 */
+	allowUpload?: boolean
+	/**
+	 * Absolute directory `browser_upload` may read from. Paths are realpath'd and
+	 * must stay inside it — a symlink pointing elsewhere is refused. Required
+	 * whenever `allowUpload` is true.
+	 */
+	uploadDir?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -191,6 +204,8 @@ export const Config: z<Config> = z.object({
 	stateDir: z.string().default(path.join(homedir(), '.dsh-browser-control')),
 	readOnly: z.boolean().default(false),
 	allowScript: z.boolean().default(true),
+	allowUpload: z.boolean().default(false),
+	uploadDir: z.string().default(''),
 })
 
 interface ResolvedConfig {
@@ -201,6 +216,8 @@ interface ResolvedConfig {
 	stateDir: string
 	readOnly: boolean
 	allowScript: boolean
+	allowUpload: boolean
+	uploadDir: string
 }
 
 const SNAPSHOT_REF_SELECTOR_PATTERN = /^e\d+$/
@@ -309,8 +326,18 @@ class BridgeController {
 	 * runs `cdp`/`eval`) read this to refuse with a tool-level message; the
 	 * per-command gate in execute() stays as the enforcement backstop.
 	 */
-	get policy(): { readOnly: boolean; allowScript: boolean } {
-		return { readOnly: this.current?.readOnly === true, allowScript: this.current?.allowScript !== false }
+	get policy(): { readOnly: boolean; allowScript: boolean; allowUpload: boolean } {
+		return {
+			readOnly: this.current?.readOnly === true,
+			allowScript: this.current?.allowScript !== false,
+			allowUpload: this.current?.allowUpload === true,
+		}
+	}
+
+	/** Absolute upload root, or undefined when not configured. */
+	get uploadRoot(): string | undefined {
+		const dir = this.current?.uploadDir
+		return dir !== undefined && dir.trim().length > 0 ? path.resolve(dir) : undefined
 	}
 
 	/** Version the connected extension reported in its hello frame, if any. */
@@ -2096,6 +2123,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 	}))
 
 	registerDragTool(ctx, controller)
+	registerUploadTool(ctx, controller)
 	registerAuditTool(ctx, controller)
 	registerJournalTool(ctx, controller)
 	registerSessionsTool(ctx, controller)
@@ -2272,6 +2300,121 @@ interface DragReceipt {
 	dropPrevented?: boolean
 	events?: number
 	elapsedMs: number
+}
+
+/* ------------------- browser_upload: opt-in, directory-confined file inputs ------------------- */
+
+const UPLOAD_MAX_FILES = 20
+
+/**
+ * Resolve one requested path and prove it stays inside `root`.
+ *
+ * `realpath` is what makes the check meaningful: a symlink inside the allowed
+ * directory that points at `~/.ssh` must be refused. The path sent to Chrome is
+ * the normalized absolute path (not the realpath) — validation already proved
+ * where it lands, and Chrome handles ordinary absolute paths best on Windows.
+ */
+async function resolveUploadFile(root: string, requested: string): Promise<{ path: string; bytes: number }> {
+	if (!path.isAbsolute(requested)) {
+		throw new Error(`browser_upload: "${requested}" is not an absolute path (paths are read on the machine running Chrome)`)
+	}
+	const real = await realpath(requested).catch(() => undefined)
+	if (real === undefined) throw new Error(`browser_upload: "${requested}" does not exist on this machine`)
+	const info = await stat(real).catch(() => undefined)
+	if (info === undefined || !info.isFile()) throw new Error(`browser_upload: "${requested}" is not a regular file`)
+	const rootReal = await realpath(root).catch(() => undefined)
+	if (rootReal === undefined) {
+		throw new Error(`browser_upload: uploadDir "${root}" does not exist — create it or fix the config; no command was sent`)
+	}
+	const rel = path.relative(rootReal, real)
+	const inside = rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel)
+	// Windows 路径大小写不敏感：同一目录换个大小写不能算「越界」。
+	const relCi = process.platform === 'win32' ? path.relative(rootReal.toLowerCase(), real.toLowerCase()) : rel
+	const insideCi = relCi.length > 0 && !relCi.startsWith('..') && !path.isAbsolute(relCi)
+	if (!inside && !insideCi) {
+		throw new Error(`browser_upload: "${requested}" is outside uploadDir — only files under the configured uploadDir may be attached (symlinks are resolved); no command was sent`)
+	}
+	return { path: path.resolve(requested), bytes: info.size }
+}
+
+function registerUploadTool(ctx: Context, controller: BridgeController): void {
+	ctx.tools.register(defineTool({
+		name: 'browser_upload',
+		description: 'Attach local files to a page\'s file input (input[type=file]) through CDP, so no native picker opens. **Off by default**: the user must set allowUpload: true and uploadDir (an absolute directory) in the browser-bridge config; only files inside uploadDir are accepted (symlinks are resolved). Use browser_find first to identify the input, then verify with browser_read / browser_evaluate that the page accepted the files. Needs extension v1.7.2+ (cdp channel).',
+		parameters: {
+			selector: { type: 'string', required: true, description: 'CSS selector of the file input (top document).' },
+			files: { type: 'array', items: { type: 'string' }, required: true, description: 'Absolute paths on the machine running Chrome; every file must be inside uploadDir.' },
+			tabId: { type: 'number', description: 'Target tab; defaults to the calling session\'s working tab, else the active tab.' },
+		},
+		output: {
+			schema: {
+				type: 'object',
+				additionalProperties: false,
+				properties: {
+					tabId: { type: 'number', required: true },
+					selector: { type: 'string', required: true },
+					files: {
+						type: 'array',
+						required: true,
+						items: {
+							type: 'object',
+							additionalProperties: false,
+							properties: {
+								path: { type: 'string', required: true },
+								bytes: { type: 'number', required: true },
+							},
+						},
+					},
+					totalBytes: { type: 'number', required: true },
+				},
+			},
+			render: (_args, value) => {
+				const v = value as unknown as { tabId: number; selector: string; files: { path: string; bytes: number }[]; totalBytes: number }
+				return [{ type: 'text', text: `Tab ${v.tabId}: set ${v.files.length} file(s) (${v.totalBytes} bytes) on ${v.selector} — ${v.files.map((f) => f.path).join(', ')}. Verify the page accepted them with browser_read / browser_evaluate.` }]
+			},
+		},
+		presentCall: args => ({ card: 'generic', title: `Upload ${Array.isArray(args.files) ? args.files.length : 0} file(s) to ${args.selector}`, kind: 'other' as const }),
+		async execute(args, exec) {
+			if (controller.policy.readOnly) {
+				throw new Error('browser_upload changes page state and read-only mode is on — turn readOnly off in the browser-bridge config to upload; no command was sent')
+			}
+			if (!controller.policy.allowUpload) {
+				throw new Error('browser_upload is disabled: set allowUpload: true and uploadDir: "<absolute directory>" in the browser-bridge config first. It is the only tool that can hand local file contents to a page, so it is opt-in. No command was sent.')
+			}
+			const root = controller.uploadRoot
+			if (root === undefined) {
+				throw new Error('browser_upload needs uploadDir (an absolute directory) in the browser-bridge config; no command was sent')
+			}
+			const requested = Array.isArray(args.files) ? args.files.map((file) => String(file)) : []
+			if (requested.length === 0) throw new Error('browser_upload: files must contain at least one absolute path')
+			if (requested.length > UPLOAD_MAX_FILES) throw new Error(`browser_upload: at most ${UPLOAD_MAX_FILES} files per call`)
+			const resolved: { path: string; bytes: number }[] = []
+			for (const file of requested) resolved.push(await resolveUploadFile(root, file))
+			controller.requireExtensionCommand('cdp', '1.7.2')
+			let tabId = args.tabId
+			if (tabId === undefined) tabId = await controller.sessionTab(exec.signal)
+			if (tabId === undefined) {
+				const listing = await controller.execute('tabs.list', {}, exec.signal) as { activeTabId?: number }
+				if (typeof listing?.activeTabId !== 'number') throw new Error('browser_upload: no active tab to target — pass tabId explicitly')
+				tabId = listing.activeTabId
+			}
+			const doc = await cdpCall<{ root?: { nodeId?: number } }>(controller, tabId, 'DOM.getDocument', { depth: 0 }, exec.signal)
+			const rootId = doc?.root?.nodeId
+			if (typeof rootId !== 'number') throw new Error('browser_upload: DOM.getDocument returned no root node for this tab')
+			const found = await cdpCall<{ nodeId?: number }>(controller, tabId, 'DOM.querySelector', { nodeId: rootId, selector: args.selector }, exec.signal)
+			const nodeId = found?.nodeId ?? 0
+			if (nodeId === 0) {
+				throw new Error(`browser_upload: nothing matches ${JSON.stringify(args.selector)} in the target document — check the selector with browser_find first`)
+			}
+			await cdpCall<unknown>(controller, tabId, 'DOM.setFileInputFiles', { files: resolved.map((file) => file.path), nodeId }, exec.signal)
+			return {
+				tabId,
+				selector: args.selector,
+				files: resolved,
+				totalBytes: resolved.reduce((sum, file) => sum + file.bytes, 0),
+			}
+		},
+	}))
 }
 
 function registerDragTool(ctx: Context, controller: BridgeController): void {

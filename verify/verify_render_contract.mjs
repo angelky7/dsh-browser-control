@@ -8,7 +8,7 @@
 // 这个台子把每条工具的真实返回值同时喂给宿主自己的校验器和它的 render，逐条问：
 // schema 过不过、模型可见文本里有没有那份数据、被截断时信号是不是机器可读的。
 // 用法: node verify/verify_render_contract.mjs
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Config, apply } from "../lib/index.js";
@@ -28,7 +28,11 @@ const disposers = [];
 
 // 截图 / PDF / cleanup 三条会真写文件，所以把 shotsDir 指到临时目录，别脏了仓库
 const SHOTS = await mkdtemp(path.join(tmpdir(), "dsh-render-contract-"));
-const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS });
+// browser_upload 是唯一「把本机文件交给页面」的工具：默认关闭，且只允许白名单目录。
+// 这个台子要真正走到 CDP，所以显式开启并给一个临时目录 + 一个已知字节数的文件。
+const UPLOAD_FILE = path.join(SHOTS, "upload.txt");
+await writeFile(UPLOAD_FILE, "abc", "utf8"); // 3 bytes
+const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: SHOTS, allowUpload: true, uploadDir: SHOTS });
 const settingsService = {
   register(_ns, schema, options) {
     let value = schema(options?.base ?? config);
@@ -362,6 +366,12 @@ const GROUND_TRUTH = [
       : p.method === "DOM.getAttributes" ? { attributes: [] }
       : {},
     ["mouse input", "5 steps", "9 dispatches"]],
+  // 文件上传（v1.8.0）：opt-in + uploadDir 白名单；render 必须带文件数、真实字节数与路径
+  ["browser_upload", "cdp", { tabId: 3, selector: "#file", files: [UPLOAD_FILE] },
+    (p) => p.method === "DOM.getDocument" ? { root: { nodeId: 1 } }
+      : p.method === "DOM.querySelector" ? { nodeId: 11 }
+      : {},
+    ["set 1 file(s)", "3 bytes", UPLOAD_FILE]],
   // 操作审计（v1.7.4）：本地账本，值来自真实控制器而不是扩展——这里只断言
   // render 与 schema 的形状；条目内容由 verify_audit 精确断。
   ["browser_audit", null, {}, null, ["Audit:"]],
@@ -387,7 +397,7 @@ const GROUND_TRUTH = [
 const CLOSED_SCHEMA = new Set([
   "browser_navigate", "browser_read", "browser_snapshot", "browser_evaluate", "browser_screenshot",
   "browser_cleanup", "browser_console_log", "browser_network_log", "browser_network_clear",
-  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_audit", "browser_journal", "browser_sessions",
+  "browser_pdf", "browser_archive", "browser_emulate", "browser_metrics", "browser_drag", "browser_upload", "browser_audit", "browser_journal", "browser_sessions",
 ]);
 const hasNull = (v) => v === null
   || (typeof v === "object" && v !== null && Object.values(v).some(hasNull));

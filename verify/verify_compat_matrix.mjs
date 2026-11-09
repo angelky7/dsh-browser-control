@@ -22,6 +22,8 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  -> ' + detail : ''}`)
 }
 const repoRoot = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+// browser_upload 的探针需要一个真实文件（宿主会先 stat）；目录同时作为 uploadDir 白名单。
+const UPLOAD_PROBE_FILE = new URL('../.compat-cache/upload/probe.bin', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
 // 每个面的探针表：since=null = 基线命令（任何版本都有）；expect='ok' = 测试台能
 // 让它真成功的锚点工具；'answered' = 扩展现版本给不出真数据，但必须**回过话**——
@@ -52,6 +54,8 @@ const PROBES = [
   { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'ok' },
   { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
   { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
+  // 文件上传（v1.8.0）：纯插件经 cdp；宿主先 stat 真实文件，扩展只要回 cdp 结果。
+  { tool: 'browser_upload', args: (tab) => ({ tabId: tab, selector: '.upload', files: [UPLOAD_PROBE_FILE] }), since: '1.7.2', expect: 'ok' },
   { tool: 'browser_audit', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_journal', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_sessions', args: () => ({}), since: null, expect: 'ok' },
@@ -69,6 +73,8 @@ const SURFACES = ['v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1', 'v1.7.2']
 // 物化历史扩展代码（git 里的原文，不是模拟）
 const cacheDir = new URL('../.compat-cache/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 await mkdir(cacheDir, { recursive: true })
+await mkdir(new URL('../.compat-cache/upload/', import.meta.url), { recursive: true })
+await writeFile(UPLOAD_PROBE_FILE, Buffer.from([0x44, 0x53, 0x48]))
 const surfaceCommands = new Map()
 for (const tag of SURFACES) {
   const dir = `${cacheDir}${tag.slice(1)}/`
@@ -100,7 +106,7 @@ for (const tag of SURFACES) {
   const TOKEN = `compat-${tag.slice(1)}`
   const tools = []
   const disposers = []
-  const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: new URL('../.compat-cache/shots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
+  const config = Config({ stateDir: (process.env.TEMP || '/tmp') + '/dsh-verify-state', enabled: true, port: PORT, token: TOKEN, shotsDir: new URL('../.compat-cache/shots/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'), allowUpload: true, uploadDir: new URL('../.compat-cache/upload/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1') })
   const settingsService = { register: (_n, schema, o) => ({ get: () => schema(o?.base ?? config), watch: () => {}, set: () => {} }) }
   const pctx = {
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -125,7 +131,7 @@ for (const tag of SURFACES) {
   // 老表面的闸门在碰任何 CDP 之前就抛 extension-outdated，这些假件用不到。
   Object.assign(model.dbg.results, {
     'DOM.getDocument': () => ({ root: { nodeId: 1 } }),
-    'DOM.querySelector': (p) => ({ nodeId: p.selector === '.a' ? 11 : p.selector === '.b' ? 22 : 0 }),
+    'DOM.querySelector': (p) => ({ nodeId: p.selector === '.a' ? 11 : p.selector === '.b' ? 22 : p.selector === '.upload' ? 33 : 0 }),
     'DOM.scrollIntoViewIfNeeded': () => ({}),
     'DOM.getAttributes': () => ({ attributes: [] }),
     'DOM.getBoxModel': (p) => ({ model: p.nodeId === 11
@@ -222,6 +228,7 @@ function commandOfTool(tool, args) {
     case 'browser_scroll': return 'scroll'
     case 'browser_click': return 'click'
     case 'browser_drag': return 'cdp'
+    case 'browser_upload': return 'cdp'
     case 'browser_audit': return null // 插件本地工具，不经扩展
     case 'browser_journal': return null // 纯本地磁盘读
     case 'browser_sessions': return null // 纯本地会话登记簿
