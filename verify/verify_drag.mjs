@@ -73,12 +73,19 @@ const mouseEvents = (from) => model.dbg.log.slice(from).filter((l) => l.method =
 
 /** 装一套 DOM/Input 的假 CDP 语义（每次覆盖全部键，防止上一个用例的剧本残留）。 */
 function installDom({ selectors = {}, attributes = {}, boxes = {}, extra = {} } = {}) {
+  model.dbg.failPlan = null;
   Object.assign(model.dbg.results, {
     "DOM.getDocument": () => ({ root: { nodeId: 1 } }),
     "DOM.querySelector": (p) => ({ nodeId: selectors[p.selector] ?? 0 }),
     "DOM.scrollIntoViewIfNeeded": () => ({}),
     "DOM.getAttributes": (p) => ({ attributes: attributes[p.nodeId] ?? [] }),
-    "DOM.getBoxModel": (p) => ({ model: boxes[p.nodeId] }),
+    // 值可以是现成对象，也可以是函数：需要演「滚动后矩形变了」时用函数。
+    "DOM.getBoxModel": (p) => {
+      const box = boxes[p.nodeId];
+      return { model: typeof box === "function" ? box(p) : box };
+    },
+    // 视口尺寸：拖拽在派发前用它判断两端是否真的同屏可见。
+    "Page.getLayoutMetrics": () => ({ cssVisualViewport: { clientWidth: 800, clientHeight: 600 }, cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } }),
     "Input.dispatchMouseEvent": () => ({}),
     ...extra,
   });
@@ -135,6 +142,84 @@ const BASE_BOXES = { 11: QUAD_SRC, 22: QUAD_DST };
   check("坐标端点：起点/终点就是给的坐标", Math.abs(ev[1]?.x - 5) < 0.01 && Math.abs(ev[4]?.x - 105) < 0.01 && ev.length === 6,
     JSON.stringify(ev.map((e) => [e.type, e.x, e.y])));
   check("坐标端点回执：selector 字段不出现（不伪造端点形式）", res.value?.from?.selector === undefined && res.value?.from?.x === 5, JSON.stringify(res.value?.from));
+}
+
+/* ============ 2b. 视口与滚动：坐标不许拿滚之前的旧值 ============ */
+{
+  // 目标端点的 scrollIntoView 会把页面滚走；源先先前的坐标可能已经失效（专家评审 S2）。
+  // 这里用函数矩形演「滚动后源跑到视口外」，断言工具拒绝而不是盲发一组越界坐标。
+  let measuredSrc = 0;
+  installDom({
+    selectors: BASE_SELECTORS,
+    boxes: {
+      11: () => {
+        measuredSrc++;
+        return measuredSrc === 1 ? QUAD_SRC : { content: [100, -300, 200, -300, 200, -260, 100, -260], width: 100, height: 40 };
+      },
+      22: () => QUAD_DST,
+    },
+  });
+  const at = model.dbg.log.length;
+  const res = await call({ tabId: TAB, from: ".src", to: ".dst", steps: 2 });
+  check("拖拽：目标滚动后源已不在视口 ⇒ 拒绝并说明原因（不盲发坐标）",
+    res.ok === false && /not both visible in the viewport/.test(res.error) && /"\.src"/.test(res.error), res.error);
+  check("拖拽：拒绝发生在任何鼠标事件之前", mouseEvents(at).length === 0, JSON.stringify(mouseEvents(at)));
+}
+
+{
+  // 两端都在视口内：用重测后的坐标派发（按下点 y=80，不是第一次量的 70）。
+  let measuredSrc = 0;
+  installDom({
+    selectors: BASE_SELECTORS,
+    boxes: {
+      11: () => {
+        measuredSrc++;
+        return measuredSrc === 1 ? QUAD_SRC : { content: [100, 60, 200, 60, 200, 100, 100, 100], width: 100, height: 40 };
+      },
+      22: () => QUAD_DST,
+    },
+  });
+  const at = model.dbg.log.length;
+  const res = await call({ tabId: TAB, from: ".src", to: ".dst", steps: 2 });
+  const press = mouseEvents(at)[1];
+  check("拖拽：目标滚动后按当前几何重测源（按下点用 y=80 的新值）",
+    res.ok === true && Math.abs(press?.y - 80) < 0.01 && Math.abs(res.value?.from?.y - 80) < 0.01,
+    JSON.stringify({ error: res.error, press, from: res.value?.from }));
+}
+
+/* ============ 2c. 失败清扫：按住之后的任何失败都要抬起 ============ */
+{
+  installDom({ selectors: BASE_SELECTORS, boxes: BASE_BOXES });
+  // 用本地计数而不是全局 nth：前面的用例已经发过鼠标事件，nth===3 永远不会再命中。
+  let mouseCalls = 0;
+  model.dbg.failPlan = (method) => (method === "Input.dispatchMouseEvent" && ++mouseCalls === 3 ? "Invalid parameters" : null);
+  const at = model.dbg.log.length;
+  const res = await call({ tabId: TAB, from: ".src", to: ".dst", steps: 4 });
+  const ev = mouseEvents(at);
+  check("失败清扫：中途 CDP 报错 ⇒ 调用失败", res.ok === false && /Invalid parameters/.test(res.error), res.error);
+  check("失败清扫：最后补发一次 mouseReleased（buttons=0），页面不留在按住状态",
+    ev.length > 0 && ev[ev.length - 1].type === "mouseReleased" && ev[ev.length - 1].buttons === 0,
+    JSON.stringify(ev.map((e) => [e.type, e.x, e.y, e.buttons])));
+  model.dbg.failPlan = null;
+}
+
+/* ============ 2d. 会话工作标签页：drag 不再自行解析活动页 ============ */
+{
+  installDom({ selectors: BASE_SELECTORS, boxes: BASE_BOXES });
+  const agentCall = (args) => dragTool.execute(args, { signal: signal(), agent: { id: "drag-agent" } })
+    .then((r) => ({ ok: true, value: r }), (e) => ({ ok: false, error: String(e?.message ?? e) }));
+  await agentCall({ tabId: TAB, from: ".src", to: ".dst", steps: 2 });
+  const tab2Id = model.addTab(1, "https://second.test/");
+  model.tabs.get(tab2Id).active = true;
+  const viaSession = await agentCall({ from: ".src", to: ".dst", steps: 2 });
+  check("会话：省略 tabId ⇒ 用本会话的工作标签（不是活动页）",
+    viaSession.ok === true && viaSession.value.tabId === TAB,
+    JSON.stringify({ tabId: viaSession.value?.tabId, error: viaSession.error }));
+  const noAgent = await call({ from: ".src", to: ".dst", steps: 2 });
+  check("没有 agent 身份：维持旧行为（活动页）", noAgent.ok === true && noAgent.value.tabId === tab2Id,
+    JSON.stringify({ tabId: noAgent.value?.tabId, error: noAgent.error }));
+  model.tabs.get(tab2Id).active = false;
+  model.tabs.delete(tab2Id);
 }
 
 /* ============ 3. html5 合成：那段函数真的在假页面里执行 ============ */

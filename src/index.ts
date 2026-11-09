@@ -436,10 +436,22 @@ class BridgeController {
 	 * to work; when it is gone we forget it and let the browser's active tab
 	 * answer, exactly like before this feature existed.
 	 */
-	private async isolateParams(command: string, params: Record<string, unknown>, sessionId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
-		if (typeof params.tabId === 'number' || NO_TAB_DEFAULT_COMMANDS.has(command)) return params
+	/**
+	 * The calling session's working tab, after the same liveness probe isolateParams
+	 * uses. Tools that compose several commands (browser_drag) need the id *before*
+	 * issuing anything, so they must not fall back to the browser's active tab on
+	 * their own — that would silently bypass session isolation.
+	 */
+	async sessionTab(signal: AbortSignal): Promise<number | undefined> {
+		const sessionId = TOOL_SESSION.getStore()
+		if (sessionId === undefined) return undefined
+		return await this.liveRecordedTab(sessionId, signal)
+	}
+
+	/** Recorded working tab if it is still open; a gone tab is forgotten here. */
+	private async liveRecordedTab(sessionId: string, signal: AbortSignal): Promise<number | undefined> {
 		const recorded = this.sessions.workingTab(sessionId)
-		if (recorded === undefined) return params
+		if (recorded === undefined) return undefined
 		const server = this.server
 		if (server !== undefined) {
 			try {
@@ -447,10 +459,17 @@ class BridgeController {
 				const live = Array.isArray(listing?.tabs) && listing.tabs.some((tab) => tab?.id === recorded)
 				if (!live) {
 					this.sessions.release(sessionId)
-					return params
+					return undefined
 				}
 			} catch { /* 列不出来就按旧行为走活动标签页 */ }
 		}
+		return recorded
+	}
+
+	private async isolateParams(command: string, params: Record<string, unknown>, sessionId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+		if (typeof params.tabId === 'number' || NO_TAB_DEFAULT_COMMANDS.has(command)) return params
+		const recorded = await this.liveRecordedTab(sessionId, signal)
+		if (recorded === undefined) return params
 		return { ...params, tabId: recorded }
 	}
 
@@ -2088,19 +2107,45 @@ async function resolveDragPoint(ctrl: BridgeController, tabId: number, target: D
 	const nodeId = found?.nodeId ?? 0
 	if (nodeId === 0) throw new Error(`no element matches selector ${JSON.stringify(selector)} (top document only)`)
 	await cdpCall<unknown>(ctrl, tabId, 'DOM.scrollIntoViewIfNeeded', { nodeId }, signal)
+	return await measureDragNode(ctrl, tabId, nodeId, selector, signal)
+}
+
+/**
+ * Read a node's **current** viewport geometry without scrolling. Needed after the
+ * *other* endpoint's scrollIntoViewIfNeeded: that scroll can move the first
+ * endpoint (and this one), so coordinates measured before it are stale. DOM
+ * geometry is viewport-relative; dispatching the old numbers would drag from
+ * wherever the element used to be.
+ */
+async function measureDragNode(ctrl: BridgeController, tabId: number, nodeId: number, label: string, signal: AbortSignal): Promise<ResolvedDragPoint> {
 	let box: { model?: { content?: number[]; width?: number; height?: number } } | undefined
 	try {
 		box = await cdpCall<{ model?: { content?: number[]; width?: number; height?: number } }>(ctrl, tabId, 'DOM.getBoxModel', { nodeId }, signal)
 	} catch (error) {
-		throw new Error(`cannot measure ${JSON.stringify(selector)} — hidden, zero-size or detached? (${error instanceof Error ? error.message : String(error)})`)
+		throw new Error(`cannot measure ${JSON.stringify(label)} — hidden, zero-size or detached? (${error instanceof Error ? error.message : String(error)})`)
 	}
 	const q = box?.model?.content
-	if (!Array.isArray(q) || q.length < 8) throw new Error(`DOM.getBoxModel returned no quad for ${JSON.stringify(selector)}`)
+	if (!Array.isArray(q) || q.length < 8) throw new Error(`DOM.getBoxModel returned no quad for ${JSON.stringify(label)}`)
 	const x = (q[0] + q[2] + q[4] + q[6]) / 4
 	const y = (q[1] + q[3] + q[5] + q[7]) / 4
 	const width = typeof box?.model?.width === 'number' ? box.model.width : Math.hypot(q[2] - q[0], q[3] - q[1])
 	const height = typeof box?.model?.height === 'number' ? box.model.height : Math.hypot(q[4] - q[2], q[5] - q[3])
-	return { selector, x, y, width, height, nodeId }
+	return { selector: label, x, y, width, height, nodeId }
+}
+
+/** CSS viewport size via Page.getLayoutMetrics (no page JS, works with allowScript off). */
+async function viewportSize(ctrl: BridgeController, tabId: number, signal: AbortSignal): Promise<{ width: number; height: number } | undefined> {
+	try {
+		const metrics = await cdpCall<{
+			cssVisualViewport?: { clientWidth?: number; clientHeight?: number }
+			cssLayoutViewport?: { clientWidth?: number; clientHeight?: number }
+		}>(ctrl, tabId, 'Page.getLayoutMetrics', {}, signal)
+		const viewport = metrics?.cssVisualViewport ?? metrics?.cssLayoutViewport
+		const width = Number(viewport?.clientWidth)
+		const height = Number(viewport?.clientHeight)
+		if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) return { width, height }
+	} catch { /* 量不出视口就跳过边界检查，不让一条查询失败挡掉拖拽本身 */ }
+	return undefined
 }
 
 /** Whether the source declares the native HTML5 `draggable` attribute. */
@@ -2264,6 +2309,7 @@ function registerDragTool(ctx: Context, controller: BridgeController): void {
 		controller.requireExtensionCommand('cdp', '1.7.2')
 		if (controller.policy.readOnly) throw new Error('browser_drag changes page state and read-only mode is on — turn readOnly off in the browser-bridge config to drag')
 		let tabId = args.tabId
+		if (tabId === undefined) tabId = await controller.sessionTab(exec.signal)
 		if (tabId === undefined) {
 			const listing = await controller.execute('tabs.list', {}, exec.signal) as { activeTabId?: number }
 			if (typeof listing?.activeTabId !== 'number') throw new Error('could not resolve the active tab — pass tabId explicitly')
@@ -2278,24 +2324,59 @@ function registerDragTool(ctx: Context, controller: BridgeController): void {
 		}
 		if (resolvedMode === 'mouse') {
 			const target = await resolveDragPoint(controller, tabId, to, exec.signal)
+			// 目标端点的 scrollIntoViewIfNeeded 会把页面滚走，源端点先前的视口坐标就失效了；
+			// 两端都是选择器时按当前几何重测一次（getBoxModel 不滚动，不会再次互相干扰）。
+			// 若滚完后两端不在同一视口里，宁可拒绝，也不盲发一组越界坐标去拖错东西。
+			let sourcePoint = source!
+			let targetPoint = target
+			if (source?.nodeId !== undefined && target.nodeId !== undefined) {
+				sourcePoint = await measureDragNode(controller, tabId, source.nodeId, String(from.selector), exec.signal)
+				targetPoint = await measureDragNode(controller, tabId, target.nodeId, String(to.selector), exec.signal)
+			}
+			const viewport = await viewportSize(controller, tabId, exec.signal)
+			if (viewport !== undefined) {
+				const describe = (p: ResolvedDragPoint): string => `${p.selector !== undefined ? JSON.stringify(p.selector) : 'point'} at (${Math.round(p.x)},${Math.round(p.y)})`
+				const outside = (p: ResolvedDragPoint): boolean => p.x < 0 || p.y < 0 || p.x > viewport.width || p.y > viewport.height
+				if (outside(sourcePoint) || outside(targetPoint)) {
+					throw new Error(`drag endpoints are not both visible in the viewport (${describe(sourcePoint)} → ${describe(targetPoint)}, viewport ${Math.round(viewport.width)}×${Math.round(viewport.height)}) — scroll so both fit, then retry; mode:"html5" takes selectors and needs no viewport coordinates`)
+				}
+			}
 			const steps = Math.min(50, Math.max(1, Math.trunc(typeof args.steps === 'number' ? args.steps : 12)))
-			const sx = source!.x, sy = source!.y, tx = target.x, ty = target.y
+			const sx = sourcePoint.x, sy = sourcePoint.y, tx = targetPoint.x, ty = targetPoint.y
 			const dispatch = async (params: Record<string, unknown>): Promise<void> => {
 				await cdpCall<unknown>(controller, tabId, 'Input.dispatchMouseEvent', params, exec.signal)
 			}
-			await dispatch({ type: 'mouseMoved', x: sx, y: sy, button: 'none', buttons: 0 })
-			await dispatch({ type: 'mousePressed', x: sx, y: sy, button: 'left', buttons: 1, clickCount: 1 })
-			for (let i = 1; i <= steps; i++) {
-				const f = i / steps
-				await dispatch({ type: 'mouseMoved', x: sx + (tx - sx) * f, y: sy + (ty - sy) * f, button: 'left', buttons: 1 })
+			// 按住之后任何一步失败（取消、超时、CDP 报错）都必须尽力抬起：否则页面会
+			// 停在「鼠标左键按着」的状态，用户下一次点击会被当成拖拽的延续。
+			let pressedAt: { x: number; y: number } | undefined
+			try {
+				await dispatch({ type: 'mouseMoved', x: sx, y: sy, button: 'none', buttons: 0 })
+				await dispatch({ type: 'mousePressed', x: sx, y: sy, button: 'left', buttons: 1, clickCount: 1 })
+				pressedAt = { x: sx, y: sy }
+				for (let i = 1; i <= steps; i++) {
+					const f = i / steps
+					await dispatch({ type: 'mouseMoved', x: sx + (tx - sx) * f, y: sy + (ty - sy) * f, button: 'left', buttons: 1 })
+					pressedAt = { x: sx + (tx - sx) * f, y: sy + (ty - sy) * f }
+				}
+				await dispatch({ type: 'mouseReleased', x: tx, y: ty, button: 'left', buttons: 0, clickCount: 1 })
+				pressedAt = undefined
+				await dispatch({ type: 'mouseMoved', x: tx, y: ty, button: 'none', buttons: 0 })
+			} catch (error) {
+				if (pressedAt !== undefined) {
+					// 独立信号：调用方的 signal 可能已经 abort，清扫仍要发出去。
+					try {
+						await cdpCall<unknown>(controller, tabId, 'Input.dispatchMouseEvent',
+							{ type: 'mouseReleased', x: pressedAt.x, y: pressedAt.y, button: 'left', buttons: 0, clickCount: 1 },
+							new AbortController().signal)
+					} catch { /* 清扫失败不能盖掉原始错误 */ }
+				}
+				throw error
 			}
-			await dispatch({ type: 'mouseReleased', x: tx, y: ty, button: 'left', buttons: 0, clickCount: 1 })
-			await dispatch({ type: 'mouseMoved', x: tx, y: ty, button: 'none', buttons: 0 })
 			const receipt: DragReceipt = {
 				tabId,
 				mode: 'mouse',
-				from: roundDragPoint(source!),
-				to: roundDragPoint(target),
+				from: roundDragPoint(sourcePoint),
+				to: roundDragPoint(targetPoint),
 				steps,
 				dispatched: steps + 4,
 				elapsedMs: Date.now() - started,
