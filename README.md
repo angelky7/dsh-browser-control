@@ -10,9 +10,12 @@
 
 [![npm version](https://img.shields.io/npm/v/@angelky7/dsh-browser-control?style=flat&label=version&color=2EA44F)](https://www.npmjs.com/package/@angelky7/dsh-browser-control)
 [![downloads](https://img.shields.io/npm/dm/@angelky7/dsh-browser-control?style=flat&label=downloads&color=2EA44F)](https://www.npmjs.com/package/@angelky7/dsh-browser-control)
+[![GitHub downloads](https://img.shields.io/github/downloads/angelky7/dsh-browser-control/total?style=flat&label=release%20downloads&color=2EA44F)](https://github.com/angelky7/dsh-browser-control/releases)
 [![CI](https://github.com/angelky7/dsh-browser-control/actions/workflows/ci.yml/badge.svg)](https://github.com/angelky7/dsh-browser-control/actions/workflows/ci.yml)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-2EA44F?style=flat)](LICENSE)
+
+<img src="assets/banner.png" width="520" alt="DSH Browser Control — a whale searching Google with a mouse">
 
 </div>
 
