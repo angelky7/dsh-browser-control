@@ -13,6 +13,9 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises'
 import { Config, apply } from '../lib/index.js'
 import { bootBackground } from './ext_harness.mjs'
 
+// 宿主自己的输出校验器：每个成功探针的结果都要真的过一遍 schema 与 render。
+const { validateJsonSchemaValue } = await import('@deepseek-ai/dsh-tools')
+
 let fails = 0
 const check = (name, ok, detail = '') => {
   if (!ok) fails++
@@ -21,8 +24,9 @@ const check = (name, ok, detail = '') => {
 const repoRoot = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
 // 每个面的探针表：since=null = 基线命令（任何版本都有）；expect='ok' = 测试台能
-// 让它真成功的锚点工具；'any' = 管道通了即可（测试台给不了真数据，只禁
-// unknown-command / extension-outdated 这两种契约性失败）。
+// 让它真成功的锚点工具；'answered' = 扩展现版本给不出真数据，但必须**回过话**——
+// 只认 ok 或 `[command_failed]`，契约性失败（unknown command / outdated / 断链 /
+// 策略）与插件侧裸异常都不算数（旧版 `any` 会把它们全部放行，评审点名）。
 const PROBES = [
   { tool: 'browser_info', args: () => ({}), since: null, expect: 'ok' },
   { tool: 'browser_tabs', args: () => ({ action: 'list' }), since: null, expect: 'ok' },
@@ -38,26 +42,26 @@ const PROBES = [
   { tool: 'browser_cleanup', args: () => ({}), since: null, expect: 'ok' },
   { tool: 'browser_metrics', args: (tab) => ({ tabId: tab }), since: '1.7.1', expect: 'ok' },
   { tool: 'browser_windows', args: () => ({ action: 'list' }), since: '1.6.0', expect: 'ok' },
-  { tool: 'browser_windows', args: (tab) => ({ action: 'update', windowId: 1, focused: true }), since: '1.6.0', expect: 'any' },
-  { tool: 'browser_archive', args: (tab) => ({ tabId: tab }), since: '1.5.0', expect: 'any' },
-  { tool: 'browser_read', args: (tab) => ({ tabId: tab }), since: null, expect: 'any' },
-  { tool: 'browser_snapshot', args: (tab) => ({ tabId: tab }), since: null, expect: 'any' },
-  { tool: 'browser_find', args: (tab) => ({ tabId: tab, selector: '.none' }), since: null, expect: 'any' },
-  { tool: 'browser_click', args: (tab) => ({ tabId: tab, selector: '.none' }), since: null, expect: 'any' },
-  { tool: 'browser_type', args: (tab) => ({ tabId: tab, selector: '.none', value: 'x' }), since: null, expect: 'any' },
-  { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'any' },
+  { tool: 'browser_windows', args: (tab) => ({ action: 'update', windowId: 1, focused: true }), since: '1.6.0', expect: 'ok' },
+  { tool: 'browser_archive', args: (tab) => ({ tabId: tab }), since: '1.5.0', expect: 'ok' },
+  { tool: 'browser_read', args: (tab) => ({ tabId: tab }), since: null, expect: 'answered' },
+  { tool: 'browser_snapshot', args: (tab) => ({ tabId: tab }), since: null, expect: 'answered' },
+  { tool: 'browser_find', args: (tab) => ({ tabId: tab, selector: '.none' }), since: null, expect: 'ok' },
+  { tool: 'browser_click', args: (tab) => ({ tabId: tab, selector: '.none' }), since: null, expect: 'answered' },
+  { tool: 'browser_type', args: (tab) => ({ tabId: tab, selector: '.none', value: 'x' }), since: null, expect: 'answered' },
+  { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'ok' },
   { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
   { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
   { tool: 'browser_audit', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_journal', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_sessions', args: () => ({}), since: null, expect: 'ok' },
-  { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'any' },
+  { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'ok' },
   // dialog 以前只出现在 commandOfTool 里、没有一个探针真的调它（评审点名的矩阵缺口）。
   // 读当前策略不带模式：所有历史面都有 dialog 命令。
-  { tool: 'browser_dialog', args: () => ({}), since: null, expect: 'any' },
-  { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'any' },
-  { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'any' },
-  { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: null, expect: 'any' },
+  { tool: 'browser_dialog', args: () => ({}), since: null, expect: 'ok' },
+  { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'ok' },
+  { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'ok' },
+  { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: null, expect: 'ok' },
 ]
 
 const SURFACES = ['v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1', 'v1.7.2']
@@ -163,7 +167,21 @@ for (const tag of SURFACES) {
     } else if (probe.expect === 'ok') {
       check(`${label}: 照常工作（≥ 当年组合）`, out.ok === true, error.slice(0, 90))
     } else {
-      check(`${label}: 管道通（错误只能是功能性的）`, !/unknown command|extension-outdated/.test(error), out.ok ? 'ok' : error.slice(0, 90))
+      // 'answered'：只认「真成功」或「扩展回了功能性失败」。[command_failed] 之外的
+      // 错误（unknown command / extension-outdated / bridge off / offline / policy /
+      // timeout / 插件侧裸异常）都说明管道没通，不许像旧 'any' 那样放行。
+      const answered = out.ok === true || /^\[command_failed\]/.test(error)
+      check(`${label}: 扩展回了话（ok 或功能性 command_failed）`, answered, out.ok ? 'ok' : error.slice(0, 110))
+    }
+    // 真链路（专家评审点名）：把**扩展实际产出**喂给工具自己的 schema 与 render，
+    // 不再只靠 render 契约台里手写的回包。成功一次就验一次。
+    if (out.ok === true) {
+      const violations = validateJsonSchemaValue(tool.output.schema, out.r, 'value')
+      const blocks = tool.output.render(probe.args(TAB), out.r)
+      const text = Array.isArray(blocks) ? blocks.map((part) => part.text ?? '').join('\n') : ''
+      check(`${label}: 真扩展输出→schema→render 全链`,
+        violations.length === 0 && text.length > 0,
+        violations.length > 0 ? JSON.stringify(violations).slice(0, 110) : `${text.length} chars`)
     }
   }
   // 假件自检（评审点名）：上次把 wait 谓词一律演成 true，任何 fn 都「成立」，

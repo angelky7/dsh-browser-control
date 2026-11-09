@@ -145,6 +145,16 @@ export function makeModel({ failGroupTimes = 0 } = {}) {
  * 找 objectId、`Runtime.callFunctionOn` **实际执行**扩展传进来的那段页面函数。
  * 测试可以用 `model.dbg.results[method]` 覆盖任意一个。
  */
+/**
+ * 截图 / PDF / 存档的默认载荷：这不是「哦这个测试恰好需要」，而是让
+ * 「真扩展执行 → 工具输出 → schema → render」链路能真的走完（矩阵台会验这条链）。
+ * 之前缺这些默认值，Page.captureScreenshot 回 undefined，插件侧 Buffer.from 直接抛裸
+ * TypeError——管道没通却因为 expect:any 被放过。
+ */
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const TINY_PDF = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n").toString("base64");
+const TINY_MHTML = "<html><body>snapshot</body></html>";
+
 function cdpResult(model, method, params, tabId) {
   const custom = model.dbg.results[method];
   if (typeof custom === "function") return custom(params, model);
@@ -155,6 +165,11 @@ function cdpResult(model, method, params, tabId) {
       if (expression.includes("document.title")) return { result: { value: model.page.title } };
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
       if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };
+      // cmdScroll 的表达式在真页面回一个滚动状态对象；假件以前落到默认 null，
+      // 于是 browser_scroll 的输出过不了自己的 object schema（矩阵真链路第一跑抓到）。
+      if (expression.includes("window.scrollBy(")) {
+        return { result: { value: { tabId, scrollX: 0, scrollY: 0, pageHeight: 900, viewportHeight: 600 } } };
+      }
       // cmdWait 的轮询条件固定包一层 `(() => { const f = (...); return typeof f ===
       // 'function' ? ... })()`：**真的求值**，而不是一律回 true。一律回 true 会让
       // 任何谓词（包括恒假）都「成立」，wait 的失败路径永远测不到（评审点名）。
@@ -211,6 +226,12 @@ function cdpResult(model, method, params, tabId) {
       return runPageFunction(model, params);
     case "Accessibility.getFullAXTree":
       return { nodes: model.axNodes };
+    case "Page.captureScreenshot":
+      return { data: TINY_PNG };
+    case "Page.printToPDF":
+      return { data: TINY_PDF };
+    case "Page.captureSnapshot":
+      return { data: TINY_MHTML };
     case "Page.enable": case "Runtime.enable": case "Network.enable":
     case "DOM.enable": case "Accessibility.enable":
       return {};
