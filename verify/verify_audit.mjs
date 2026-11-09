@@ -29,10 +29,31 @@ const check = (name, ok, detail = "") => {
   check("令牌类键（token/authorization）一律打码", token.includes('"token":"[redacted]"') && token.includes('"authorization":"[redacted]"') && token.includes('"keep":"ok"'), token);
   const longExpr = summarizeAuditParams("eval", { expression: "x".repeat(200) });
   check("eval 表达式截断并标记剩余长度", longExpr.includes("…[+80 chars]"), longExpr.slice(-30));
-  const longParams = summarizeAuditParams("nav", { url: `https://x.test/?q=${"a".repeat(400)}` });
+  const longParams = summarizeAuditParams("nav", { note: "a".repeat(400) });
   check("参数摘要整体限长（300）", longParams.length <= 330 && /…\[\+\d+ chars\]/.test(longParams), `len=${longParams.length}`);
+  const longUrl = summarizeAuditParams("nav", { url: `https://x.test/?q=${"a".repeat(400)}` });
+  check("长 URL 查询值被打码而不是被截成半截密文",
+    longUrl.length < 120 && /q=\[redacted:400 chars\]/.test(longUrl) && !longUrl.includes("aaaa"), longUrl);
   const other = summarizeAuditParams("navigate", { value: "not-sensitive-here" });
   check("别的命令的 value 不打码（只打输入与 cookie 两条）", other.includes("not-sensitive-here"), other);
+}
+{
+  // 截断 ≠ 脱敏（专家评审）：URL 查询值/敏感片段不能因为「没超过 120 字符」就落明文。
+  const url = summarizeAuditParams("nav", { url: "https://x.test/cb?token=abc123&next=/home#access_token=zzz" });
+  check("URL 查询值一律打码（保留 host/path 与参数名）",
+    url.includes("https://x.test/cb?") && url.includes("token=[redacted:6 chars]") && url.includes("next=[redacted:5 chars]")
+    && !url.includes("abc123") && !url.includes("zzz") && !url.includes("/home&"), url);
+  const route = summarizeAuditParams("nav", { url: "https://x.test/app#/inbox" });
+  check("SPA 路由片段保留（不误伤普通 # 路由）", route.includes("#/inbox"), route);
+  const plain = summarizeAuditParams("nav", { url: "https://x.test/plain" });
+  check("无查询/无敏感片段的 URL 原样保留", plain === '{"url":"https://x.test/plain"}', plain);
+  const entry = new AuditLog(() => 1).record({
+    command: "nav", params: "{}", ok: false, durationMs: 1,
+    error: "net::ERR_FAILED for https://api.test/cb?access_token=sekret&state=xyz (retry?)",
+  });
+  check("错误文本里的 URL 查询值也打码（含后面的标点不丢）",
+    entry.error.includes("https://api.test/cb?") && entry.error.includes("access_token=[redacted:6 chars]")
+    && !entry.error.includes("sekret") && !entry.error.includes("xyz") && entry.error.includes("(retry?)"), entry.error);
 }
 {
   let now = 1_000;
@@ -83,7 +104,7 @@ await new Promise((r) => {
     const msg = JSON.parse(ev.data);
     if (msg.type !== "command") return;
     if (msg.command === "click") {
-      ws.send(JSON.stringify({ type: "result", id: msg.id, ok: false, error: "element not found: .none" }));
+      ws.send(JSON.stringify({ type: "result", id: msg.id, ok: false, error: "element not found: .none — see https://help.test/e?token=supersecret&code=42" }));
       return;
     }
     ws.send(JSON.stringify({ type: "result", id: msg.id, ok: true, result: { tabId: 7, url: "https://a.test/", title: "A", filled: true, value: "x", metrics: {} } }));
@@ -120,6 +141,10 @@ const clickEntry = entries[2];
 check("失败条目带 code/effectState 与错误文本",
   clickEntry.ok === false && clickEntry.code === "command_failed" && clickEntry.effectState === "unknown" && /element not found/.test(clickEntry.error ?? ""),
   JSON.stringify(clickEntry));
+check("扩展错误文本里的 URL 查询值入账前已打码（supersecret 不落账）",
+  !JSON.stringify(entries).includes("supersecret") && /token=\[redacted:11 chars\]/.test(clickEntry.error ?? ""), clickEntry.error);
+check("URL 查询值打码保留来源（https://help.test/e 仍在账上）",
+  (clickEntry.error ?? "").includes("https://help.test/e?"), clickEntry.error);
 const cleanupEntry = entries[3];
 check("cleanup 本地命令也上账", cleanupEntry.command === "cleanup" && cleanupEntry.ok === true, JSON.stringify(cleanupEntry));
 

@@ -263,7 +263,7 @@ curl -X POST http://127.0.0.1:9777/api/command \
 | `browser_emulate` | 切设备视口（移动 / 桌面 / 自定义，v1.0.7+）；v1.7.1 起还能限速：`network` slow3g/fast3g/offline/reset + `cpuThrottlingRate`（1–20），回执写明生效数值，`device:"reset"` 一并还原 |
 | `browser_metrics` | 读性能计数器（DOM 节点数 / JS 堆 / 布局与脚本耗时，Performance.getMetrics，只读；让「这页面很重」有数字说话，v1.7.1+） |
 | `browser_drag` | 拖拽：from/to 用选择器或视口坐标；`auto` 对 `draggable="true"` 的源走 html5 事件合成（dragstart→dragover→drop，未接受就不 drop），其余走真实鼠标输入（按下→插值移动→抬起，滑杆/画布/排序组件用这个）。**纯插件实现**（经 v1.7.2 预埋的 cdp 通道），v1.7.3+ |
-| `browser_audit` | 读本次插件会话的内存审计账本：发过/被拒的每条命令（参数脱敏、`code`/`effectState`、耗时），最多 200 条、dsh 重启即清；输入的文字与 cookie 值打码、eval 表达式截断。纯本地读，只读档下照常可用（v1.7.4+） |
+| `browser_audit` | 读本次插件会话的内存审计账本：发过/被拒的每条命令（参数脱敏、`code`/`effectState`、耗时），最多 200 条、dsh 重启即清；输入的文字与 cookie 值打码、URL 查询值与敏感片段打码、错误文本里的 URL 同样打码、eval 表达式截断。纯本地读，只读档下照常可用（v1.7.4+） |
 | `browser_journal` | 读**跨 dsh 重启**的持久命令账本（`<stateDir>/journal.jsonl`，最多 1000 条，按运行分组）——重启后先问它「上个会话在哪个标签页干了什么」；同样的脱敏规则；纯本地磁盘读，**扩展离线也能用**（v1.7.5+） |
 | `browser_sessions` | 多 session 隔离：列出共用这个浏览器的 dsh 会话与各自的**工作标签页**；`action:"release"` 释放自己的。省略 tabId 的调用默认落到**本会话**的工作标签页（先核验还开着），并发会话不再互相抢活动页；显式 tabId 永远有效。纯本地，v1.7.6+ |
 | `browser_windows` | 窗口控制：清单/开窗/改状态与几何/关整窗/跨窗挪标签（唯一能碰窗口几何的工具，v1.6.0+） |

@@ -9,6 +9,7 @@
  *   - **只存内存**（环形缓冲，200 条）：跨 dsh 重启的持久化是「会话恢复」那一版的事；
  *     这一版先把账记对，别把磁盘格式写死。
  *   - **参数摘要是脱敏后的**：输入框的值、cookie 的值、令牌类字段一律打码；
+ *     URL 的查询值与敏感片段打码，错误文本里的 URL 同样打码（截断不是脱敏）；
  *     表达式截断。审计的用途是「做了什么」，不是「内容是什么」。
  */
 export interface AuditEntry {
@@ -50,6 +51,48 @@ const AUDIT_EXPRESSION_MAX_CHARS = 120
 const SECRET_KEY = /^(token|authorization|password|passwd|secret|apikey|api_key|cookie)$/i
 
 /**
+ * URL 里的秘密不能靠「截断」处理：`?token=…&code=…` 截到 120 字符照样是明文。
+ * 审计的用途是「做了什么」，所以保留 scheme/host/path 与查询键名，**查询值一律打码**；
+ * 片段（#）只在看起来像参数（含 `=` 或 token/secret 字样）时整体打码——SPA 路由
+ * （`#/inbox`）要留住，OAuth 隐式流的 `#access_token=…` 不能留。
+ */
+const URL_PATTERN = /https?:\/\/[^\s"'<>]+/g
+
+function redactUrlMatch(match: string): string {
+  // 错误文本里的 URL 常跟着标点（"...?token=x." / "...(https://…)")，先剥掉再原样接回。
+  const trailing = match.match(/[).,;:!?]+$/)
+  const core = trailing === null ? match : match.slice(0, -trailing[0].length)
+  const tail = trailing === null ? '' : trailing[0]
+  const queryAt = core.indexOf('?')
+  const hashAt = core.indexOf('#')
+  const base = queryAt >= 0 ? core.slice(0, queryAt) : (hashAt >= 0 ? core.slice(0, hashAt) : core)
+  const query = queryAt >= 0 ? core.slice(queryAt + 1, hashAt >= 0 ? hashAt : undefined) : ''
+  const hash = hashAt >= 0 ? core.slice(hashAt) : ''
+  let changed = false
+  const redactedQuery = query.length === 0 ? '' : query.split('&').map((pair) => {
+    const eq = pair.indexOf('=')
+    if (eq < 0) return pair
+    const key = pair.slice(0, eq)
+    let value = pair.slice(eq + 1)
+    try { value = decodeURIComponent(value) } catch { /* 解码失败就按原文字符数 */ }
+    changed = true
+    return `${key}=[redacted:${[...value].length} chars]`
+  }).join('&')
+  let redactedHash = hash
+  if (hash.length > 1 && (/=/.test(hash) || /token|secret|access_token/i.test(hash))) {
+    redactedHash = '#[redacted]'
+    changed = true
+  }
+  if (!changed) return core + tail
+  return `${base}${redactedQuery.length > 0 ? `?${redactedQuery}` : ''}${redactedHash}${tail}`
+}
+
+/** 把一段文本里所有 URL 的查询值/敏感片段打码（用于参数摘要与错误文本）。 */
+export function redactAuditText(text: string): string {
+  return text.replace(URL_PATTERN, redactUrlMatch)
+}
+
+/**
  * 哪个命令的 `value` 字段是敏感内容：`input` 是往页面里打的字（可能是密码），
  * `cookies.set` 直接写凭据。其余命令的 value 字段（如果有）不动。
  */
@@ -70,8 +113,13 @@ export function summarizeAuditParams(command: string, params: Record<string, unk
 		text = JSON.stringify(params, (key, value) => {
 			if (SECRET_KEY.test(key)) return '[redacted]'
 			if (key === 'value' && VALUE_REDACTED_COMMANDS.has(command)) return redactValue(value)
-			if (key === 'expression' && typeof value === 'string' && [...value].length > AUDIT_EXPRESSION_MAX_CHARS) {
-				return `${[...value].slice(0, AUDIT_EXPRESSION_MAX_CHARS).join('')}…[+${[...value].length - AUDIT_EXPRESSION_MAX_CHARS} chars]`
+			if (typeof value === 'string') {
+				// URL query 与敏感片段先打码，再做表达式截断/整体限长：截断不是脱敏。
+				const redacted = redactAuditText(value)
+				if (key === 'expression' && [...redacted].length > AUDIT_EXPRESSION_MAX_CHARS) {
+					return `${[...redacted].slice(0, AUDIT_EXPRESSION_MAX_CHARS).join('')}…[+${[...redacted].length - AUDIT_EXPRESSION_MAX_CHARS} chars]`
+				}
+				return redacted
 			}
 			return value
 		}) ?? '{}'
@@ -119,9 +167,10 @@ export class AuditLog {
 		if (input.code !== undefined) entry.code = input.code
 		if (input.effectState !== undefined) entry.effectState = input.effectState
 		if (input.error !== undefined) {
-			entry.error = [...input.error].length > AUDIT_ERROR_MAX_CHARS
-				? `${[...input.error].slice(0, AUDIT_ERROR_MAX_CHARS).join('')}…`
-				: input.error
+			const redacted = redactAuditText(input.error)
+			entry.error = [...redacted].length > AUDIT_ERROR_MAX_CHARS
+				? `${[...redacted].slice(0, AUDIT_ERROR_MAX_CHARS).join('')}…`
+				: redacted
 		}
 		this.entries.push(entry)
 		// 环形缓冲：超出上限从最旧的一端丢。seq 不回收——调用方拿 seq 分页时

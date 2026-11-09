@@ -9,6 +9,7 @@
  *   - **只存内存**（环形缓冲，200 条）：跨 dsh 重启的持久化是「会话恢复」那一版的事；
  *     这一版先把账记对，别把磁盘格式写死。
  *   - **参数摘要是脱敏后的**：输入框的值、cookie 的值、令牌类字段一律打码；
+ *     URL 的查询值与敏感片段打码，错误文本里的 URL 同样打码（截断不是脱敏）；
  *     表达式截断。审计的用途是「做了什么」，不是「内容是什么」。
  */
 export interface AuditEntry {
@@ -37,6 +38,8 @@ export interface AuditFilter {
 }
 /** 环形缓冲上限。200 条足够覆盖一次排障现场，又不至于让内存跟着会话长度涨。 */
 export declare const AUDIT_MAX_ENTRIES = 200;
+/** 把一段文本里所有 URL 的查询值/敏感片段打码（用于参数摘要与错误文本）。 */
+export declare function redactAuditText(text: string): string;
 /**
  * 把一次调用的参数压成可审计的摘要：敏感键打码、特定命令的 value 打码、
  * 长表达式截断、整体限长。返回 JSON 文本——审计工具原样把它交给模型。
