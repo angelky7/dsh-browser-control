@@ -267,7 +267,10 @@ class BridgeController {
 	 * Journal appends are queued and never block the command path.
 	 */
 	private recordAudit(input: Parameters<AuditLog['record']>[0]): void {
-		this.journal?.append(this.audit.record(input))
+		// 先记账再落盘：`this.journal?.append(this.audit.record(input))` 会让可选链
+		// 短路掉 audit.record —— journal 没开（默认就是关的）时内存审计整本丢失。
+		const entry = this.audit.record(input)
+		this.journal?.append(entry)
 	}
 
 	/**

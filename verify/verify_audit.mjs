@@ -199,6 +199,24 @@ async function connectFake(inst) {
   inst.dispose();
 }
 {
+  // 回归（专家评审 S2）：journal 打不开 = 纯内存审计。旧实现
+  // `this.journal?.append(this.audit.record(input))` 会让可选链短路掉 audit.record，
+  // journal 一关（默认就是关的）账本整本丢失。这里用「stateDir 指向一个文件」逼
+  // Journal.open 失败，证明内存审计不依赖 journal。
+  const badState = path.join(SHOTS, "not-a-dir.state");
+  await writeFile(badState, "x");
+  const inst = makeInstance({ port: 9804, token: "audit-nojournal", configOverrides: { stateDir: badState } });
+  await new Promise((r) => setTimeout(r, 300));
+  const sock = await connectFake(inst);
+  const tool = (n) => inst.tools.find((t) => t.name === n);
+  await tool("browser_navigate").execute({ url: "https://a.test/", tabId: 1 }, { signal: signal() });
+  const audit = await tool("browser_audit").execute({}, { signal: signal() });
+  check("journal 关闭时内存审计照常记账（可选链不许短路 audit.record）",
+    audit.entries.length === 1 && audit.entries[0].command === "nav", JSON.stringify(audit.entries));
+  try { sock.close(); } catch {}
+  inst.dispose();
+}
+{
   const inst = makeInstance({ port: 9803, token: "audit-old", helloVersion: "1.7.0", capabilities: undefined });
   await new Promise((r) => setTimeout(r, 300));
   const sock = await connectFake(inst);
