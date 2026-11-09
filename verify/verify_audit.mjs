@@ -129,6 +129,8 @@ check("cleanup 走本地路径", cleaned.ok === true && cleaned.r.shotsRemoved =
 
 const list = await call("browser_audit", {});
 const entries = list.r.entries;
+check("journal 正常时 audit 报 enabled:true（落盘状态对调用方可见）",
+  list.r.journal?.enabled === true && list.r.journal?.error === undefined, JSON.stringify(list.r.journal));
 check("四条命令按顺序上账（nav/input/click/cleanup）",
   entries.map((e) => e.command).join(",") === "nav,input,click,cleanup", entries.map((e) => e.command).join(","));
 const navEntry = entries[0];
@@ -238,6 +240,17 @@ async function connectFake(inst) {
   const audit = await tool("browser_audit").execute({}, { signal: signal() });
   check("journal 关闭时内存审计照常记账（可选链不许短路 audit.record）",
     audit.entries.length === 1 && audit.entries[0].command === "nav", JSON.stringify(audit.entries));
+  check("journal 打不开时降级状态可见（enabled:false + error）",
+    audit.journal?.enabled === false && typeof audit.journal?.error === "string" && audit.journal.error.length > 0,
+    JSON.stringify(audit.journal));
+  const auditRendered = tool("browser_audit").output.render({}, audit)[0].text;
+  check("audit render 带「本次只进内存」的警告",
+    /Journal write: disabled/.test(auditRendered) && /memory-only/.test(auditRendered), auditRendered.slice(-140));
+  const journal = await tool("browser_journal").execute({}, { signal: signal() });
+  check("journal 打不开时 browser_journal 也如实报 enabled:false + error",
+    journal.journal?.enabled === false && typeof journal.journal?.error === "string", JSON.stringify(journal.journal));
+  const journalRendered = tool("browser_journal").output.render({}, journal)[0].text;
+  check("browser_journal render 同样带降级警告", /Journal write: disabled/.test(journalRendered), journalRendered.slice(-140));
   try { sock.close(); } catch {}
   inst.dispose();
 }

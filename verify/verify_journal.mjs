@@ -148,6 +148,7 @@ let runAId = null;
   // B 还没连扩展——journal 是纯本地读，必须照常工作
   const journal = await tool("browser_journal").execute({}, { signal: signal() });
   check("运行 B：扩展离线时 browser_journal 照常可读（纯本地）", journal.total === 2 && journal.runs === 1, JSON.stringify({ total: journal.total, runs: journal.runs }));
+  check("正常运行：journal.enabled=true（本次确实在写盘）", journal.journal?.enabled === true, JSON.stringify(journal.journal));
   check("读回的是运行 A 的账（run 编号与 A 一致、含 nav 与 input）",
     journal.entries[0].run === runAId && journal.entries.map((e) => e.command).join(",") === "nav,input", journal.entries.map((e) => e.command).join(","));
   const audit = await tool("browser_audit").execute({}, { signal: signal() });

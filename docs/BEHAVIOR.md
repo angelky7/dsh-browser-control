@@ -188,6 +188,7 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 脱敏 | `input` 的 value（往页面里打的字，可能是密码）与 `cookies.set` 的 value 一律 `[redacted:N chars]`；token/authorization/password/secret/apikey/cookie 这些键的值打码；**URL 的查询值一律打码**（保留 scheme/host/path 与参数名；`#/inbox` 这类路由片段保留，含 `=` 或 token 字样的片段整体打码）；**错误文本里的 URL 同样按此规则打码**——截断不是脱敏；eval 表达式只留前 120 字符；单条摘要限 300 字符 |
 | 边界 | 内存环形缓冲 **200 条**，dsh 重启即清（持久化是「会话恢复」那一版的事）；seq 不回收——分页时中间缺号本身就是「被挤掉了」的机器可读信号 |
 | 查询 | `browser_audit`：按 tabId / 命令子串 / sinceSeq 过滤，limit 1–200（默认 50，取最新）。纯本地读 ⇒ **只读档下照常可用**；它自己不给自己上账 |
+| 落盘状态 | 回执带 `journal: {enabled, error?}`：`enabled:false` 表示本次 journal 打不开（默认状态或坏 `stateDir`），账本只在内存里；render 末尾追加 `Journal write: disabled — … this run is memory-only`。降级不再只藏在一行日志里 |
 | 与信任层的关系 | 审计不是安全边界，是事后可查；冻结/锁定/策略的**执行**仍在原处，审计只保证「做过什么有账」 |
 
 ## 会话恢复（`browser_journal`，v1.7.5）
@@ -199,7 +200,7 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | 存哪 | `<stateDir>/journal.jsonl`，一条命令一行 JSON；`stateDir` 默认 `~/.dsh-browser-control`（与 dsh 的启动目录无关），可在 profile 的 browser-bridge 配置里改 |
 | 写什么 | 与 `browser_audit` 同一条目（同一套脱敏：输入值/cookie 值打码、令牌类键打码、URL 查询值与敏感片段打码、错误文本里的 URL 打码、eval 表达式截断、摘要 300 字符）+ `run`（本次插件启动时刻，跨运行分组靠它）。写盘是排队异步追加，**写失败不阻塞命令**，只告警一次 |
 | 上限 | 1000 行，**启动时**裁掉最旧的（运行中纯追加）；坏行（截断/手改坏）读到就跳过，一本账不会因一行烂掉全废 |
-| 查询 | `browser_journal`：按 tabId / 命令子串过滤，limit 1–500（默认 50，取最新），按 run 分组显示；纯本地读 ⇒ 只读档可用 |
+| 查询 | `browser_journal`：按 tabId / 命令子串过滤，limit 1–500（默认 50，取最新），按 run 分组显示；纯本地读 ⇒ 只读档可用。回执同样带 `journal: {enabled, error?}`——false 时看到的是**更早运行**留下的账，本次命令只进了内存 |
 | 与 audit 的分工 | `browser_audit` = **本次运行**的内存账本；`browser_journal` = **跨运行**的磁盘账本。两者内容同源（同一条记录同时进内存与磁盘），查询口径不同 |
 
 ## 多 session 隔离（`browser_sessions`，v1.7.6）
