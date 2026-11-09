@@ -60,5 +60,8 @@ export declare class BridgeError extends Error {
 /**
  * 把任意底层抛出的错误归类成 BridgeError。已经分类过的原样返回，
  * 保证多次包裹不会把 code 洗掉。
+ * @param params - 这次调用的参数。只有 `wait` 需要它：`fn` 是在页面里执行任意 JS，
+ *   超时/掉线时与写命令同档报 `unknown`（谓词跑过就不能断言页面没被动过）；
+ *   不带 `fn` 的 wait 仍是只读。
  */
-export declare function classify(command: string, error: unknown): BridgeError;
+export declare function classify(command: string, error: unknown, params?: Record<string, unknown>): BridgeError;

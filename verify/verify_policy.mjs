@@ -150,6 +150,15 @@ const READ_TOOLS = [
   const cookiesRemove = await call(tools, 'browser_cookies', { action: 'remove', name: 'sid' })
   check('readOnly：cookies.remove 被拒（同上）',
     cookiesRemove.ok === false && cookiesRemove.code === 'blocked_by_policy', `${cookiesRemove.code}`)
+  // wait 白名单是按**命令名**放的；带 fn 的那一种是任意 JS，必须从同一道门缝里堵回去
+  // （专家评审 S2：wait(fn) 同时绕过只读档与 allowScript 两道闸）。
+  const waitFnRo = await call(tools, 'browser_wait', { fn: '() => true', timeoutMs: 100 })
+  check('readOnly：wait(fn) 被拒（白名单按命令名放行是不够的）',
+    waitFnRo.ok === false && waitFnRo.code === 'blocked_by_policy' && /fn/.test(waitFnRo.message ?? ''),
+    `${waitFnRo.code}｜${(waitFnRo.message ?? '').slice(0, 60)}`)
+  const waitSelRo = await call(tools, 'browser_wait', { selector: '#ready', timeoutMs: 100 })
+  check('readOnly：wait(selector) 仍放行（纯查询走到链路）',
+    waitSelRo.ok === false && waitSelRo.code === 'extension_offline', `${waitSelRo.code}`)
   for (const [name, args] of READ_TOOLS) {
     const r = await call(tools, name, args)
     check(`readOnly：${name} 放行（走到链路，报 extension_offline 而不是被拦）`,
@@ -170,6 +179,14 @@ const READ_TOOLS = [
     /browser_read \/ browser_snapshot \/ browser_find/.test(evalRes.message ?? ''))
   const click = await call(tools, 'browser_click', { selector: '#q' })
   check('allowScript:false：点击没有被牵连（走到链路）', click.ok === false && click.code === 'extension_offline', click.code)
+  // wait(fn) 与 eval 同档；wait(selector) 不受牵连（它不执行任意 JS）。
+  const waitFn = await call(tools, 'browser_wait', { fn: '() => true', timeoutMs: 100 })
+  check('allowScript:false：wait(fn) 被拦下并指向 allowScript',
+    waitFn.ok === false && waitFn.code === 'blocked_by_policy' && /allowScript: false/.test(waitFn.message ?? ''),
+    `${waitFn.code}｜${(waitFn.message ?? '').slice(0, 70)}`)
+  const waitSel = await call(tools, 'browser_wait', { selector: '#ready', timeoutMs: 100 })
+  check('allowScript:false：wait(selector) 不被牵连（走到链路）',
+    waitSel.ok === false && waitSel.code === 'extension_offline', `${waitSel.code}`)
   await dispose()
 }
 

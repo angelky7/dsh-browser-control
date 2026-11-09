@@ -21,6 +21,11 @@ export declare const READ_ONLY_ALLOWED: ReadonlySet<string>;
 /**
  * 会执行**任意页面脚本**的扩展命令。这条与只读档分开管，因为用户可能想「可以读、
  * 也可以点，但别在我页面里跑任意 JS」——`browser_evaluate` 能绕开其他所有工具做的事。
+ *
+ * **按命令名判不够**：`wait` 的 `fn` 参数同样是在页面里执行任意 JS（扩展侧用
+ * `(${fn})()` 求出谓词），只按名字看它会从只读白名单和脚本开关两道门缝里同时漏过去。
+ * 所以真正判「是不是脚本」的是下面 `isScriptCall()`：命令名 + 参数一起看，
+ * `wait(selector)` / `wait(text)` 仍按只读处理，`wait({fn})` 与 `eval` 同档。
  */
 export declare const SCRIPT_COMMANDS: ReadonlySet<string>;
 /**

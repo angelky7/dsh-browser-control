@@ -19,7 +19,7 @@ const cases = [
   ["nav", "no browser extension connected — open the browser", "extension_offline", "not_started"],
   ["eval", "Runtime.evaluate failed: cannot access context", "command_failed", "unknown"],
   ["content", "content failed: no such element", "command_failed", "not_started"],
-  ["click", "browser command cancelled: click", "cancelled", "not_started"],
+  ["click", "browser command cancelled before send: click", "cancelled", "not_started"],
   ["tabs.open", "browser-bridge stopped", "link_lost", "unknown"],
   ["click", "浏览器控制未启用 —— 在 profile 的 cordis.patch.yml 里配 enabled: true", "bridge_disabled", "not_started"],
   ["cleanup", "browser-bridge is not configured yet —— 尚未加载配置", "not_configured", "not_started"],
@@ -34,6 +34,26 @@ const cases = [
 for (const [cmd, msg, code, effect] of cases) {
   const e = classify(cmd, new Error(msg));
   check(`classify(${cmd}) → ${code}/${effect}`, e.code === code && e.effectState === effect, `${e.code}/${e.effectState}｜${e.message.slice(0, 46)}`);
+}
+
+// 取消分两段（专家评审 S2）：监听器只可能在 socket.write 之后触发，所以 after-send
+// 的取消对写命令是「结果未知」，不是「什么都没发生」。
+{
+  const afterWrite = classify("click", new Error("browser command cancelled after send: click"));
+  check("写命令 after-send 取消 → cancelled/unknown", afterWrite.code === "cancelled" && afterWrite.effectState === "unknown", `${afterWrite.code}/${afterWrite.effectState}`);
+  const afterRead = classify("screenshot", new Error("browser command cancelled after send: screenshot"));
+  check("读命令 after-send 取消仍是 not_started（无页面副作用）", afterRead.effectState === "not_started", afterRead.effectState);
+  check("after-send 取消的 hint 不再说「不必当作错误处理」", !/不必当作错误处理/.test(afterWrite.hint) && /unknown/.test(afterWrite.hint), afterWrite.hint.slice(0, 60));
+}
+
+// wait(fn) 是任意 JS（专家评审 S2）：超时/取消按写命令同档；wait(selector) 仍只读。
+{
+  const fnTimeout = classify("wait", new Error("browser command timed out after 800ms: wait"), { fn: "() => window.x === 1" });
+  check("wait(fn) 超时 → unknown（谓词跑过就不能断言页面没被动过）", fnTimeout.code === "command_timeout" && fnTimeout.effectState === "unknown", `${fnTimeout.code}/${fnTimeout.effectState}`);
+  const selTimeout = classify("wait", new Error("browser command timed out after 800ms: wait"), { selector: "#ready" });
+  check("wait(selector) 超时仍是 not_started（纯查询）", selTimeout.effectState === "not_started", selTimeout.effectState);
+  const fnCancel = classify("wait", new Error("browser command cancelled after send: wait"), { fn: "() => 1" });
+  check("wait(fn) after-send 取消 → unknown", fnCancel.effectState === "unknown", fnCancel.effectState);
 }
 
 // hint 必须每条都有，且 message 带 [code] 前缀
@@ -99,6 +119,8 @@ check("toJSON() 的 hint 不重复出现在 error 字段里",
   // 不能默默落在 neither 里。
   const classifiedRead = new Set([
     'ping', 'browser.info', 'tabs.list', 'tabs.group', 'tabs.ungroup', // 分组是幂等的：重复归组是空操作
+    // wait 默认只读；但 wait(fn) 的谓词是任意 JS，classify 用 params 把它升到写命令
+    // 同档（超时/取消报 unknown）。命令级登记仍然是「读」，参数级判断在 classify 里。
     'content', 'find', 'snapshot', 'screenshot', 'wait', 'console.log', 'network.log', 'network.clear', 'pdf',
     // archive 与 screenshot/pdf 同类：超时重试最坏多写一份 .mhtml（shotsDir 里的
     // 独立新文件），没有东西被破坏——按「重试会不会造成额外损害」算只读；
