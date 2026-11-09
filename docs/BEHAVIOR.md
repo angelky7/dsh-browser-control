@@ -16,6 +16,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 - 预算耗尽时结果带 `loadPending: true` 与 `pendingUrl`，文案会说「仍在加载」而不是「已显示」，模型不该把没落地的导航当成功；回执 `waitUntil` / `waitedMs` / `readyState` 如实回报（探测失败就不带 readyState——宁可少说也不猜）。
 - `tabs.open` 走**同一份**到达等待器；旧开关 `wait:false` 等价 `waitUntil:'none'`。等待期间 debugger 会附着到该标签（「正受控制」横幅出现）——事件判定的代价，`none` 档不附着。
 - **不保证** SPA 路由或懒渲染内容就绪——导航返回后再用 `browser_wait` 显式等目标元素。实测台：`verify/verify_nav_landing.mjs`（落地诚实性）+ `verify/verify_nav_waituntil.mjs`（分档/事件/回执）。
+- `browser_wait` 的 `fn` 参数是**在页面里执行任意 JS**，因此按脚本调用管：`allowScript:false` 拒，`readOnly:true` 时也拒（只放行 `selector` / `text` 两种纯查询）。失败分类同样按写调用对待：超时/取消报 `effectState=unknown`（谓词可能已经跑过），而不是「重试安全」。扩展侧的轮询条件由 `(fn)()` 求值，函数与裸布尔表达式都接受。
 
 ## 原生弹窗（alert / confirm / prompt）
 
@@ -171,6 +172,9 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 | html5 模式 | 在页面里合成浏览器顺序的事件：dragstart(源) → dragenter/dragover(靶) → drop(靶) → dragend(源)，共用一个 DataTransfer。**drop 只在 dragover 被 preventDefault 时派发**（浏览器规则）；dragstart 被页面取消就整场不拖。回执分别报 `startCancelled` / `overPrevented` / `dropFired` / `dropPrevented`，不装成功。合成事件是 untrusted——页面若检查 `isTrusted` 会忽略，工具描述里写明 |
 | auto | 源元素带 `draggable="true"` → html5，否则 mouse。检测走 CDP `DOM.getAttributes`，不执行页面 JS |
 | 端点 | 选择器（仅顶层文档）或视口坐标；选择器端点先 `DOM.scrollIntoViewIfNeeded` 再 `DOM.getBoxModel` 取中心，全程零页面 JS ⇒ `allowScript:false` 下 mouse 模式照常可用 |
+| 滚动后的坐标 | 目标端点也会 `scrollIntoViewIfNeeded`，可能把源滚出视口。两端都是选择器时，派发前按当前几何**重测**两端（`DOM.getBoxModel` 不滚动）；只要有一端不在 CSS 视口内就拒绝并说明（不盲发一组越界/过期坐标） |
+| 会话 | 省略 `tabId` 时与其它工具一致：用**本会话的工作标签页**（先核验还开着），不是浏览器的活动页；回执里的 `tabId` 是实际落点 |
+| 失败清扫 | `mousePressed` 之后任何一步失败（取消/超时/CDP 报错）都会尽力补发一次 `mouseReleased`（独立信号），页面不会停在「左键按住」状态；原始错误照常抛出 |
 | 分类 | 改页面状态 ⇒ 写命令族；只读档工具级拒绝；hold 中止态经 `cdp` 被拦；html5 需要页面脚本，`allowScript:false` 时给「改用 mouse」的指引 |
 | 缺扩展 | `requireExtensionCommand('cdp','1.7.2')` 预检：老扩展拿到 extension-outdated + 重装指引，绝不裸 unknown command |
 

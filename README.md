@@ -64,8 +64,8 @@ Chrome 扩展（CDP 驱动）
 
 | 文件 | 说明 |
 |---|---|
-| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；**扩展从 v1.7.2 起不再随功能更新**：v1.7.3 没有动扩展，装过 v1.7.2 的不用重装） |
-| [dsh-browser-control-plugin-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/dsh-browser-control-plugin-v1.7.3.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
+| [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) | Chrome 扩展（解压后加载；**扩展从 v1.7.2 起不再随功能更新**：v1.7.3–v1.7.8 都没有动扩展，装过 v1.7.2 的不用重装） |
+| [dsh-browser-control-plugin-v1.7.8.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.8/dsh-browser-control-plugin-v1.7.8.zip) | dsh 插件（离线兜底，在线装直接用方式 A/B） |
 
 ## 安装 Chrome 扩展（30 秒）
 
@@ -104,7 +104,7 @@ npm install @angelky7/dsh-browser-control
 
 ```bash
 # 直接从 GitHub 安装
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.3"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.8"
 
 # 本地目录调试（注意：必须显式 file: 前缀）
 dsh plugin --profile web add "file:D:\path\to\dsh-browser-control"
@@ -195,7 +195,9 @@ config:
 
 被拦的命令**不会发到浏览器**（零副作用），错误码 `blocked_by_policy`，文案写明改哪个字段。
 注意 `readOnly` 单独打开**不等于**拿掉了任意脚本能力：`browser_evaluate` 能做其它工具能做的所有事，
-所以「能不能执行脚本」是单独一项。这两个开关只管模型那条工具面，HTTP 面（带 token）不受影响。
+所以「能不能执行脚本」是单独一项。`browser_wait` 带 `fn` 参数时同样在页面里执行任意 JS，
+因此按脚本调用处理（`allowScript: false` 拒；`readOnly: true` 时也拒——只放行 `selector` / `text` 两种纯查询）。
+这两个开关对工具面与 HTTP `/api/command` 一视同仁：HTTP 面的写命令同样会收到 `blocked_by_policy`（403）。
 
 ### agent 开的标签长什么样（自动归进 DSH 分组）
 

@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.7.8 (2026-11-09)
+
+**这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。外部代码评审交来一份缺陷清单，这一版把其中**插件侧确定性的 6 类问题**全部修掉，并补上评审点名的测试缺口。
+
+- **审计整本丢失（修复）**：`recordAudit` 里写成 `this.journal?.append(this.audit.record(input))`——journal 没开（默认就是关的）时可选链把 `audit.record` 一起短路，`browser_audit` 永远是空账本。改成先记账、再落盘。新台子用「stateDir 指向一个文件」逼 journal 打开失败来钉住它。
+- **`wait(fn)` 双绕过（修复）**：`browser_wait` 的 `fn` 参数在页面里执行任意 JS，但只读白名单和脚本开关都按命令名判，于是它同时从两道门缝里漏过去。闸门改成**按调用判**：`wait({fn})` 与 `eval` 同档（`allowScript:false` 拒、`readOnly:true` 也拒），`wait(selector)` / `wait(text)` 仍是只读。失败分类同样按写调用对待：超时/取消报 `effectState=unknown`（谓词可能已经跑过）。
+- **取消误报（修复）**：取消监听器只可能在 `socket.write` 之后触发（注册到写出之间是同步的），所以 after-send 的取消对写命令报 `cancelled/unknown` 而不是 `not_started`；函数开头那条「cancelled before send」检查保持 `not_started`。hint 同时覆盖两种状态。
+- **拖拽三处（修复）**：①省略 `tabId` 时 drag 自己解析活动页，绕过了 v1.7.6 的会话隔离——改为先问本会话的工作标签页；②目标端点的 `scrollIntoView` 会把源滚走，现在派发前按当前几何**重测两端**，不在同一视口就拒绝（不盲发过期/越界坐标）；③`mousePressed` 之后任何失败都尽力补发一次 `mouseReleased`（独立信号），页面不会停在「左键按住」。
+- **桥接边界（修复）**：WS 分片消息改为**按字节累积、FIN 时一次解码**（旧实现逐片 `toString('utf8')`，跨片的多字节 UTF-8 会碎）；被顶掉的旧连接不能再影响新连接（旧连接迟到的 close 帧过去会关掉新连接）；HTTP 非对象 body（`null` / 数组）回 400，而不是在事件回调里抛未捕获的 TypeError。
+- **HTTP 命令面纳入策略与审计（行为变更）**：`/api/command` 过去直接调 `BridgeServer.execute`，绕开只读档/脚本开关，也不进审计账。现在由插件控制器执行：策略拒绝回 **403 `blocked_by_policy`**（零副作用），每条 HTTP 命令同样进 `browser_audit` / `browser_journal`。只读档下用 curl 发写命令会开始收到 403——这是修复，不是回归。
+- **测试台加固**：新增 `verify_server_hardening.mjs`（11 项，手工 RFC6455 帧驱动）；兼容矩阵补上从来没有探针的 `browser_dialog`，并用恒假谓词钉住「假件不许把 wait 一律演成 true」；`verify_cdp_retry` 的 S5 过去判 `nth===1`，但焐热阶段已经消费掉第 1 次，故障从未注入——现在真的注入并要求恰好重试 2 次后成功。假件的 wait 条件改为在小 vm 里**真求值**（默认空文档）。
+- `npm run verify` 1093 → **1134 项** exit 0。三处变异（恢复可选链短路 / 摘掉 wait(fn) 判定 / 逐片解码）各被不相交断言抓住并当场转红。
+
 ## v1.7.7 (2026-11-04)
 
 **这一版也没有动 `extension/`——纯插件发版**（扩展仍是 v1.7.2）。`browser_snapshot` 支持**分页**——大页面元素多，一条快照塞不进模型预算，现在可以翻页而不是被整段截断。
