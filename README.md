@@ -35,7 +35,7 @@
 
 ### 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/DSH-Browser-Control-v1.7.3.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
+下载 [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.11/DSH-Browser-Control-v1.7.3.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
 
 > 装过 v1.7.2 的不用重装：v1.7.3–v1.7.10 的功能更新都不需要动扩展。
 

@@ -35,7 +35,7 @@ No headless browser, no copying login state around, no MCP — it drives the sig
 
 ### 1. Chrome extension
 
-Download [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/DSH-Browser-Control-v1.7.3.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
+Download [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.11/DSH-Browser-Control-v1.7.3.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
 
 > Already on v1.7.2? No reinstall needed: the feature updates in v1.7.3–v1.7.10 do not touch the extension.
 
