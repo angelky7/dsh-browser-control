@@ -35,7 +35,7 @@
 
 ### 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
+下载 [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/DSH-Browser-Control-v1.7.3.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
 
 > 装过 v1.7.2 的不用重装：v1.7.3–v1.7.10 的功能更新都不需要动扩展。
 
@@ -48,10 +48,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 或从 GitHub tag：
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.10"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.11"
 ```
 
-离线包：[dsh-browser-control-plugin-v1.7.10.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.10/dsh-browser-control-plugin-v1.7.10.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
+离线包：[dsh-browser-control-plugin-v1.7.11.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.11/dsh-browser-control-plugin-v1.7.11.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
 
 装完重启 dsh。桥默认开启，状态页 <http://127.0.0.1:9777/>。刚发布的版本装不上（镜像延迟 / 24 小时包龄闸门）见 [安装排障](docs/INSTALL.md)。
 
@@ -88,7 +88,6 @@ config:
 - 账本：`browser_audit` `browser_journal`
 - 身份：`browser_info`
 
-> `browser_upload` 随下一版插件发布；npm 当前最新 1.7.10 是 29 个工具。
 
 ## 更多文档
 

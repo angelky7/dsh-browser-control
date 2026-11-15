@@ -8,11 +8,11 @@
 
 ## 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.7.2.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.2/DSH-Browser-Control-v1.7.2.zip) → 解压到固定文件夹（别删）→ `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选解压后的文件夹。
+下载 [DSH-Browser-Control-v1.7.3.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.3/DSH-Browser-Control-v1.7.3.zip) → 解压到固定文件夹（别删）→ `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选解压后的文件夹。
 
 工具栏出现鲸鱼图标、绿点呼吸 = 已连接。
 
-> v1.7.2 之后的功能更新（v1.7.3–v1.7.10）都不需要重装扩展；扩展侧的截断/焦点修复会随下一次扩展更新发布。
+> v1.7.3 是扩展更新（焦点/导航探针/emoji 截断），需要重装一次；之后常规功能更新继续只更插件。
 
 ## 2. dsh 插件
 

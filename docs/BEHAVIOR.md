@@ -61,7 +61,7 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 ## 后台标签页节流
 Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务注入在后台标签会显著变慢甚至超时——需要精确计时的注入先 `browser_tabs activate` 切到前台。
 
-## 不抢前台（下一批）
+## 不抢前台（扩展 v1.7.3）
 
 - `click` / `type(mode:"type")` / `press` 不再 `windows.update({focused:true})` + `tabs.update({active:true})`：CDP 输入在后台标签页同样生效，每次交互把 Chrome 拉到最前会打断用户。最小化窗口仍报 `window_minimized`（0×0 视口收不到真实输入），指向 `browser_windows`。
 - `tabs.open` 默认仍**前台**（开标签是显式动作）；传 `active:false` 后台打开。`windows.open` 的 `focused` 默认不变，`focused:false` 可显式后台开窗。
@@ -171,7 +171,7 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 `cordis.patch.yml` 里——模型读得到、也改得动，还能重启桥。把「冻结」放进浏览器、只留一个人工通道，
 才是模型够不到的那一层。
 
-## 文件上传（`browser_upload`，下一批）
+## 文件上传（`browser_upload`，v1.7.11）
 
 把本机文件设到页面的 `input[type=file]` 上，不弹原生文件选择器。这是**唯一能把本机文件内容交给页面**的工具，所以默认关闭。
 

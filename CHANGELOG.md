@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.7.11 (2026-11-09)
+
+**扩展更新一次：v1.7.3**——这是自 v1.7.2 起第一次动扩展，需要重装一次（解压覆盖后点「重新加载」）。焦点、导航探针、emoji 截断三件扩展侧修复都在这一版；之后常规功能更新继续只更插件。插件侧新增第 30 个工具 `browser_upload`。
+
+- **`browser_upload`（#24，纯插件）**：把本机文件设到页面的 `input[type=file]`，走 CDP `DOM.setFileInputFiles`，不弹原生选择器。**默认关闭**：必须配 `allowUpload: true` + `uploadDir`（绝对目录）；只允许该目录内的文件，`..` 穿越与指向目录外的符号链接按 realpath 拒绝；单次最多 20 个；只读档与老扩展（无 cdp）零命令。回执带每个文件的真实字节数。
+- **导航后置探针共享命令死线（#21，扩展侧）**：`location.href` / 错误页正文 / `readyState` 不再各自加 2s；等待耗尽预算时直接跳过探针，`nav` 卡死场景从 4823ms 降到 821ms，`tabs.open` 从 2817ms 降到 807ms，且仍如实报 `loadPending`。
+- **不抢前台（#25，扩展侧）**：`click` / `type(mode:"type")` / `press` 不再 focus 窗口或 activate 标签页；`tabs.close` / `closeMany` / `nav` / `back` / `forward` 在非 `manual` 策略下先清 `window.onbeforeunload` / `onunload`（有上限，卡死页面不会挂住动作）。`tabs.open` 默认仍前台（显式 `active:false` 才后台），`waitUntil:"none"` 仍零 debugger 附着。
+- **扩展侧 UTF-16 截断（#26 余项）**：find/click/DOM 快照/AX 快照的页面截断与浮层正文、网络日志 `postData`、错误页正文都改用 `pageClipWellFormed`，不再产生半个 emoji。
+- **验证**：`npm run verify` **1363 项** exit 0；新增/扩展 `verify_upload`、`verify_nav_headroom`、`verify_silent`；本轮所有修复都做了变异测试（路径白名单 / allowUpload / readOnly / 探针死线 / 焦点 / 清钩子等），各被不相交断言抓住。
+- **兼容**：命令面不变（upload 走已有的 cdp 通道）；插件 x + 扩展 x-n 矩阵继续全绿；插件 1.7.11 配扩展 1.7.2 仍可用，只是没有焦点/探针/截断三项扩展侧修复。
+
 ## v1.7.10 (2026-11-09)
 
 **会话级修复（issue #26）：页面文本截断不再切出半个 emoji。** 半个 emoji（孤立 UTF-16 代理项）经 `JSON.stringify` 变成裸 `\ud83d`，模型的 JSON 解析器会拒收**整个请求体**，坏字符随会话历史每轮重放，`/compact` 也救不回。这一版把插件侧的热修发出来——**装过 v1.7.2 扩展的用户只升级插件即可，不用重装扩展**。
