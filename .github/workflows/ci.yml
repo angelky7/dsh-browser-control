@@ -65,10 +65,14 @@ jobs:
           if [ -n "${GITHUB_TOKEN:-}" ]; then
             auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
           fi
+          # 刚建好的 Release 在 API 的 releases 列表里可能短时间缺少后上传的资产
+          # （v1.7.14 实测：扩展资产可见、插件资产 missing 十余分钟）。加时间戳参数
+          # 绕开 CDN 缓存键；否则「发版后 CI 红」会一直被误判成文档死链。
           fetch() {
             curl -sfL "${auth[@]}" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases?per_page=100"
+              -H "Cache-Control: no-cache" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases?per_page=100&_=$(date +%s)"
           }
           ok=0
           for attempt in 1 2 3; do
