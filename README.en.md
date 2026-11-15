@@ -51,7 +51,7 @@ Or from a GitHub tag:
 dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.13"
 ```
 
-Offline asset: [dsh-browser-control-plugin-v1.7.13.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.12/dsh-browser-control-plugin-v1.7.13.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
+Offline asset: [dsh-browser-control-plugin-v1.7.13.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.13/dsh-browser-control-plugin-v1.7.13.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
 
 Restart dsh afterwards. The bridge is on by default; status page <http://127.0.0.1:9777/>. If a just-published version will not install (mirror lag / 24-hour package-age gate), see [Install troubleshooting](docs/INSTALL.md).
 
