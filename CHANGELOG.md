@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.7.14 (2026-11-15)
+
+**扩展更新一次：v1.7.5**（需要重装）。修 issue #29：同源 iframe 里的点击/输入/查找/快照。
+
+- `browser_click` / `browser_type` / `browser_find` 新增 `frameSelector`，也可以把路径写进 selector：`"iframe#shell >>> textarea"`（可嵌套）。没有 frame 语法时行为与旧版逐字一致——只查顶层文档，不改变既有选择结果。
+- `browser_snapshot` 自动走进所有**可读的同源 iframe**：ref 编号在整个帧树唯一、属性写在元素自己的文档上，拿 ref 去 click/type 不需要再指定 frame；回执行尾标 `(in iframe#shell)`，跨源帧数量如实写 `crossOriginFrames`。
+- 帧内元素的 rect 与鼠标坐标换算到顶层视口（iframe 偏移 / 边框 / 缩放）；命中复核逐层进入 `contentDocument`，顶层 `elementFromPoint` 只看到 iframe 不算被遮挡；自己的接管浮层挡住 iframe 时仍能旁路并标 `bypassedOwnOverlay`。
+- 跨源 iframe 报 `cross-origin iframe: <src> — only same-origin frames can be reached`，不做「静默退回顶层」这种会点错元素的降级；跨源要 Target session，属于 cdp v2。
+- **`browser_type {mode:"type"}` 第一次暴露到工具面**（扩展命令早就支持，插件从没传过）：先聚焦帧内元素，再逐字符发可信 keyDown/keyUp——hterm/xterm 这类只认真实按键的终端用这个；它们的 `value` 可能一直为空（按键被组件消费），不能拿回执的 value 判断没输入。
+- 旧的 1.7.4 及更早扩展收到 frame 调用时，插件在**发命令前**报 `extension-outdated` 并指向 v1.7.5；普通调用零影响（零倒退铁律）。
+- 台子：`verify/verify_frames.mjs` 23 项——自建最小 DOM 让注入表达式真的执行，覆盖帧树遍历、坐标换算、逐帧命中、ref 跨文档解析、浮层旁路、跨源错误与插件版本闸门；5 个变异（忽略 frame 段 / 跳过坐标换算 / ref 只查顶层 / 命中只查顶层 / 摘掉闸门）各被抓。`npm run verify` **1405 项** exit 0。
+
 ## v1.7.13 (2026-11-15)
 
 **扩展更新一次：v1.7.4**（需要重装；插件侧无行为变化）。修 issue #28：`press` / `type` 的标点键值。

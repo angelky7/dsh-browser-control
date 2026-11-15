@@ -6,13 +6,13 @@
 |---|---|
 | `browser_navigate` | 导航到 URL |
 | `browser_read` | 读取页面文本/HTML，正文直接给模型（`offset`/`limit` 窗口，长文分页） |
-| `browser_snapshot` | 页面快照 → 逐条列出 ref 的交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名）；v1.7.7 起支持 `offset` **分页**：页头写明「第几到第几 / 页面总数 / 下一页 offset」，超出扩展 200 条窗口的部分如实说明用 find/read 补齐 |
-| `browser_click` | 点击元素（by ref / selector） |
-| `browser_type` | 在输入框填入文本 |
+| `browser_snapshot` | 页面快照 → 逐条列出 ref 的交互树（`mode:"ax"` 走 Chrome 无障碍树，拿 role + 可访问名）；v1.7.7 起支持 `offset` **分页**：页头写明「第几到第几 / 页面总数 / 下一页 offset」，超出扩展 200 条窗口的部分如实说明用 find/read 补齐；扩展 1.7.5 起自动走进**同源 iframe**，帧内元素标 `(in iframe#shell)`，跨源帧数如实写 `crossOriginFrames` |
+| `browser_click` | 点击元素（by ref / selector）；同源 iframe 用 `frameSelector` 或 `"iframe#shell >>> button"` |
+| `browser_type` | 在输入框填入文本；`mode:"type"` 逐字符发可信按键（终端/编辑器需要）；支持同源 iframe |
 | `browser_press` | 模拟键盘按键（回车、Tab、方向键，以及 "Ctrl+A" / "Shift+ArrowRight" 这类组合键；一次按键只插入一次） |
 | `browser_scroll` | 滚动页面 |
 | `browser_wait` | 等元素出现 / 等文本出现 / 等条件为真（最长 120 秒，v1.0.9+） |
-| `browser_find` | 按 CSS 选择器查元素，返回数量与位置尺寸（只读，v1.0.9+） |
+| `browser_find` | 按 CSS 选择器查元素，返回数量与位置尺寸（只读，v1.0.9+）；支持同源 iframe 的 `frameSelector` / `>>>` |
 | `browser_dialog` | 读改原生弹窗应答策略 accept/dismiss/manual，并回最近弹窗记录（v1.0.9+） |
 | `browser_hold` | 在某个标签页上加/撤一层可取消的接管浮层（告知用户 + 防误触）；`covered:false` 时说明盖不住的原因。软层，不是安全边界 |
 | `browser_cookies` | 读/设/删某标签页可见的 cookie（`action: get/set/remove`；get 带 `domain` 过滤，set/remove 需要 `url` 或 `domain` 锚点，remove 复查并回报 `remaining`）。**cookie 的值是凭据**，get 会把值完整放进模型可见文本——见 SECURITY.md |

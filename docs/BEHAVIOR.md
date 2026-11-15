@@ -28,18 +28,27 @@ Agent 和上层脚本可以依赖的确定性语义。违反这些契约视为 b
 
 ## 输入模式
 
-- `browser_type` 默认 `fill`：直接设值 + input/change 事件。快，但绕过按键级逻辑。
+- `browser_type` 默认 `fill`：直接设值 + input/change 事件。快，但绕过按键级逻辑。v1.7.5 起 `mode:"type"` 是工具参数（此前只有扩展命令支持、工具面从没暴露）。
 - `mode: "type"`：逐字符真实键盘事件（**keyDown 带 `text` + keyUp，不发独立 `char`**）。用于 React 受控组件、带联想状态的搜索框、反爬表单。速度约每字符一次 CDP 往返，长文本慎用。
 - **一次按键只许插入一次。** CDP 里 `keyDown` 带 `text` 时 Chrome 就已经插字符了；再补一个 `char` 事件会变成 `xx`，而 `Enter` 会把表单**提交两次**。`cmdInput` 早就按这条写了注释，`cmdPress` 却漏了同一个 `char` 分支，从 v0.2.0 一路留到 v1.0.15（issue #14，wangyuncai2024 报的，附了三组裸 CDP 对照）。现在两处一致，并由 `verify/verify_press_events.mjs` 按**派发次数**钉住：单字符 press、`Enter`、数字键、`type` 模式逐字符，插入型事件必须恰好一个；对修复前的 `background.js` 跑同一批断言会红 12 项。
 - `browser_press` 现在支持组合键：`key: "Ctrl+A"` / `"Shift+ArrowRight"`，或等价的 `modifiers: ["ctrl"]`。`shift` 单独存在时照常打字，`ctrl`/`meta`/`alt` 抑制插入。
 - **认不出来的键名一律抛错**，不再带着 `undefined` 的 keyCode/code 静默派发（以前 `browser_press {key:"Shift+ArrowRight"}` 在修复前既不报错也不选中文本）。合法清单在报错里给出；组合串里的未知修饰键同样报错。
 - 合成赋值对百度/B站搜索框无效是已知案例（DOM 值正确但组件状态未同步）——这类站点用 `type` 模式。
 
+## 同源 iframe（扩展 v1.7.5，issue #29）
+
+- `browser_click` / `browser_type` / `browser_find` 接受 `frameSelector`，或把路径直接写进 selector：`"iframe#shell >>> textarea"`（`>>>` 可连续嵌套）。没有 frame 语法时行为与旧版完全一致（只查顶层文档），不会因为「页面里恰好有 iframe」改变选择结果。
+- `browser_snapshot` **自动走进所有可读的同源 iframe**：ref 编号在整个帧树里唯一，并写在元素自己所属的文档上；回执行尾标 `(in iframe#shell)`，所以拿 ref 去 click/type 不需要再指定 frame。读不到的跨源帧如实计数（`crossOriginFrames`），不假装读到了。
+- 帧内元素的 `rect` 与鼠标坐标都已换算到**顶层视口**（含 iframe 偏移、边框与缩放）；点击的命中复核也逐层进入 `contentDocument`，顶层 `elementFromPoint` 只看到 iframe 本身不算「被遮挡」。
+- 自己的接管浮层盖在 iframe 上时，click 仍会临时让浮层对指针透明、复核帧内命中，并在回执里标 `bypassedOwnOverlay`。
+- **跨源 iframe 明确报错**（`cross-origin iframe: <src> — only same-origin frames can be reached`）。跨源内容要 `Target.attachToTarget` 的独立 session，属于 CDP 通道 v2，不在本版范围；不做「静默退回顶层」这种会点错元素的降级。
+- **终端/编辑器**：hterm/xterm 这类组件只认真实键盘事件，`fill` 的合成 input 会被忽略。用 `browser_type {mode:"type"}`（v1.7.5 起暴露）：先聚焦帧内元素，再逐字符发可信 keyDown/keyUp；这类组件的 `value` 可能一直是空的（按键被组件消费掉），回执里的 `value` 不能当作「没输入」。
+- 插件对旧扩展有版本闸门：扩展 1.7.4 及更早收到 frame 调用会在**发命令前**报 `extension-outdated` 并指向 1.7.5；不带 frame 的调用零影响（零倒退铁律）。实测台：`verify/verify_frames.mjs`（23 项，含 5 个变异）。
+
 ## evaluate
 
 - 返回值经 CDP `returnByValue` 序列化；不可序列化对象（DOM 节点、函数、代理）返回 `[type: not serializable — …]` 占位串而非空 `{}`。
 - 页面在 Promise 挂起期间跳转 → 结构化错误 `context_destroyed: page navigated while evaluate was pending`，不会耗尽整个超时预算。
-- `frameSelector` 参数支持同源 iframe（contentDocument 穿透）；跨源帧明确报错，不做静默降级。
 
 ## 截图与坐标
 

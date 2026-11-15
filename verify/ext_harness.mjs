@@ -162,6 +162,11 @@ function cdpResult(model, method, params, tabId) {
   switch (method) {
     case "Runtime.evaluate": {
       const expression = String(params?.expression ?? "");
+      // AX 快照开头那次「清 ref + 取 title/url/跨源帧数」的 evaluate 回的是对象；
+      // 不能让它落进下面 `document.title` 的简写分支（那里只回一个字符串）。
+      if (expression.includes("crossOriginFrames: walked.crossOrigin")) {
+        return { result: { value: { title: model.page.title, url: model.page.url, crossOriginFrames: 0 } } };
+      }
       if (expression.includes("document.title")) return { result: { value: model.page.title } };
       if (expression.includes("location.href")) return { result: { value: model.page.url } };
       if (expression.includes("document.readyState")) return { result: { value: model.page.readyState ?? "complete" } };

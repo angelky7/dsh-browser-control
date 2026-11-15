@@ -4,13 +4,13 @@
 |---|---|
 | `browser_navigate` | Navigate to a URL |
 | `browser_read` | Read page text/HTML — the text itself, in an `offset`/`limit` window |
-| `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name) |
-| `browser_click` | Click an element (by ref / selector) |
-| `browser_type` | Type into inputs |
+| `browser_snapshot` | Page snapshot → the ref list itself (`mode:"ax"` reads Chrome's accessibility tree: role + accessible name); extension 1.7.5+ walks **same-origin iframes** and marks items `(in iframe#shell)`, with `crossOriginFrames` reported honestly |
+| `browser_click` | Click an element (by ref / selector); same-origin frames via `frameSelector` or `"iframe#shell >>> button"` |
+| `browser_type` | Type into inputs; `mode:"type"` sends per-character trusted keys (terminals/editors); same-origin frames supported |
 | `browser_press` | Send keyboard keys (Enter, Tab, arrows, and combinations like "Ctrl+A" / "Shift+ArrowRight"; one press inserts exactly once) |
 | `browser_scroll` | Scroll the page |
 | `browser_wait` | Wait for an element / text / page condition (up to 120s, v1.0.9+) |
-| `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+) |
+| `browser_find` | Query elements by CSS selector, returning count and viewport rects (read-only, v1.0.9+); same-origin frames via `frameSelector` / `>>>` |
 | `browser_dialog` | Read or set the native-dialog policy accept/dismiss/manual, plus the recent dialog log (v1.0.9+) |
 | `browser_hold` | Put or remove a cancellable take-over overlay on a tab (tells the user, stops mis-clicks); `covered:false` says why it could not cover the page. A soft layer, not a security boundary |
 | `browser_cookies` | Read/set/remove cookies visible to a tab (`action: get/set/remove`; get takes a `domain` filter, set/remove need a `url` or `domain` anchor, remove re-checks and reports `remaining`). **Cookie values are credentials** — a get puts them fully into the model-visible text; see SECURITY.md |
