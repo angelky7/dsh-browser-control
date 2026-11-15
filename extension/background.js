@@ -2371,17 +2371,21 @@ async function cmdInput(params) {
 			// protocol mangles them to '?'. Route them through insertText which
 			// performs a real composition-style insertion; ASCII keeps full
 			// keyDown/char/keyUp so per-key handlers still fire.
-			if (ch.charCodeAt(0) > 127 || ch.codePointAt(0) > 0xFFFF) {
+			const info = ch.charCodeAt(0) > 127 || ch.codePointAt(0) > 0xFFFF ? undefined : charKeyInfo(ch);
+			if (info === undefined) {
 				await send('Input.insertText', { text: ch });
 				continue;
 			}
 			await send('Input.dispatchKeyEvent', {
-				type: 'keyDown', key: ch, text: ch, unmodifiedText: ch,
-				windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0),
+				type: 'keyDown', key: info.key, code: info.code, text: ch, unmodifiedText: ch,
+				windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode, modifiers: info.modifiers,
 			});
 			// NOTE: no separate 'char' event — Chrome inserts the character from
 			// keyDown's text field; an explicit char event duplicates the input.
-			await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+			await send('Input.dispatchKeyEvent', {
+				type: 'keyUp', key: info.key, code: info.code,
+				windowsVirtualKeyCode: info.keyCode, nativeVirtualKeyCode: info.keyCode, modifiers: info.modifiers,
+			});
 		}
 		// Read back what actually landed in the element.
 		const readBack = await send('Runtime.evaluate', {
@@ -2404,6 +2408,36 @@ const KEY_CODES = {
 	Home: [36, 'Home'], End: [35, 'End'],
 	PageUp: [33, 'PageUp'], PageDown: [34, 'PageDown'],
 };
+/**
+ * 单字符的真实按键身份（issue #28）。不能拿 charCode 当 keyCode：`'.'` 的
+ * charCode 46 在 Windows 虚拟键里是 Delete，`'-'` 45 是 Insert，`','` 44 是
+ * PrintScreen。hterm/xterm 这类按 keyCode 工作的组件会把命令变成别的键。
+ * 表项：[windowsVirtualKeyCode, code, modifiers]；带 Shift 的符号用基础键 + shift 位。
+ */
+const PUNCTUATION_KEYS = {
+	' ': [32, 'Space'],
+	'-': [189, 'Minus'], '=': [187, 'Equal'], '[': [219, 'BracketLeft'], ']': [221, 'BracketRight'],
+	'\\': [220, 'Backslash'], ';': [186, 'Semicolon'], "'": [222, 'Quote'], ',': [188, 'Comma'],
+	'.': [190, 'Period'], '/': [191, 'Slash'], '`': [192, 'Backquote'],
+	'_': [189, 'Minus', 8], '+': [187, 'Equal', 8], '{': [219, 'BracketLeft', 8], '}': [221, 'BracketRight', 8],
+	'|': [220, 'Backslash', 8], ':': [186, 'Semicolon', 8], '"': [222, 'Quote', 8], '<': [188, 'Comma', 8],
+	'>': [190, 'Period', 8], '?': [191, 'Slash', 8], '~': [192, 'Backquote', 8],
+	'!': [49, 'Digit1', 8], '@': [50, 'Digit2', 8], '#': [51, 'Digit3', 8], '$': [52, 'Digit4', 8],
+	'%': [53, 'Digit5', 8], '^': [54, 'Digit6', 8], '&': [55, 'Digit7', 8], '*': [56, 'Digit8', 8],
+	'(': [57, 'Digit9', 8], ')': [48, 'Digit0', 8],
+};
+
+/** 一个可打印 ASCII 字符的按键身份；不认识的返回 undefined（type 模式退回 insertText）。 */
+function charKeyInfo(ch) {
+	if (/^[a-z]$/i.test(ch)) {
+		const upper = ch.toUpperCase();
+		return { key: ch, code: `Key${upper}`, keyCode: upper.charCodeAt(0), modifiers: /^[A-Z]$/.test(ch) ? 8 : 0 };
+	}
+	if (/^[0-9]$/.test(ch)) return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), modifiers: 0 };
+	const entry = PUNCTUATION_KEYS[ch];
+	if (entry !== undefined) return { key: ch, code: entry[1], keyCode: entry[0], modifiers: entry[2] ?? 0 };
+	return undefined;
+}
 const MODIFIER_BITS = { alt: 1, ctrl: 2, control: 2, meta: 4, command: 4, shift: 8 };
 
 /** 把 "Ctrl+A" 这类组合串拆成真正的按键 + 修饰键集合。 */
@@ -2429,12 +2463,11 @@ async function cmdPress(params) {
 	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
 	// Key events need OS focus; a background tab swallows them silently.
 	await assertWindowNotMinimized(tab.id);
-	let keyCode, code;
+	let keyCode, code, autoShift = 0;
 	if (KEY_CODES[key]) { [keyCode, code] = KEY_CODES[key]; }
 	else if (key.length === 1) {
-		keyCode = key.toUpperCase().charCodeAt(0);
-		if (/^[a-z]$/i.test(key)) code = `Key${key.toUpperCase()}`;
-		else if (/^[0-9]$/.test(key)) code = `Digit${key}`;
+		const info = charKeyInfo(key);
+		if (info !== undefined) { keyCode = info.keyCode; code = info.code; autoShift = info.modifiers; }
 	}
 	if (keyCode === undefined) {
 		// 以前这里不报错，照样把 undefined 的 keyCode/code 发出去：Chrome 什么都不做，
@@ -2445,7 +2478,7 @@ async function cmdPress(params) {
 		? String(params.text)
 		: key === 'Enter' ? '\r' // '\r' makes keyDown perform implicit form submission
 		: key.length === 1 && !modifierNames.some((m) => m in MODIFIER_BITS && m !== 'shift') ? key : undefined;
-	let modifiers = 0;
+	let modifiers = autoShift;
 	for (const m of modifierNames) modifiers |= MODIFIER_BITS[String(m).toLowerCase()] ?? 0;
 	return withCDP(tab.id, async (send) => {
 		// NOTE: no separate 'char' event — Chrome inserts the character from

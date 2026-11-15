@@ -89,6 +89,58 @@ const inserting = (events) => events.filter((p) => typeof p.text === "string" &&
     inserting(ev).length === 1 && ev[0].code === "Digit7", JSON.stringify(ev[0]));
 }
 
+// ---- 3b) 标点：charCode 不能当 keyCode（issue #28）----
+{
+  const cases = [
+    [".", 190, "Period", 0],
+    ["-", 189, "Minus", 0],
+    [",", 188, "Comma", 0],
+    ["'", 222, "Quote", 0],
+    [":", 186, "Semicolon", 8],
+    ["?", 191, "Slash", 8],
+    ["_", 189, "Minus", 8],
+    ["+", 187, "Equal", 8],
+  ];
+  for (const [key, vk, code, mods] of cases) {
+    const { model, ctx, tabId } = await boot();
+    await ctx.cmdPress({ key, tabId });
+    const ev = keyEvents(model);
+    check(`press ${JSON.stringify(key)}：keyCode=${vk} / code=${code} / shift=${mods ? "yes" : "no"}`,
+      ev[0]?.windowsVirtualKeyCode === vk && ev[0]?.code === code && (ev[0]?.modifiers & 8) === mods
+      && ev[0]?.key === key && ev[0]?.text === key,
+      JSON.stringify(ev[0]));
+  }
+  const { model, ctx, tabId } = await boot();
+  await ctx.cmdPress({ key: "A", tabId });
+  const ev = keyEvents(model);
+  check("press 'A'：大写字母带 shift 位且 code=KeyA",
+    ev[0]?.windowsVirtualKeyCode === 65 && ev[0]?.code === "KeyA" && (ev[0]?.modifiers & 8) === 8,
+    JSON.stringify(ev[0]));
+}
+
+// ---- 3c) type 模式同一张表：命令里的标点必须是真键 ----
+{
+  const { model, ctx, tabId } = await boot();
+  model.dbg.results["Runtime.evaluate"] = (params, m) => {
+    const expr = String(params?.expression ?? "");
+    if (expr.includes("document.title")) return { result: { value: m.page.title } };
+    if (expr.includes("location.href")) return { result: { value: m.page.url } };
+    return { result: { value: { tag: "input", value: "wc -l x.log" } } };
+  };
+  await ctx.cmdInput({ selector: "#q", value: "wc -l x.log", mode: "type", tabId });
+  const downs = keyEvents(model).filter((e) => e.type === "keyDown");
+  const byKey = Object.fromEntries(downs.map((e) => [e.key, e]));
+  check("type 模式：'-' 是 Minus/189，不是 Insert/45",
+    byKey["-"]?.windowsVirtualKeyCode === 189 && byKey["-"]?.code === "Minus", JSON.stringify(byKey["-"]));
+  check("type 模式：'.' 是 Period/190，不是 Delete/46",
+    byKey["."]?.windowsVirtualKeyCode === 190 && byKey["."]?.code === "Period", JSON.stringify(byKey["."]));
+  check("type 模式：空格带 Space/32",
+    byKey[" "]?.windowsVirtualKeyCode === 32 && byKey[" "]?.code === "Space", JSON.stringify(byKey[" "]));
+  check("type 模式：ASCII 字符仍逐个走 keyDown（不是 insertText）",
+    downs.length === "wc -l x.log".length && !model.dbg.log.some((e) => e.method === "Input.insertText"),
+    `${downs.length} down, insertText=${model.dbg.log.filter((e) => e.method === "Input.insertText").length}`);
+}
+
 // ---- 4) 把已经正确的 cmdInput type 模式钉住（同一个坑的另一半）----
 {
   const { model, ctx, tabId } = await boot();
