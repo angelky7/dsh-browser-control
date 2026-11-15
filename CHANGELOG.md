@@ -1,5 +1,13 @@
 # 更新日志
 
+## v1.7.12 (2026-11-15)
+
+**纯插件发版**（扩展仍是 1.7.3）。修 issue #27：**prompt section 重名不再拖垮整条激活链**。
+
+- 根因：我们和 `dsh-builtin-browser` 都注册全局 `tool:browser`，宿主抛 `prompt section ... already registered`，整个 `browser-bridge` 条目变成 failed——**29/30 个工具一个都没注册**，但 WS 桥和扩展其实都正常，`/api/status` 看起来全绿，极难排查。
+- 修法：section 改名为 `tool:browser-control`；同时把注册包进 try/catch——提示词段落是锦上添花，重名/宿主差异只写一条 `prompt section skipped — …` 的 warning，**工具照常注册**。
+- 新台 `verify_prompt_collision.mjs`（6 项）：模拟 section 抛 already-registered，断言 apply 不抛、30 个工具全在、warning 可诊断；正常路径确认名字是自己的。`npm run verify` 1363 → **1369 项** exit 0。
+
 ## v1.7.11 (2026-11-09)
 
 **扩展更新一次：v1.7.3**——这是自 v1.7.2 起第一次动扩展，需要重装一次（解压覆盖后点「重新加载」）。焦点、导航探针、emoji 截断三件扩展侧修复都在这一版；之后常规功能更新继续只更插件。插件侧新增第 30 个工具 `browser_upload`。

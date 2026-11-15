@@ -878,21 +878,30 @@ async function saveMhtml(
 
 /** Register every `browser_*` tool; each is a thin adapter over one extension command. */
 function applyBrowserTools(ctx: Context, controller: BridgeController): void {
-	ctx.systemPrompt.section({
-		name: 'tool:browser',
-		order: 112,
-		text: 'The browser_* tools drive the user\'s real, logged-in browser through the DSH '
-			+ 'Browser Control extension; they act on the active tab unless a tabId is passed. '
-			+ 'Prefer browser_snapshot first on unfamiliar pages: it numbers interactive elements, '
-			+ 'and browser_click/browser_type accept the returned ref instead of guessing CSS selectors. '
-			+ 'browser_read extracts page text in a window (offset/limit) and reports how much text is '
-			+ 'left, browser_screenshot saves a PNG/JPEG and returns its file '
-			+ 'path (view it with an image tool). Calls fail with actionable copy while the bridge is '
-			+ 'disabled or no browser is connected. When a result is cut to bound token cost it is '
-			+ 'marked "[renderedTruncated omittedChars=N limitChars=L]" — re-issue a narrower query '
-			+ '(smaller limit, a pattern filter, or browser_read\'s offset) instead of assuming the '
-			+ 'page is shorter than it is.',
-	})
+	// 提示词段落是锦上添花，注册失败（例如别的插件已经占了同一个全局名字）
+	// 绝不能拖垮整条激活链——工具注册必须继续（issue #27）。名字也加了前缀，
+	// 避免和 dsh-builtin-browser 的 `tool:browser` 撞车。
+	try {
+		ctx.systemPrompt.section({
+			name: 'tool:browser-control',
+			order: 112,
+			text: 'The browser_* tools drive the user\'s real, logged-in browser through the DSH '
+				+ 'Browser Control extension; they act on the active tab unless a tabId is passed. '
+				+ 'Prefer browser_snapshot first on unfamiliar pages: it numbers interactive elements, '
+				+ 'and browser_click/browser_type accept the returned ref instead of guessing CSS selectors. '
+				+ 'browser_read extracts page text in a window (offset/limit) and reports how much text is '
+				+ 'left, browser_screenshot saves a PNG/JPEG and returns its file '
+				+ 'path (view it with an image tool). Calls fail with actionable copy while the bridge is '
+				+ 'disabled or no browser is connected. When a result is cut to bound token cost it is '
+				+ 'marked "[renderedTruncated omittedChars=N limitChars=L]" — re-issue a narrower query '
+				+ '(smaller limit, a pattern filter, or browser_read\'s offset) instead of assuming the '
+				+ 'page is shorter than it is.',
+		})
+	} catch (error) {
+		;(ctx as Context & { logger?: { warn?: (line: string) => void } }).logger?.warn?.(
+			`browser-bridge: prompt section skipped — ${errorMessage(error)}`,
+		)
+	}
 
 	ctx.tools.register(defineTool({
 		name: 'browser_navigate',
