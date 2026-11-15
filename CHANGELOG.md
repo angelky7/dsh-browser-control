@@ -1,5 +1,14 @@
 # 更新日志
 
+## v1.7.13 (2026-11-15)
+
+**扩展更新一次：v1.7.4**（需要重装；插件侧无行为变化）。修 issue #28：`press` / `type` 的标点键值。
+
+- 根因：单字符直接用 `charCode` 当 `windowsVirtualKeyCode`。标点的 charCode 恰好是另一个虚拟键：`.` 46=Delete、`-` 45=Insert、`,` 44=PrintScreen、`'` 39=ArrowRight；`:` / `?` 这类还需要 Shift。hterm/xterm 按 keyCode 工作，于是 `wc -l server.log` 会变成 `wclserverlog` 甚至删字。
+- 修法：建真实标点表（Period / Comma / Minus / Quote / Slash / Semicolon / Equal / BracketLeft / Backquote / 以及 Shifted 版本），`cmdPress` 与 `browser_type` 的 type 模式共用 `charKeyInfo()`；keyDown/keyUp 都带 `key` / `code` / `keyCode` / Shift。大写字母也补上 Shift。
+- 台子：`verify_press_events` 新增 8 个标点 + `'A'` + 一条含 `-`、`.`、空格的 type 命令；变异（改回 charCode）当场红。
+- `npm run verify` **1382 项** exit 0；兼容矩阵继续全绿。
+
 ## v1.7.12 (2026-11-15)
 
 **纯插件发版**（扩展仍是 1.7.3）。修 issue #27：**prompt section 重名不再拖垮整条激活链**。
