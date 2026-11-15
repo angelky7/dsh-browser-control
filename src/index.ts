@@ -262,8 +262,26 @@ function extensionOutdatedError(have: string | undefined, command: string, since
 	const message = 'extension-outdated: the connected browser extension'
 		+ (have === undefined ? '' : ` (v${have})`)
 		+ ` does not have the "${command}" command this action needs (added in extension v${since}).`
-		+ ' One-time fix: download DSH-Browser-Control.zip from https://github.com/angelky7/dsh-browser-control/releases/latest, unzip, then chrome://extensions → Developer mode → replace the loaded folder (remove the old one first).'
-		+ ' That update makes the extension compatible with all future plugin updates — CDP-level features ship plugin-side from v1.7.2 on.'
+		+ EXTENSION_UPDATE_HINT
+	const error = new Error(message)
+	;(error as Error & { code?: string }).code = 'extension_outdated'
+	return error
+}
+
+/** Shared one-time reinstall pointer for both command- and feature-level gaps. */
+const EXTENSION_UPDATE_HINT = ' One-time fix: download DSH-Browser-Control.zip from https://github.com/angelky7/dsh-browser-control/releases/latest, unzip, then chrome://extensions → Developer mode → replace the loaded folder (remove the old one first).'
+	+ ' That update makes the extension compatible with all future plugin updates — CDP-level features ship plugin-side from v1.7.2 on.'
+
+/**
+ * Same contract as {@link extensionOutdatedError}, for capabilities that are
+ * parameters rather than new commands (frame-aware selectors, v1.7.5). There is
+ * no capability token to check, so the reported extension version is the gate.
+ */
+function extensionOutdatedFeature(have: string | undefined, feature: string, since: string): Error {
+	const message = 'extension-outdated: the connected browser extension'
+		+ (have === undefined ? '' : ` (v${have})`)
+		+ ` does not support ${feature} (added in extension v${since}).`
+		+ EXTENSION_UPDATE_HINT
 	const error = new Error(message)
 	;(error as Error & { code?: string }).code = 'extension_outdated'
 	return error
@@ -382,6 +400,27 @@ class BridgeController {
 	}
 
 	/**
+	 * Frame-aware selectors are parameter-level (v1.7.5), so there is no new
+	 * command to probe. Gate them on the reported extension version: an old
+	 * extension would ignore `frameSelector` and report "element not found",
+	 * which reads like a page problem instead of an upgrade.
+	 */
+	requireFrameSupport(): void {
+		const version = this.extensionVersion()
+		if (version === undefined || version === 'unknown' || compareVersions(version, '1.7.5') >= 0) return
+		this.recordAudit({
+			command: 'frames',
+			params: '',
+			ok: false,
+			code: 'extension_outdated',
+			effectState: 'not_started',
+			error: `connected extension v${version} lacks same-origin frame selectors (added in 1.7.5)`,
+			durationMs: 0,
+		})
+		throw extensionOutdatedFeature(version, 'same-origin frame selectors', '1.7.5')
+	}
+
+	/**
 	 * Converge the live server onto `config`. With `throwOnError`, an initial
 	 * start failure rejects (fail-loud activation); later changes record the
 	 * failure instead, so a bad port cannot tear down an otherwise running session.
@@ -470,6 +509,9 @@ class BridgeController {
 		const tabId = typeof resolved.tabId === 'number' ? resolved.tabId : undefined
 		try {
 			this.policyGate(command, resolved)
+			if ((command === 'click' || command === 'input' || command === 'find') && usesFrameTarget(resolved)) {
+				this.requireFrameSupport()
+			}
 			const server = this.server
 			if (server === undefined) {
 				throw classify(command, new Error(
@@ -725,8 +767,13 @@ function targetSelector(args: { selector?: string; ref?: string }): string {
 	return args.selector!
 }
 
-function requireTabId(args: { tabId?: number }, action: string): number {
-	if (typeof args.tabId !== 'number') throw new Error(`${action} requires tabId`)
+/** Whether a click/type/find call targets an element inside a same-origin frame. */
+function usesFrameTarget(args: { selector?: unknown; frameSelector?: unknown }): boolean {
+	return (typeof args.frameSelector === 'string' && args.frameSelector.length > 0)
+		|| (typeof args.selector === 'string' && args.selector.includes('>>>'))
+}
+
+function requireTabId(args: { tabId?: number }, action: string): number {	if (typeof args.tabId !== 'number') throw new Error(`${action} requires tabId`)
 	return args.tabId
 }
 
@@ -1078,6 +1125,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					returned: { type: 'number' },
 					nextOffset: { type: 'number' },
 					hasMore: { type: 'boolean', required: true },
+					crossOriginFrames: { type: 'number' },
 					items: {
 						type: 'array',
 						required: true,
@@ -1090,6 +1138,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 								role: { type: 'string' },
 								name: { type: 'string' },
 								href: { type: 'string' },
+								frame: { type: 'string' },
 							},
 						},
 					},
@@ -1105,13 +1154,17 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					? ` (this extension returns at most ${value.returned}-item windows — use browser_find/browser_read to reach the rest)`
 					: ''
 				const next = value.nextOffset === undefined ? '' : `; next page: offset ${value.nextOffset}`
-				const head = `${range}${capped}${next}`
+				const frameNote = value.crossOriginFrames === undefined
+					? ''
+					: `; ${value.crossOriginFrames} cross-origin frame(s) not readable (same-origin only)`
+				const head = `${range}${capped}${next}${frameNote}`
 					+ ` (mode ${value.mode ?? 'dom'}); click or fill them by ref:`
 					+ (value.axFallback === undefined ? '' : `\n(mode ax fell back to dom: ${value.axFallback})`)
 				const lines = value.items.map(item => {
 					const name = item.name === undefined ? '' : ` "${flattenOneLine(item.name, 80)}"`
 					const href = item.href === undefined ? '' : ` -> ${flattenOneLine(item.href, 100)}`
-					return `[${item.ref}] ${item.role ?? item.tag}${name}${href}`
+					const frame = item.frame === undefined ? '' : ` (in ${flattenOneLine(item.frame, 120)})`
+					return `[${item.ref}] ${item.role ?? item.tag}${name}${href}${frame}`
 				})
 				return [{ type: 'text', text: clampRendered([head, ...lines].join('\n'), SNAPSHOT_RENDER_MAX_CHARS) }]
 			},
@@ -1134,7 +1187,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				axFallback?: string
 				ax?: unknown
 				total?: unknown
-				items?: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
+				crossOriginFrames?: unknown
+				items?: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string; frame?: string }>
 			}
 			// 版本错位必须说出来：v1.0.10 及更早的扩展没有 AX 快照（1.0.11 才加的），
 			// 它会照单收下 mode:"ax" 然后回一份 DOM 结果，既不带 mode 也不带 axFallback
@@ -1154,6 +1208,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const total = reportedTotal === undefined ? undefined : Math.max(returned, reportedTotal)
 			const page = window.slice(offset, offset + limit)
 			const hasMore = offset + page.length < returned
+			const crossOriginFrames = typeof raw.crossOriginFrames === 'number' && raw.crossOriginFrames > 0
+				? Math.trunc(raw.crossOriginFrames)
+				: undefined
 			const receipt: {
 				tabId: number
 				title: string
@@ -1165,7 +1222,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				returned: number
 				nextOffset?: number
 				hasMore: boolean
-				items: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string }>
+				crossOriginFrames?: number
+				items: Array<{ ref: string; tag: string; role?: string; name?: string; href?: string; frame?: string }>
 			} = {
 				tabId: raw.tabId,
 				title: raw.title ?? '',
@@ -1176,6 +1234,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 				...(total === undefined ? {} : { total }),
 				returned,
 				hasMore,
+				...(crossOriginFrames === undefined ? {} : { crossOriginFrames }),
 				...(hasMore ? { nextOffset: offset + page.length } : {}),
 				items: page.map(item => ({
 					ref: item.ref,
@@ -1183,6 +1242,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					...(item.role === undefined ? {} : { role: item.role }),
 					...(item.name === undefined ? {} : { name: item.name }),
 					...(item.href === undefined ? {} : { href: item.href }),
+					...(item.frame === undefined ? {} : { frame: item.frame }),
 				})),
 			}
 			return receipt
@@ -1194,7 +1254,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		description: 'Click a page element with real mouse events; target it by snapshot ref or CSS selector.',
 		parameters: {
 			ref: { type: 'string', description: 'Element ref from browser_snapshot (e.g. "e3"); wins over selector.' },
-			selector: { type: 'string', description: 'CSS selector; ignored when ref is given.' },
+			selector: { type: 'string', description: 'CSS selector; ignored when ref is given. Same-origin frames: either "iframe#shell >>> textarea" or pair this with frameSelector.' },
+			frameSelector: { type: 'string', description: 'CSS selector of a same-origin iframe to resolve `selector` inside; chain nested frames with ">>>". Ignored when ref is given (refs already know their frame). Cross-origin frames are not supported.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			doubleClick: { type: 'boolean', description: 'Send a double click instead.' },
 		},
@@ -1207,6 +1268,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { selector: targetSelector(args) }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			if (args.doubleClick !== undefined) params.doubleClick = args.doubleClick
+			if (args.ref === undefined && typeof args.frameSelector === 'string' && args.frameSelector.length > 0) {
+				params.frameSelector = args.frameSelector
+			}
 			return await controller.execute('click', params, exec.signal) as Record<string, JsonValue>
 		},
 	}))
@@ -1217,9 +1281,11 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		parameters: {
 			value: { type: 'string', required: true, description: 'Text to put into the element.' },
 			ref: { type: 'string', description: 'Element ref from browser_snapshot; wins over selector.' },
-			selector: { type: 'string', description: 'CSS selector; ignored when ref is given.' },
+			selector: { type: 'string', description: 'CSS selector; ignored when ref is given. Same-origin frames: either "iframe#shell >>> textarea" or pair this with frameSelector.' },
+			frameSelector: { type: 'string', description: 'CSS selector of a same-origin iframe to resolve `selector` inside; chain nested frames with ">>>". Ignored when ref is given. Cross-origin frames are not supported.' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 			submit: { type: 'boolean', description: 'Press Enter after filling.' },
+			mode: { type: 'string', enum: ['fill', 'type'], description: '"fill" (default) sets the value directly and fires input/change — right for normal forms. "type" focuses the element and sends per-character trusted key events, which terminals (hterm/xterm) and keydown-only editors require; their value may stay empty because the widget consumes keys instead of storing text.' },
 		},
 		output: {
 			schema: { type: 'object', additionalProperties: true },
@@ -1229,6 +1295,10 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = { selector: targetSelector(args), value: args.value }
 			if (args.tabId !== undefined) params.tabId = args.tabId
+			if (args.ref === undefined && typeof args.frameSelector === 'string' && args.frameSelector.length > 0) {
+				params.frameSelector = args.frameSelector
+			}
+			if (args.mode === 'type') params.mode = 'type'
 			const filled = await controller.execute('input', params, exec.signal) as Record<string, JsonValue>
 			if (args.submit === true) {
 				await controller.execute('press', args.tabId === undefined ? { key: 'Enter' } : { key: 'Enter', tabId: args.tabId }, exec.signal)
@@ -1312,7 +1382,8 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		name: 'browser_find',
 		description: 'Describe the elements matching a CSS selector — count, tag, id, class, text, href and viewport rect. Read-only; use it to decide what to click and to verify the page state.',
 		parameters: {
-			selector: { type: 'string', required: true, description: 'CSS selector to query.' },
+			selector: { type: 'string', required: true, description: 'CSS selector to query. Same-origin frames: either "iframe#shell >>> textarea" or pair this with frameSelector.' },
+			frameSelector: { type: 'string', description: 'CSS selector of a same-origin iframe to resolve `selector` inside; chain nested frames with ">>>". Cross-origin frames are not supported.' },
 			limit: { type: 'number', description: 'Maximum items to describe; defaults to 10, capped at 50 (count is always the full total).' },
 			tabId: { type: 'number', description: 'Target tab; defaults to the active tab.' },
 		},
@@ -1325,6 +1396,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { selector: args.selector }
 			if (args.limit !== undefined) params.limit = args.limit
 			if (args.tabId !== undefined) params.tabId = args.tabId
+			if (typeof args.frameSelector === 'string' && args.frameSelector.length > 0) params.frameSelector = args.frameSelector
 			return await controller.execute('find', params, exec.signal) as Record<string, JsonValue>
 		},
 	}))

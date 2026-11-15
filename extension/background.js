@@ -2192,64 +2192,92 @@ async function cmdFind(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	const limit = Math.max(1, Math.min(50, Number(params.limit) || 10));
 	const tab = await resolveTab(params.tabId);
+	const frameSelector = typeof params.frameSelector === 'string' ? params.frameSelector : '';
 	const payload = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
 		expression: `(() => {
+			const H = (${pageFrameHelpers.toString()})();
 			const clip = ${CLIP_FN_SOURCE};
-			const els = [...document.querySelectorAll(${JSON.stringify(String(params.selector))})]
+			const spec = H.parseSpec(${JSON.stringify(String(params.selector))}, ${JSON.stringify(frameSelector)});
+			if (!spec.target) return JSON.stringify({ __frameError: { error: 'target_not_found', detail: ${JSON.stringify(String(params.selector))} } });
+			let doc = document;
+			let path = [];
+			if (spec.segs.length > 0) {
+				const frame = H.resolveFrameDoc(document, spec.segs, 0, []);
+				if (frame.error) return JSON.stringify({ __frameError: frame });
+				doc = frame.doc;
+				path = frame.path;
+			}
+			const els = [...doc.querySelectorAll(spec.target)]
 				.filter((el) => !(${pageIsHoldNode.toString()})(el));
+			const frame = path.length > 0 ? path.join(' >>> ') : undefined;
 			return JSON.stringify({
 				count: els.length,
+				...(frame === undefined ? {} : { frame }),
 				items: els.slice(0, ${limit}).map((el) => {
-					const r = el.getBoundingClientRect();
+					const r = H.topRect(el);
 					return {
 						tag: el.tagName.toLowerCase(), id: el.id || undefined,
 						class: clip(String(el.className || ''), 120) || undefined,
 						text: clip((el.textContent || '').trim().replace(/\\s+/g, ' '), 160) || undefined,
-						href: el instanceof Element && el.hasAttribute('href') ? el.getAttribute('href') : undefined,
-						rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+						href: el.hasAttribute && el.hasAttribute('href') ? el.getAttribute('href') : undefined,
+						rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) },
+						...(frame === undefined ? {} : { frame }),
 					};
 				}),
 			});
 		})()`,
 		awaitPromise: false, returnByValue: true, userGesture: true,
-	}).then((res) => JSON.parse(res.result.value)));
+	}).then((res) => {
+		if (res.exceptionDetails) throw new Error(res.exceptionDetails.text);
+		const parsed = JSON.parse(res.result.value);
+		if (parsed.__frameError) throwFrameError(parsed.__frameError);
+		return parsed;
+	}));
 	return { tabId: tab.id, selector: params.selector, ...payload };
 }
 
 async function cmdClick(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	const tab = await resolveTab(params.tabId);
+	const frameSelector = typeof params.frameSelector === 'string' ? params.frameSelector : '';
 	// Mouse events land on whatever is under the viewport coordinates of the
 	// focused tab; ensure our tab is frontmost so coordinates are meaningful.
 	await assertWindowNotMinimized(tab.id);
 	return withCDP(tab.id, async (send) => {
 		const hit = await send('Runtime.evaluate', {
 			expression: `(() => {
+				const H = (${pageFrameHelpers.toString()})();
 				const clip = ${CLIP_FN_SOURCE};
-				const el = document.querySelector(${JSON.stringify(String(params.selector))});
-				if (!el) return null;
-				el.scrollIntoView({ block: 'center', inline: 'center' });
-				const r = el.getBoundingClientRect();
-				// elementFromPoint at the intended hit point catches overlays
-				// (sticky headers, ads) that would swallow the click.
-				const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-				const topEl = document.elementFromPoint(x, y);
-				let isTop = topEl === el || el.contains(topEl);
+				const found = H.resolveTarget(${JSON.stringify(String(params.selector))}, ${JSON.stringify(frameSelector)});
+				if (found.error) return { __frameError: found };
+				const el = found.el;
+				H.scrollIntoViewDeep(el);
+				const r = H.topRect(el);
+				// elementFromPoint cannot see through a frame, so verification walks
+				// the same-origin frame chain document by document and reports the
+				// document that actually owns the hit point.
+				const x = Math.round(r.x + r.w / 2), y = Math.round(r.y + r.h / 2);
+				let deep = H.deepHit(x, y, el);
+				const owns = (d) => !!d && !!d.hit && (d.hit === el || (el.contains && el.contains(d.hit)));
+				let isTop = owns(deep) && !deep.blocked;
 				// 盖住命中的如果是我们自己的接管浮层，那不是「页面挡住了目标」——它存在的
 				// 意义是不让**人**误触，不该把模型自己的点击吃掉（否则浮层一挂，click 就全废，
 				// 而且同一坐标连点两下会被浮层当成双击、以用户的名义把浮层关掉）。
 				// 做法：临时让宿主对指针透明、重测一次命中点，派发完再恢复（见下面的 finally）。
-				const ownOverlay = !isTop && topEl && topEl.closest ? topEl.closest('[data-dsh-hold]') : null;
 				let bypassedOwnOverlay = false;
-				if (ownOverlay) {
-					ownOverlay.style.pointerEvents = 'none';
-					bypassedOwnOverlay = true;
-					const clear = document.elementFromPoint(x, y);
-					isTop = clear === el || el.contains(clear);
+				if (deep.blocked && deep.blocked.closest) {
+					const ownOverlay = deep.blocked.closest('[data-dsh-hold]');
+					if (ownOverlay) {
+						ownOverlay.style.pointerEvents = 'none';
+						bypassedOwnOverlay = true;
+						deep = H.deepHit(x, y, el);
+						isTop = owns(deep) && !deep.blocked;
+					}
 				}
-				const after = bypassedOwnOverlay ? document.elementFromPoint(x, y) : topEl;
+				const hitEl = deep.blocked || deep.hit;
 				return { x, y, tag: el.tagName.toLowerCase(), text: clip((el.textContent || '').trim(), 120),
-					hitTag: after ? after.tagName.toLowerCase() : null, isTop, bypassedOwnOverlay };
+					hitTag: hitEl ? hitEl.tagName.toLowerCase() : null, isTop, bypassedOwnOverlay,
+					frame: H.framePathOf(el) || undefined };
 			})()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
 		}).then((res) => {
@@ -2257,6 +2285,7 @@ async function cmdClick(params) {
 			return res.result.value;
 		});
 		if (!hit) throw new Error(`element not found: ${params.selector}`);
+		if (hit.__frameError) throwFrameError(hit.__frameError);
 		const clickCount = params.doubleClick ? 2 : 1;
 		try {
 			await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: hit.x, y: hit.y });
@@ -2273,7 +2302,10 @@ async function cmdClick(params) {
 		}
 		return {
 			tabId: tab.id,
-			clicked: { x: hit.x, y: hit.y, tag: hit.tag, text: hit.text },
+			clicked: {
+				x: hit.x, y: hit.y, tag: hit.tag, text: hit.text,
+				...(hit.frame === undefined ? {} : { frame: hit.frame }),
+			},
 			hitVerified: hit.isTop,
 			...(hit.isTop ? {} : { hitInstead: hit.hitTag }),
 			...(hit.bypassedOwnOverlay ? { bypassedOwnOverlay: true } : {}),
@@ -2295,27 +2327,32 @@ async function cmdInput(params) {
 	if (mode === 'type') await assertWindowNotMinimized(tab.id);
 
 	// Locate + focus + clear in one evaluate, shared by both modes.
+	const frameSelector = typeof params.frameSelector === 'string' ? params.frameSelector : '';
 	const located = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
 		expression: `(() => {
-			const el = document.querySelector(${JSON.stringify(String(params.selector))});
-			if (!el) return null;
-			el.scrollIntoView({ block: 'center', inline: 'center' });
+			const H = (${pageFrameHelpers.toString()})();
+			const found = H.resolveTarget(${JSON.stringify(String(params.selector))}, ${JSON.stringify(frameSelector)});
+			if (found.error) return { __frameError: found };
+			const el = found.el;
+			H.scrollIntoViewDeep(el);
 			el.focus();
+			const win = el.ownerDocument && el.ownerDocument.defaultView;
+			const isInput = !!(win && win.HTMLInputElement && el instanceof win.HTMLInputElement);
+			const isTextArea = !!(win && win.HTMLTextAreaElement && el instanceof win.HTMLTextAreaElement);
+			const isSelect = !!(win && win.HTMLSelectElement && el instanceof win.HTMLSelectElement);
 			let tag = el.tagName.toLowerCase();
-			let cleared = '';
-			if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-				const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+			if (isInput || isTextArea) {
+				const proto = isTextArea ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
 				Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, '');
-				el.dispatchEvent(new Event('input', { bubbles: true }));
+				el.dispatchEvent(new (win.Event)('input', { bubbles: true }));
 				tag = tag + '[' + (el.getAttribute('type') || 'text') + ']';
-				cleared = '';
 			} else if (el.isContentEditable) {
 				el.textContent = '';
-				el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-			} else if (el instanceof HTMLSelectElement) {
+				el.dispatchEvent(new (win.InputEvent)('input', { bubbles: true }));
+			} else if (isSelect) {
 				tag = 'select';
 			}
-			return { tag };
+			return { tag, frame: H.framePathOf(el) || undefined };
 		})()`,
 		awaitPromise: false, returnByValue: true, userGesture: true,
 	}).then((res) => {
@@ -2323,35 +2360,44 @@ async function cmdInput(params) {
 		return res.result.value;
 	}));
 	if (!located) throw new Error(`element not found: ${params.selector}`);
+	if (located.__frameError) throwFrameError(located.__frameError);
 
 	if (mode === 'fill') {
 		const result = await withCDP(tab.id, (send) => send('Runtime.evaluate', {
 			expression: `(() => {
-				const el = document.querySelector(${JSON.stringify(String(params.selector))});
+				const H = (${pageFrameHelpers.toString()})();
+				const found = H.resolveTarget(${JSON.stringify(String(params.selector))}, ${JSON.stringify(frameSelector)});
+				if (found.error) return { __frameError: found };
+				const el = found.el;
 				const value = ${JSON.stringify(String(params.value))};
-				if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-					const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+				const win = el.ownerDocument && el.ownerDocument.defaultView;
+				const isInput = !!(win && win.HTMLInputElement && el instanceof win.HTMLInputElement);
+				const isTextArea = !!(win && win.HTMLTextAreaElement && el instanceof win.HTMLTextAreaElement);
+				const isSelect = !!(win && win.HTMLSelectElement && el instanceof win.HTMLSelectElement);
+				if (isInput || isTextArea) {
+					const proto = isTextArea ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
 					Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
-					el.dispatchEvent(new Event('input', { bubbles: true }));
-					el.dispatchEvent(new Event('change', { bubbles: true }));
+					el.dispatchEvent(new (win.Event)('input', { bubbles: true }));
+					el.dispatchEvent(new (win.Event)('change', { bubbles: true }));
 				} else if (el.isContentEditable) {
 					el.textContent = value;
-					el.dispatchEvent(new InputEvent('input', { bubbles: true }));
-				} else if (el instanceof HTMLSelectElement) {
+					el.dispatchEvent(new (win.InputEvent)('input', { bubbles: true }));
+				} else if (isSelect) {
 					el.value = value;
-					el.dispatchEvent(new Event('change', { bubbles: true }));
+					el.dispatchEvent(new (win.Event)('change', { bubbles: true }));
 				} else {
 					el.textContent = value;
-					el.dispatchEvent(new Event('input', { bubbles: true }));
-					el.dispatchEvent(new Event('change', { bubbles: true }));
+					el.dispatchEvent(new (win.Event)('input', { bubbles: true }));
+					el.dispatchEvent(new (win.Event)('change', { bubbles: true }));
 				}
-				return { tag: el.tagName.toLowerCase(), value: String(el.value ?? el.textContent ?? '') };
+				return { tag: el.tagName.toLowerCase(), value: String(el.value ?? el.textContent ?? ''), frame: H.framePathOf(el) || undefined };
 			})()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
 		}).then((res) => {
 			if (res.exceptionDetails) throw new Error(res.exceptionDetails.text);
 			return res.result.value;
 		}));
+		if (result && result.__frameError) throwFrameError(result.__frameError);
 		return { tabId: tab.id, mode, filled: result };
 	}
 
@@ -2390,12 +2436,15 @@ async function cmdInput(params) {
 		// Read back what actually landed in the element.
 		const readBack = await send('Runtime.evaluate', {
 			expression: `(() => {
-				const el = document.querySelector(${JSON.stringify(String(params.selector))});
-				if (!el) return null;
-				return { tag: el.tagName.toLowerCase(), value: String(el.value ?? el.textContent ?? '') };
+				const H = (${pageFrameHelpers.toString()})();
+				const found = H.resolveTarget(${JSON.stringify(String(params.selector))}, ${JSON.stringify(frameSelector)});
+				if (found.error) return { __frameError: found };
+				const el = found.el;
+				return { tag: el.tagName.toLowerCase(), value: String(el.value ?? el.textContent ?? ''), frame: H.framePathOf(el) || undefined };
 			})()`,
 			awaitPromise: false, returnByValue: true, userGesture: true,
 		}).then((res) => res.result.value);
+		if (readBack && readBack.__frameError) throwFrameError(readBack.__frameError);
 		return { tabId: tab.id, mode, filled: readBack };
 	});
 }
@@ -2563,36 +2612,239 @@ const CONTEXT_DESTROYED_RE = /Execution context was destroyed|Cannot find defaul
 const SNAPSHOT_SELECTOR = 'a[href], button, input, select, textarea, [role="button"], [role="link"], '
 	+ '[role="tab"], [role="checkbox"], [role="radio"], [contenteditable="true"], [onclick]';
 
-/** DOM mode: stamp `data-dsh-ref` on everything matching the selector list. */
+/**
+ * Page-side helpers for same-origin frames, stringified into every expression
+ * that may touch an iframe. Frame access is deliberately limited to documents
+ * the page itself can read: a cross-origin `contentDocument` is null (and
+ * `contentWindow.document` throws), so those come back as a structured
+ * `frame_cross_origin` instead of a silent miss. They need the newer Target
+ * session plumbing (cdp v2), not another selector.
+ *
+ * `>>>` chains frame selectors: `iframe#shell >>> iframe.editor >>> textarea`
+ * walks each `contentDocument` in turn. A ref from a snapshot is stamped with
+ * `data-dsh-ref` inside whichever document holds the element, so ref lookups
+ * search all readable documents top-down; refs stay globally unique because
+ * snapshots number them across the whole frame tree.
+ */
+function pageFrameHelpers() {
+	const MAX_DEPTH = 8;
+	const docOf = (frameEl) => {
+		try {
+			const doc = frameEl.contentDocument || (frameEl.contentWindow && frameEl.contentWindow.document) || null;
+			return doc && doc.documentElement ? doc : null;
+		} catch {
+			return null;
+		}
+	};
+	const frameLabel = (frameEl) => {
+		const tag = frameEl.tagName ? frameEl.tagName.toLowerCase() : 'iframe';
+		if (frameEl.id) return tag + '#' + frameEl.id;
+		const name = frameEl.getAttribute ? frameEl.getAttribute('name') : '';
+		if (name) return tag + '[name="' + name + '"]';
+		const src = frameEl.getAttribute ? frameEl.getAttribute('src') : '';
+		if (src) return tag + '[src="' + String(src).slice(0, 80) + '"]';
+		return tag;
+	};
+	const framesIn = (doc) => Array.from(doc.querySelectorAll('iframe, frame'));
+	const walkDocs = (doc) => {
+		const docs = [];
+		let crossOrigin = 0;
+		const visit = (current, path, depth) => {
+			docs.push({ doc: current, path });
+			if (depth >= MAX_DEPTH) return;
+			for (const frameEl of framesIn(current)) {
+				const inner = docOf(frameEl);
+				if (!inner) { crossOrigin += 1; continue; }
+				visit(inner, path.concat(frameLabel(frameEl)), depth + 1);
+			}
+		};
+		visit(doc, [], 0);
+		return { docs, crossOrigin };
+	};
+	const findInFrames = (doc, selector, depth) => {
+		const hit = doc.querySelector(selector);
+		if (hit) return { el: hit, path: [] };
+		if (depth >= MAX_DEPTH) return null;
+		for (const frameEl of framesIn(doc)) {
+			const inner = docOf(frameEl);
+			if (!inner) continue;
+			const found = findInFrames(inner, selector, depth + 1);
+			if (found) return { el: found.el, path: [frameLabel(frameEl)].concat(found.path) };
+		}
+		return null;
+	};
+	const resolveFrameDoc = (doc, segments, index, path) => {
+		if (index >= segments.length) return { doc, path };
+		const frameEl = doc.querySelector(segments[index]);
+		if (!frameEl) return { error: 'frame_not_found', detail: segments[index], path: path.join(' >>> ') };
+		const inner = docOf(frameEl);
+		if (!inner) {
+			const src = frameEl.getAttribute ? frameEl.getAttribute('src') : '';
+			return { error: 'frame_cross_origin', detail: String(src || segments[index]), path: path.concat(segments[index]).join(' >>> ') };
+		}
+		return resolveFrameDoc(inner, segments, index + 1, path.concat(segments[index]));
+	};
+	const parseSpec = (selector, frameSelector) => {
+		let target = String(selector);
+		let segs = [];
+		if (target.includes('>>>')) {
+			const parts = target.split('>>>').map((s) => s.trim()).filter(Boolean);
+			target = parts.pop() || '';
+			segs = parts;
+		} else if (frameSelector) {
+			segs = String(frameSelector).split('>>>').map((s) => s.trim()).filter(Boolean);
+		}
+		return { target, segs };
+	};
+	const resolveTarget = (selector, frameSelector) => {
+		const { target, segs } = parseSpec(selector, frameSelector);
+		if (!target) return { error: 'target_not_found', detail: String(selector) };
+		if (segs.length > 0) {
+			const frame = resolveFrameDoc(document, segs, 0, []);
+			if (frame.error) return frame;
+			const el = frame.doc.querySelector(target);
+			return el
+				? { el, doc: frame.doc, path: segs }
+				: { error: 'target_not_found', detail: target, path: segs.join(' >>> ') };
+		}
+		if (/^\[data-dsh-ref="[^"]+"\]$/.test(target)) {
+			const found = findInFrames(document, target, 0);
+			if (found) return { el: found.el, doc: found.el.ownerDocument, path: found.path };
+		}
+		const el = document.querySelector(target);
+		return el ? { el, doc: document, path: [] } : { error: 'target_not_found', detail: target };
+	};
+	const framePathOf = (el) => {
+		const path = [];
+		let win = el.ownerDocument && el.ownerDocument.defaultView;
+		while (win && win.frameElement) {
+			path.unshift(frameLabel(win.frameElement));
+			win = win.frameElement.ownerDocument && win.frameElement.ownerDocument.defaultView;
+		}
+		return path.join(' >>> ');
+	};
+	const scrollIntoViewDeep = (el) => {
+		if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+		let win = el.ownerDocument && el.ownerDocument.defaultView;
+		while (win && win.frameElement) {
+			const frameEl = win.frameElement;
+			if (frameEl.scrollIntoView) frameEl.scrollIntoView({ block: 'center', inline: 'center' });
+			win = frameEl.ownerDocument && frameEl.ownerDocument.defaultView;
+		}
+	};
+	/** Element rect in top-level viewport coordinates, applying iframe offsets and CSS scale. */
+	const topRect = (el) => {
+		const rect = el.getBoundingClientRect();
+		let x = rect.left, y = rect.top, w = rect.width, h = rect.height;
+		let win = el.ownerDocument && el.ownerDocument.defaultView;
+		while (win && win.frameElement) {
+			const frameEl = win.frameElement;
+			const fr = frameEl.getBoundingClientRect();
+			const sx = frameEl.clientWidth ? fr.width / frameEl.clientWidth : 1;
+			const sy = frameEl.clientHeight ? fr.height / frameEl.clientHeight : 1;
+			x = fr.left + (x + frameEl.clientLeft) * sx;
+			y = fr.top + (y + frameEl.clientTop) * sy;
+			w *= sx;
+			h *= sy;
+			win = frameEl.ownerDocument && frameEl.ownerDocument.defaultView;
+		}
+		return { x, y, w, h };
+	};
+	/**
+	 * Walk the frame chain at a top-level point. Top-level `elementFromPoint`
+	 * stops at the iframe element, so each document has to be asked separately;
+	 * `blocked` is set only when something other than the target's ancestor
+	 * chain owns the hit point.
+	 */
+	const deepHit = (x, y, el) => {
+		const chain = [];
+		let win = el.ownerDocument && el.ownerDocument.defaultView;
+		while (win && win.frameElement) {
+			chain.unshift(win.frameElement);
+			win = win.frameElement.ownerDocument && win.frameElement.ownerDocument.defaultView;
+		}
+		let doc = document;
+		let curX = x, curY = y;
+		for (const frameEl of chain) {
+			const hit = doc.elementFromPoint ? doc.elementFromPoint(curX, curY) : null;
+			if (!hit) return { hit: null, blocked: null };
+			if (!(hit === frameEl || (frameEl.contains && frameEl.contains(hit)))) {
+				return { hit, blocked: hit };
+			}
+			const fr = frameEl.getBoundingClientRect();
+			const sx = frameEl.clientWidth ? fr.width / frameEl.clientWidth : 1;
+			const sy = frameEl.clientHeight ? fr.height / frameEl.clientHeight : 1;
+			curX = (curX - fr.left) / sx - frameEl.clientLeft;
+			curY = (curY - fr.top) / sy - frameEl.clientTop;
+			doc = docOf(frameEl);
+			if (!doc) return { hit: null, blocked: null };
+		}
+		const hit = doc.elementFromPoint ? doc.elementFromPoint(curX, curY) : null;
+		const blocked = hit && !(hit === el || (el.contains && el.contains(hit))) ? hit : null;
+		return { hit, blocked };
+	};
+	return { docOf, frameLabel, framesIn, walkDocs, findInFrames, parseSpec, resolveFrameDoc, resolveTarget, framePathOf, scrollIntoViewDeep, topRect, deepHit };
+}
+
+/** Throw the page-side `{error, detail, path}` shape as an actionable SW error. */
+function throwFrameError(error) {
+	if (error.error === 'frame_cross_origin') {
+		throw new Error(`cross-origin iframe: ${error.detail} — only same-origin frames can be reached (nested path: ${error.path})`);
+	}
+	if (error.error === 'frame_not_found') {
+		throw new Error(`frame not found: ${error.detail}${error.path ? ` (after ${error.path})` : ''}`);
+	}
+	throw new Error(`element not found: ${error.detail}${error.path ? ` (in ${error.path})` : ''}`);
+}
+
+
+/** DOM mode: stamp `data-dsh-ref` on everything matching the selector list, across same-origin frames. */
 async function snapshotViaDom(send, tab, limit) {
 	const payload = await send('Runtime.evaluate', {
 		expression: `(() => {
+			const H = (${pageFrameHelpers.toString()})();
 			const ATTR = 'data-dsh-ref';
 			const clip = ${CLIP_FN_SOURCE};
-			document.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
-			const nodes = [...document.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})]
-				.filter((el) => !(${pageIsHoldNode.toString()})(el));
+			const walked = H.walkDocs(document);
+			for (const entry of walked.docs) {
+				entry.doc.querySelectorAll('[' + ATTR + ']').forEach((el) => el.removeAttribute(ATTR));
+			}
+			const nodes = [];
+			for (const entry of walked.docs) {
+				for (const el of entry.doc.querySelectorAll(${JSON.stringify(SNAPSHOT_SELECTOR)})) {
+					if ((${pageIsHoldNode.toString()})(el)) continue;
+					nodes.push({ el, path: entry.path });
+				}
+			}
 			const items = [];
 			let n = 0;
-			for (const el of nodes) {
+			for (const node of nodes) {
 				if (items.length >= ${limit}) break;
+				const el = node.el;
 				const r = el.getBoundingClientRect();
 				if (r.width === 0 && r.height === 0) continue;
 				const ref = 'e' + (++n);
 				el.setAttribute(ATTR, ref);
-				const isField = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+				const win = el.ownerDocument && el.ownerDocument.defaultView;
+				const isField = !!(win && ((win.HTMLInputElement && el instanceof win.HTMLInputElement)
+					|| (win.HTMLTextAreaElement && el instanceof win.HTMLTextAreaElement)));
+				const isSelect = !!(win && win.HTMLSelectElement && el instanceof win.HTMLSelectElement);
+				const tr = H.topRect(el);
+				const frame = node.path.length > 0 ? node.path.join(' >>> ') : undefined;
 				items.push({
 					ref, tag: el.tagName.toLowerCase(),
 					type: el.getAttribute('type') || undefined,
 					role: el.getAttribute('role') || undefined,
 					name: clip(el.getAttribute('aria-label') || el.getAttribute('placeholder')
 						|| (el.textContent || '').trim().replace(/\\s+/g, ' '), 80) || undefined,
-					value: isField || el instanceof HTMLSelectElement ? clip(String(el.value ?? ''), 60) : undefined,
-					href: el.hasAttribute('href') ? el.href : undefined,
-					rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+					value: isField || isSelect ? clip(String(el.value ?? ''), 60) : undefined,
+					href: el.hasAttribute && el.hasAttribute('href') ? el.href : undefined,
+					rect: { x: Math.round(tr.x), y: Math.round(tr.y), w: Math.round(tr.w), h: Math.round(tr.h) },
+					...(frame === undefined ? {} : { frame }),
 				});
 			}
-			return { tabId: ${tab.id}, title: document.title, url: location.href, total: nodes.length, items };
+			return { tabId: ${tab.id}, title: document.title, url: location.href, total: nodes.length, items,
+				...(walked.crossOrigin > 0 ? { crossOriginFrames: walked.crossOrigin } : {}) };
 		})()`,
 		awaitPromise: false, returnByValue: true, userGesture: true,
 	}).then((res) => {
@@ -2624,9 +2876,10 @@ const AX_ACTIONABLE_ROLES = new Set([
  * what the DOM node actually is. One round trip per kept element.
  */
 const AX_STAMP_FN = 'function(ref){'
+	+ 'var H = (' + pageFrameHelpers.toString() + ')();'
 	+ 'var clip = ' + CLIP_FN_SOURCE + ';'
-	+ 'var r = this.getBoundingClientRect();'
-	+ 'if (r.width === 0 && r.height === 0) return null;'
+	+ 'var r = H.topRect(this);'
+	+ 'if (r.w === 0 && r.h === 0) return null;'
 	// 接管浮层自己也是「可操作」的（卡片上有个按钮），但它属于扩展、不属于页面：
 	// 让它进快照，模型就会看到自己刚挂上去的那句话和一个「中止模型操作」按钮。
 	+ 'var hold = this.closest ? this.closest("[data-dsh-hold]") : null;'
@@ -2637,7 +2890,8 @@ const AX_STAMP_FN = 'function(ref){'
 	+ ' type: (this.type ? String(this.type) : undefined),'
 	+ ' href: (this.href ? String(this.href) : undefined),'
 	+ ' value: (this.value === undefined || this.value === null) ? undefined : clip(String(this.value), 60),'
-	+ ' rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }'
+	+ ' rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) },'
+	+ ' frame: H.framePathOf(this) || undefined'
 	+ '};'
 	+ '}';
 
@@ -2652,11 +2906,19 @@ async function snapshotViaAx(send, tab, limit) {
 	await send('DOM.enable').catch(() => {});
 	await send('Accessibility.enable').catch(() => {});
 	// Clear refs from a previous snapshot first: a stale attribute would otherwise
-	// let an old ref click whatever is on screen now.
-	await send('Runtime.evaluate', {
-		expression: 'document.querySelectorAll("[data-dsh-ref]").forEach((el) => el.removeAttribute("data-dsh-ref")); void 0;',
+	// let an old ref click whatever is on screen now. Same-origin frames are
+	// stamped too, so they have to be cleared too.
+	const pageInfo = await send('Runtime.evaluate', {
+		expression: `(() => {
+			const H = (${pageFrameHelpers.toString()})();
+			const walked = H.walkDocs(document);
+			for (const entry of walked.docs) {
+				entry.doc.querySelectorAll("[data-dsh-ref]").forEach((el) => el.removeAttribute("data-dsh-ref"));
+			}
+			return { title: document.title, url: location.href, crossOriginFrames: walked.crossOrigin };
+		})()`,
 		returnByValue: true,
-	}).catch(() => {});
+	}).then((r) => (r.result && r.result.value) || {}).catch(() => ({}));
 	const tree = await send('Accessibility.getFullAXTree');
 	const nodes = (tree && tree.nodes) || [];
 	if (!Array.isArray(nodes)) throw new Error('Accessibility.getFullAXTree 没有返回 nodes');
@@ -2702,19 +2964,19 @@ async function snapshotViaAx(send, tab, limit) {
 			href: geo.href,
 			value: geo.value,
 			rect: geo.rect,
+			...(geo.frame === undefined ? {} : { frame: geo.frame }),
 		});
 	}
 	return {
 		tabId: tab.id,
 		mode: 'ax',
-		title: await send('Runtime.evaluate', { expression: 'document.title', returnByValue: true })
-			.then((r) => r.result && r.result.value).catch(() => undefined),
-		url: await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true })
-			.then((r) => r.result && r.result.value).catch(() => undefined),
+		title: pageInfo.title,
+		url: pageInfo.url,
 		// total 是「页面上可操作的元素数」：我们自己的浮层不属于页面，别算进去。
 		total: candidates.length - skipped.ownOverlay,
 		ax: { nodes: nodes.length, candidates: candidates.length, ...skipped },
 		items,
+		...(pageInfo.crossOriginFrames > 0 ? { crossOriginFrames: pageInfo.crossOriginFrames } : {}),
 		limitedTo: limit,
 	};
 }
