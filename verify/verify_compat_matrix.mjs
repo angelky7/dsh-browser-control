@@ -37,10 +37,10 @@ const PROBES = [
   { tool: 'browser_navigate', args: (tab) => ({ tabId: tab, url: 'https://m.test/' }), since: null, expect: 'ok' },
   { tool: 'browser_evaluate', args: (tab) => ({ tabId: tab, expression: '1+1' }), since: null, expect: 'ok' },
   { tool: 'browser_scroll', args: (tab) => ({ tabId: tab, x: 0, y: 5 }), since: null, expect: 'ok' },
-  { tool: 'browser_emulate', args: (tab) => ({ tabId: tab, device: 'desktop' }), since: null, expect: 'ok' },
-  { tool: 'browser_console_log', args: (tab) => ({ tabId: tab }), since: null, expect: 'ok' },
-  { tool: 'browser_network_log', args: (tab) => ({ tabId: tab }), since: null, expect: 'ok' },
-  { tool: 'browser_network_clear', args: (tab) => ({ tabId: tab }), since: null, expect: 'ok' },
+  { tool: 'browser_emulate', args: (tab) => ({ tabId: tab, device: 'desktop' }), since: '1.0.7', expect: 'ok' },
+  { tool: 'browser_console_log', args: (tab) => ({ tabId: tab }), since: '1.0.7', expect: 'ok' },
+  { tool: 'browser_network_log', args: (tab) => ({ tabId: tab }), since: '1.0.7', expect: 'ok' },
+  { tool: 'browser_network_clear', args: (tab) => ({ tabId: tab }), since: '1.0.7', expect: 'ok' },
   { tool: 'browser_cleanup', args: () => ({}), since: null, expect: 'ok' },
   { tool: 'browser_metrics', args: (tab) => ({ tabId: tab }), since: '1.7.1', expect: 'ok' },
   { tool: 'browser_windows', args: () => ({ action: 'list' }), since: '1.6.0', expect: 'ok' },
@@ -52,23 +52,33 @@ const PROBES = [
   { tool: 'browser_click', args: (tab) => ({ tabId: tab, selector: '.none' }), since: null, expect: 'answered' },
   { tool: 'browser_type', args: (tab) => ({ tabId: tab, selector: '.none', value: 'x' }), since: null, expect: 'answered' },
   { tool: 'browser_press', args: (tab) => ({ tabId: tab, key: 'Enter' }), since: null, expect: 'ok' },
-  { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: null, expect: 'ok' },
+  { tool: 'browser_wait', args: (tab) => ({ tabId: tab, fn: 'true', timeoutMs: 500 }), since: '1.0.2', expect: 'ok' },
   { tool: 'browser_drag', args: (tab) => ({ tabId: tab, from: '.a', to: '.b', steps: 2 }), since: '1.7.2', expect: 'ok' },
   // 文件上传（v1.8.0）：纯插件经 cdp；宿主先 stat 真实文件，扩展只要回 cdp 结果。
   { tool: 'browser_upload', args: (tab) => ({ tabId: tab, selector: '.upload', files: [UPLOAD_PROBE_FILE] }), since: '1.7.2', expect: 'ok' },
   { tool: 'browser_audit', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_journal', args: () => ({ limit: 2 }), since: null, expect: 'ok' },
   { tool: 'browser_sessions', args: () => ({}), since: null, expect: 'ok' },
-  { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: null, expect: 'ok' },
+  { tool: 'browser_cookies', args: (tab) => ({ tabId: tab, action: 'get' }), since: '1.2.0', expect: 'ok' },
   // dialog 以前只出现在 commandOfTool 里、没有一个探针真的调它（评审点名的矩阵缺口）。
-  // 读当前策略不带模式：所有历史面都有 dialog 命令。
-  { tool: 'browser_dialog', args: () => ({}), since: null, expect: 'ok' },
-  { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: null, expect: 'ok' },
+  // 读当前策略不带模式：dialog 自 1.0.2 起才有。
+  { tool: 'browser_dialog', args: () => ({}), since: '1.0.2', expect: 'ok' },
+  { tool: 'browser_hold', args: (tab) => ({ tabId: tab, action: 'status' }), since: '1.0.19', expect: 'ok' },
   { tool: 'browser_screenshot', args: (tab) => ({ tabId: tab, format: 'png' }), since: null, expect: 'ok' },
-  { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: null, expect: 'ok' },
+  { tool: 'browser_pdf', args: (tab) => ({ tabId: tab }), since: '1.0.7', expect: 'ok' },
+  // 标签组 / 批量关闭：1.7.14 之前这几条命令根本没有闸门，旧扩展会收到一句
+  // `unknown command:` 这种没有出处的失败。加上闸门后这些路径才第一次被测到。
+  { tool: 'browser_tabs', args: (tab) => ({ tabId: tab, action: 'group' }), since: '1.0.10', expect: 'ok' },
+  { tool: 'browser_tabs', args: () => ({ action: 'ungroup' }), since: '1.0.10', expect: 'ok' },
+  { tool: 'browser_tabs', args: () => ({ action: 'close', tabIds: [9001, 9002] }), since: '1.0.17', expect: 'answered' },
 ]
 
-const SURFACES = ['v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1', 'v1.7.2']
+// 档位必须覆盖每条「有 since 的探针」第一次出现的那个版本**之前**的一档，
+// 否则 isNewerThanSurface 永远为 false，闸门失败路径一条都测不到。
+// v1.2.0 之前的四档是这次补的：1.0.2 引入 wait/dialog，1.0.7 引入
+// console.log/network.*/pdf/emulate，1.0.10 引入 tabs.group/ungroup，
+// 1.0.17 引入 tabs.closeMany，1.0.19 引入 hold。最低那档 v1.0.0 是真正的基线（16 条命令）。
+const SURFACES = ['v1.0.0', 'v1.0.2', 'v1.0.7', 'v1.0.10', 'v1.0.17', 'v1.0.19', 'v1.2.0', 'v1.5.0', 'v1.6.0', 'v1.7.0', 'v1.7.1', 'v1.7.2']
 
 // 物化历史扩展代码（git 里的原文，不是模拟）
 const cacheDir = new URL('../.compat-cache/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
@@ -121,7 +131,8 @@ for (const tag of SURFACES) {
   // 真实的历史扩展（vm 里跑 git 标签原文）+ 真 WebSocket → 连到当前插件的桥
   const { model } = await bootBackground({
     backgroundPath: `../.compat-cache/${tag.slice(1)}/background.js`,
-    manifest: JSON.parse(await readFile(`${cacheDir}${tag.slice(1)}/manifest.json`, 'utf8')),
+    // v1.0.0 起的 manifest.json 带 UTF-8 BOM（后来才去掉），JSON.parse 会直接炸。
+    manifest: JSON.parse((await readFile(`${cacheDir}${tag.slice(1)}/manifest.json`, 'utf8')).replace(/^\uFEFF/, '')),
     realWebSocket: true,
     storage: { port: PORT, token: TOKEN, autoConnect: true },
   })
@@ -195,15 +206,24 @@ for (const tag of SURFACES) {
   const waitTool = tools.find((t) => t.name === 'browser_wait')
   const falseWait = await waitTool.execute({ tabId: TAB, fn: 'false', timeoutMs: 150 }, { signal: signal() })
     .then(() => ({ ok: true }), (e) => ({ ok: false, error: String(e?.message ?? e) }))
-  check(`${tag} × browser_wait(fn:false): 谓词为假必须超时（假件不许自动回 true）`,
-    falseWait.ok === false && /wait timeout/.test(falseWait.error), falseWait.error?.slice(0, 90))
+  if (surface.has('wait')) {
+    check(`${tag} × browser_wait(fn:false): 谓词为假必须超时（假件不许自动回 true）`,
+      falseWait.ok === false && /wait timeout/.test(falseWait.error), falseWait.error?.slice(0, 90))
+  } else {
+    // 这一档扩展还没有 wait 命令：探针必须被闸门拦在本地，不许把一个
+    // 它不认识的命令发下去（那才是修之前的行为）。
+    check(`${tag} × browser_wait: 面上没有 wait ⇒ 发出前就被拦下`,
+      falseWait.ok === false && /extension-outdated/.test(falseWait.error), falseWait.error?.slice(0, 90))
+  }
 
   disposers.reverse().forEach(([fn]) => { try { fn(); } catch {} })
 }
 
 function commandOfTool(tool, args) {
   switch (tool) {
-    case 'browser_tabs': return `tabs.${args.action}`
+    // 多 id 的 close 走的是 tabs.closeMany（1.0.17 才有的命令），单 id 才是 tabs.close。
+    // 不区分的话这条探针在任何面上都被判成「基线命令」，闸门失败路径测不到。
+    case 'browser_tabs': return Array.isArray(args.tabIds) && args.tabIds.length > 1 ? 'tabs.closeMany' : `tabs.${args.action}`
     case 'browser_navigate': return 'nav'
     case 'browser_read': return 'content'
     case 'browser_snapshot': return 'snapshot'
