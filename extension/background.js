@@ -2240,8 +2240,14 @@ async function cmdClick(params) {
 	if (!params.selector) throw new Error('params.selector is required');
 	const tab = await resolveTab(params.tabId);
 	const frameSelector = typeof params.frameSelector === 'string' ? params.frameSelector : '';
-	// Mouse events land on whatever is under the viewport coordinates of the
-	// focused tab; ensure our tab is frontmost so coordinates are meaningful.
+	// CDP input goes to this tab's own renderer, so the tab does NOT need to be
+	// frontmost and we never steal focus (v1.7.11 dropped the activation this
+	// comment used to describe). The one hard requirement is a real viewport:
+	// a minimized window reports 0x0 and the events would land on nothing.
+	// Cost note: a tab that has never been the active one has no compositing
+	// surface yet, and Chromium then makes each dispatched mouse event wait for
+	// one (~5s per event, so ~15s for a click). That is why the plugin annotates
+	// a slow click with a slow_input warning instead of pretending it was fast.
 	await assertWindowNotMinimized(tab.id);
 	return withCDP(tab.id, async (send) => {
 		const hit = await send('Runtime.evaluate', {
@@ -2323,7 +2329,10 @@ async function cmdInput(params) {
 	// internal suggestion state) observe every character. 'fill' (default)
 	// sets the value directly — fast, but bypasses component keystroke logic.
 	const mode = params.mode === 'type' ? 'type' : 'fill';
-	// Real key events require the tab to have OS-level focus; activate first.
+	// type mode dispatches real key events, which go to this tab's renderer
+	// through CDP and therefore work on a background tab without activating it
+	// (the focus call below is a DOM focus, not an OS window focus). Only a
+	// minimized window (0x0 viewport) is refused outright.
 	if (mode === 'type') await assertWindowNotMinimized(tab.id);
 
 	// Locate + focus + clear in one evaluate, shared by both modes.
@@ -2510,7 +2519,9 @@ async function cmdPress(params) {
 	if (raw.length === 0) throw new Error('params.key is required');
 	const tab = await resolveTab(params.tabId);
 	const { key, modifiers: modifierNames } = parseKeySpec(raw, params.modifiers);
-	// Key events need OS focus; a background tab swallows them silently.
+	// Key events travel to this tab's renderer over CDP, so a background tab
+	// receives them fine — no activation, no focus steal (v1.7.11 removed it).
+	// A minimized window (0x0 viewport) is the only state we refuse.
 	await assertWindowNotMinimized(tab.id);
 	let keyCode, code, autoShift = 0;
 	if (KEY_CODES[key]) { [keyCode, code] = KEY_CODES[key]; }
