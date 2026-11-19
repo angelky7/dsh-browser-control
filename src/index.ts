@@ -273,6 +273,36 @@ const EXTENSION_UPDATE_HINT = ' One-time fix: download DSH-Browser-Control.zip f
 	+ ' That update makes the extension compatible with all future plugin updates — CDP-level features ship plugin-side from v1.7.2 on.'
 
 /**
+ * Real input events (click, type-mode input, press) take ~5s each on a tab that
+ * has never been the active one: without a compositing surface Chromium makes
+ * every `Input.dispatch*Event` wait for one, and a click dispatches three. The
+ * bridge ceiling is 60s, so this never fails — it just feels like a hang, with
+ * nothing in the result to say why. Measured on Windows/Edge: 5024ms and 5033ms
+ * for two never-activated tabs, 9ms and 15ms for tabs that had been active once.
+ * Commands that do not dispatch input (evaluate, scroll, press-free reads) stay
+ * in the 4–6ms range on the same tabs, which is what makes the symptom so
+ * confusing.
+ */
+const SLOW_INPUT_MS = 1_000
+
+/** Commands that push real input events into the renderer (and can hit the surface wait). */
+const INPUT_DISPATCHING_COMMANDS: ReadonlySet<string> = new Set(['click', 'input', 'press'])
+
+/**
+ * The upgrade/diagnosis hint for an input command that took suspiciously long.
+ * Returns undefined for everything else, including a fast input command.
+ */
+function slowInputWarning(command: string, params: Record<string, unknown>, elapsedMs: number): string | undefined {
+	if (elapsedMs < SLOW_INPUT_MS) return undefined
+	if (!INPUT_DISPATCHING_COMMANDS.has(command)) return undefined
+	// input: 'fill' sets the value through JS and never dispatches keys, so a slow
+	// fill is a different (page-side) problem and this hint would mislead.
+	if (command === 'input' && params.mode !== 'type') return undefined
+	const perEvent = command === 'click' ? 'of its three mouse events' : 'key event'
+	return `slow_input: this took ${elapsedMs}ms. A tab that has never been the active one has no compositing surface, and Chromium makes each ${perEvent} wait for one (~5s per event); commands that do not dispatch input stay in the single-digit-millisecond range on the same tab. Nothing failed and nothing was lost — if this keeps happening, activate the tab once first (browser_tabs action:"activate"), and later input on it is instant.`
+}
+
+/**
  * Same contract as {@link extensionOutdatedError}, for capabilities that are
  * parameters rather than new commands (frame-aware selectors, v1.7.5). There is
  * no capability token to check, so the reported extension version is the gate.
@@ -520,8 +550,17 @@ class BridgeController {
 			}
 			const result = await server.execute(command, resolved, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
 			if (sessionId !== undefined) this.noteSession(sessionId, resolved, result)
-			this.recordAudit({ command, tabId, params: summary, ok: true, durationMs: Date.now() - started })
-			return result
+			const elapsedMs = Date.now() - started
+			this.recordAudit({ command, tabId, params: summary, ok: true, durationMs: elapsedMs })
+			// A silent 5s input command is the one shape where the audit log is the
+			// only place the number exists — the tool call just looks slow. Surface it
+			// in the result itself. Only input-dispatching commands are annotated, so
+			// the strict-schema tools (navigate/read/snapshot/…) keep their exact
+			// result shape and validateJsonSchemaValue keeps passing.
+			const warning = slowInputWarning(command, resolved, elapsedMs)
+			if (warning === undefined) return result
+			if (result === null || typeof result !== 'object' || Array.isArray(result)) return result
+			return { ...(result as Record<string, unknown>), durationMs: elapsedMs, warning }
 		} catch (error) {
 			if (sessionId !== undefined) this.sessions.touch(sessionId)
 			const code = (error as { code?: unknown }).code
