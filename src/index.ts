@@ -226,14 +226,32 @@ const SNAPSHOT_REF_SELECTOR_PATTERN = /^e\d+$/
 const READ_WINDOW_MAX_CHARS = 20_000
 
 /**
- * Extension command surface, as deltas over the pre-1.5 baseline. Used when a
+ * Extension command surface, as deltas over the 1.0.0 baseline. Used when a
  * connected extension predates the capability handshake (no `capabilities` in
- * its hello frame): the plugin maps its reported version to the commands it
- * must have. Anything not listed here exists since the baseline and is assumed
- * present; a version newer than every entry is assumed to have everything
- * (forward compatible — an extension never removes commands).
+ * its hello frame): the plugin maps its reported version to the commands that
+ * version is guaranteed to have.
+ *
+ * Every entry is an EXTENSION version, not a plugin version — they are
+ * independent (plugin 1.1.0 still shipped extension 1.0.19), and reading this
+ * table against plugin numbers is how the pre-1.7.2 table ended up claiming five
+ * commands could not exist. A command missing from this table is assumed to be
+ * baseline (present since 1.0.0); a version newer than every entry is assumed to
+ * have everything (forward compatible — an extension never removes commands).
+ *
+ * Keep this list append-only and sorted by `since`: verify/verify_surface.mjs
+ * cross-checks it against real `extension/manifest.json` history.
  */
 const EXTENSION_COMMANDS_BY_VERSION: ReadonlyArray<{ readonly since: string, readonly commands: readonly string[] }> = [
+	// 1.0.0 is the real baseline (16 commands). Everything below is a
+	// delta against it — the pre-1.7.2 table only declared the 1.5+ additions and
+	// treated these seven groups as baseline, so an extension older than the
+	// command was let through to a raw "unknown command".
+	{ since: '1.0.2', commands: ['wait', 'dialog'] },
+	{ since: '1.0.7', commands: ['console.log', 'network.log', 'network.clear', 'pdf', 'emulate'] },
+	{ since: '1.0.10', commands: ['tabs.group', 'tabs.ungroup'] },
+	{ since: '1.0.17', commands: ['tabs.closeMany'] },
+	{ since: '1.0.19', commands: ['hold'] },
+	{ since: '1.2.0', commands: ['cookies.get', 'cookies.set', 'cookies.remove'] },
 	{ since: '1.5.0', commands: ['archive'] },
 	{ since: '1.6.0', commands: ['windows.list', 'windows.open', 'windows.update', 'windows.close', 'windows.moveTab'] },
 	{ since: '1.7.0', commands: ['tabs.back', 'tabs.forward'] },
@@ -271,6 +289,36 @@ function extensionOutdatedError(have: string | undefined, command: string, since
 /** Shared one-time reinstall pointer for both command- and feature-level gaps. */
 const EXTENSION_UPDATE_HINT = ' One-time fix: download DSH-Browser-Control.zip from https://github.com/angelky7/dsh-browser-control/releases/latest, unzip, then chrome://extensions → Developer mode → replace the loaded folder (remove the old one first).'
 	+ ' That update makes the extension compatible with all future plugin updates — CDP-level features ship plugin-side from v1.7.2 on.'
+
+/**
+ * Real input events (click, type-mode input, press) take ~5s each on a tab that
+ * has never been the active one: without a compositing surface Chromium makes
+ * every `Input.dispatch*Event` wait for one, and a click dispatches three. The
+ * bridge ceiling is 60s, so this never fails — it just feels like a hang, with
+ * nothing in the result to say why. Measured on Windows/Edge: 5024ms and 5033ms
+ * for two never-activated tabs, 9ms and 15ms for tabs that had been active once.
+ * Commands that do not dispatch input (evaluate, scroll, press-free reads) stay
+ * in the 4–6ms range on the same tabs, which is what makes the symptom so
+ * confusing.
+ */
+const SLOW_INPUT_MS = 1_000
+
+/** Commands that push real input events into the renderer (and can hit the surface wait). */
+const INPUT_DISPATCHING_COMMANDS: ReadonlySet<string> = new Set(['click', 'input', 'press'])
+
+/**
+ * The upgrade/diagnosis hint for an input command that took suspiciously long.
+ * Returns undefined for everything else, including a fast input command.
+ */
+function slowInputWarning(command: string, params: Record<string, unknown>, elapsedMs: number): string | undefined {
+	if (elapsedMs < SLOW_INPUT_MS) return undefined
+	if (!INPUT_DISPATCHING_COMMANDS.has(command)) return undefined
+	// input: 'fill' sets the value through JS and never dispatches keys, so a slow
+	// fill is a different (page-side) problem and this hint would mislead.
+	if (command === 'input' && params.mode !== 'type') return undefined
+	const perEvent = command === 'click' ? 'of its three mouse events' : 'key event'
+	return `slow_input: this took ${elapsedMs}ms. A tab that has never been the active one has no compositing surface, and Chromium makes each ${perEvent} wait for one (~5s per event); commands that do not dispatch input stay in the single-digit-millisecond range on the same tab. Nothing failed and nothing was lost — if this keeps happening, activate the tab once first (browser_tabs action:"activate"), and later input on it is instant.`
+}
 
 /**
  * Same contract as {@link extensionOutdatedError}, for capabilities that are
@@ -520,8 +568,17 @@ class BridgeController {
 			}
 			const result = await server.execute(command, resolved, timeoutMs === undefined ? { signal } : { signal, timeoutMs })
 			if (sessionId !== undefined) this.noteSession(sessionId, resolved, result)
-			this.recordAudit({ command, tabId, params: summary, ok: true, durationMs: Date.now() - started })
-			return result
+			const elapsedMs = Date.now() - started
+			this.recordAudit({ command, tabId, params: summary, ok: true, durationMs: elapsedMs })
+			// A silent 5s input command is the one shape where the audit log is the
+			// only place the number exists — the tool call just looks slow. Surface it
+			// in the result itself. Only input-dispatching commands are annotated, so
+			// the strict-schema tools (navigate/read/snapshot/…) keep their exact
+			// result shape and validateJsonSchemaValue keeps passing.
+			const warning = slowInputWarning(command, resolved, elapsedMs)
+			if (warning === undefined) return result
+			if (result === null || typeof result !== 'object' || Array.isArray(result)) return result
+			return { ...(result as Record<string, unknown>), durationMs: elapsedMs, warning }
 		} catch (error) {
 			if (sessionId !== undefined) this.sessions.touch(sessionId)
 			const code = (error as { code?: unknown }).code
@@ -1374,6 +1431,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { [given[0]]: args[given[0]], timeoutMs }
 			if (args.tabId !== undefined) params.tabId = args.tabId
 			// Slack so the page-side timeout always reports before the bridge gives up.
+			controller.requireExtensionCommand('wait', '1.0.2')
 			return await controller.execute('wait', params, exec.signal, timeoutMs + 10_000) as Record<string, JsonValue>
 		},
 	}))
@@ -1420,6 +1478,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			const params: Record<string, unknown> = { action }
 			if (args.action === 'on' && args.note !== undefined) params.note = args.note
 			if (args.tabId !== undefined) params.tabId = args.tabId
+			controller.requireExtensionCommand('hold', '1.0.19')
 			return await controller.execute('hold', params, exec.signal) as Record<string, JsonValue>
 		},
 	}))
@@ -1465,8 +1524,17 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (args.sameSite !== undefined) params.sameSite = args.sameSite
 			if (args.expires !== undefined) params.expires = args.expires
 			if (args.tabId !== undefined) params.tabId = args.tabId
-			if (command === 'cookies.get') return await controller.execute('cookies.get', params, exec.signal) as Record<string, JsonValue>
-			if (command === 'cookies.set') return await controller.execute('cookies.set', params, exec.signal) as Record<string, JsonValue>
+			// The gates follow the same literal rule: one `requireExtensionCommand` per
+			// call point, spelled out, so verify_surface can reconcile them textually.
+			if (command === 'cookies.get') {
+				controller.requireExtensionCommand('cookies.get', '1.2.0')
+				return await controller.execute('cookies.get', params, exec.signal) as Record<string, JsonValue>
+			}
+			if (command === 'cookies.set') {
+				controller.requireExtensionCommand('cookies.set', '1.2.0')
+				return await controller.execute('cookies.set', params, exec.signal) as Record<string, JsonValue>
+			}
+			controller.requireExtensionCommand('cookies.remove', '1.2.0')
 			return await controller.execute('cookies.remove', params, exec.signal) as Record<string, JsonValue>
 		},
 	}))
@@ -1485,6 +1553,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.policy !== undefined) params.policy = args.policy
+			controller.requireExtensionCommand('dialog', '1.0.2')
 			return await controller.execute('dialog', params, exec.signal) as Record<string, JsonValue>
 		},
 	}))
@@ -1549,9 +1618,9 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 					const ids = closeTabIds(args)
 					// One id keeps the single-tab command; several go out as ONE command
 					// (`tabs.closeMany`) instead of N round-trips that can die in between.
-					return ids.length === 1
-						? await controller.execute('tabs.close', { tabId: ids[0] }, exec.signal) as Record<string, JsonValue>
-						: await controller.execute('tabs.closeMany', { tabIds: ids }, exec.signal) as Record<string, JsonValue>
+					if (ids.length === 1) return await controller.execute('tabs.close', { tabId: ids[0] }, exec.signal) as Record<string, JsonValue>
+					controller.requireExtensionCommand('tabs.closeMany', '1.0.17')
+					return await controller.execute('tabs.closeMany', { tabIds: ids }, exec.signal) as Record<string, JsonValue>
 				}
 				case 'activate':
 					return await controller.execute('tabs.activate', { tabId: requireTabId(args, 'activate') }, exec.signal) as Record<string, JsonValue>
@@ -1579,10 +1648,12 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 						return await controller.execute('tabs.forward', params, exec.signal, budgetMs + BRIDGE_MARGIN_MS) as Record<string, JsonValue>
 				}
 				case 'group':
+					controller.requireExtensionCommand('tabs.group', '1.0.10')
 					return await controller.execute('tabs.group', { tabId: requireTabId(args, 'group') }, exec.signal) as Record<string, JsonValue>
 				case 'ungroup': {
 					const params: Record<string, unknown> = {}
 					if (typeof args.windowId === 'number') params.windowId = args.windowId
+					controller.requireExtensionCommand('tabs.ungroup', '1.0.10')
 					return await controller.execute('tabs.ungroup', params, exec.signal) as Record<string, JsonValue>
 				}
 				default:
@@ -1844,6 +1915,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.pattern === 'string') params.pattern = args.pattern
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
+			controller.requireExtensionCommand('console.log', '1.0.7')
 			const raw = await controller.execute('console.log', params, exec.signal) as {
 				tabId: number
 				count: number
@@ -1932,6 +2004,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.status === 'string') params.status = args.status
 			if (typeof args.limit === 'number') params.limit = args.limit
 			if (args.clear === true) params.clear = true
+			controller.requireExtensionCommand('network.log', '1.0.7')
 			const raw = await controller.execute('network.log', params, exec.signal) as {
 				tabId: number
 				count: number
@@ -1968,6 +2041,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 		async execute(args, exec) {
 			const params: Record<string, unknown> = {}
 			if (args.tabId !== undefined) params.tabId = args.tabId
+			controller.requireExtensionCommand('network.clear', '1.0.7')
 			return await controller.execute('network.clear', params, exec.signal) as { tabId: number; cleared: boolean }
 		},
 	}))
@@ -2010,6 +2084,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.paperHeight === 'number') params.paperHeight = args.paperHeight
 			if (typeof args.scale === 'number') params.scale = args.scale
 			if (typeof args.pageRanges === 'string') params.pageRanges = args.pageRanges
+			controller.requireExtensionCommand('pdf', '1.0.7')
 			const payload = await controller.execute('pdf', params, exec.signal) as { base64: string; tabId: number }
 			return await savePdf(controller, payload, typeof args.path === 'string' ? args.path : undefined)
 		},
@@ -2107,6 +2182,7 @@ function applyBrowserTools(ctx: Context, controller: BridgeController): void {
 			if (typeof args.isMobile === 'boolean') params.isMobile = args.isMobile
 			if (typeof args.hasTouch === 'boolean') params.hasTouch = args.hasTouch
 			if (typeof args.userAgent === 'string') params.userAgent = args.userAgent
+			controller.requireExtensionCommand('emulate', '1.0.7')
 			const raw = await controller.execute('emulate', params, exec.signal) as {
 				tabId: number
 				reset?: boolean | null

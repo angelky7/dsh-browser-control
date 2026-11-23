@@ -154,7 +154,8 @@ const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`);
 await new Promise((r) => {
   ws.onopen = () => {
     ws.send(JSON.stringify({
-      type: "hello", client: "fake-extension", version: "1.0.15", protocol: 1,
+      // 1.0.17 才引入 tabs.closeMany：假扩展必须报一个真有的版本，否则测的是闸门不是语义。
+      type: "hello", client: "fake-extension", version: "1.0.17", protocol: 1,
       browser: { name: "fake", version: "1", ua: "" },
     }));
     r();
@@ -203,6 +204,61 @@ const closeTabs = async (args) => {
   const none = await closeTabs({ action: "close" }).then(() => null, (e) => String(e.message));
   check("宿主：什么都不给时明确报错（不许静默关掉「当前标签」这类猜测）",
     none !== null && /requires tabId or tabIds/.test(none), none);
+}
+
+/* 2 —— 版本闸门：tabs.closeMany 是 1.0.17 才有的命令，旧扩展必须在发出去之前就被拦下。
+   没有这道闸门时，旧扩展收到的是它不认识的命令，回一句 "unknown command: tabs.closeMany"——
+   模型只能看到一句没有出处的失败，不知道该升级什么。 */
+{
+  const oldTools = [];
+  const oldDisposers = [];
+  const oldConfig = Config({ stateDir: (process.env.TEMP || "/tmp") + "/dsh-verify-state", enabled: true, port: PORT + 1, token: TOKEN + "-old" });
+  const oldSettings = { register: (_n, schema, o) => ({ get: () => schema(o?.base ?? oldConfig), watch: () => {}, set: () => {} }) };
+  const oldCtx = {
+    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+    fiber: { state: 2, uid: 1 },
+    effect: (fn, msg) => oldDisposers.push([fn, msg]),
+    inject: (deps, cb) => { if (deps.includes("settings")) cb({ settings: oldSettings, logger: oldCtx.logger }); },
+    tools: { register: (def) => oldTools.push(def) },
+    systemPrompt: { section: () => {} },
+  };
+  apply(oldCtx, oldConfig);
+  await new Promise((r) => setTimeout(r, 400));
+  let sent = [];
+  const oldWs = new WebSocket(`ws://127.0.0.1:${PORT + 1}/ws?token=${TOKEN}-old`);
+  await new Promise((r) => {
+    oldWs.onopen = () => {
+      oldWs.send(JSON.stringify({ type: "hello", client: "fake-extension", version: "1.0.15", protocol: 1, browser: { name: "fake", version: "1", ua: "" } }));
+      r();
+    };
+    oldWs.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type !== "command") return;
+      sent.push(msg.command);
+      oldWs.send(JSON.stringify({ type: "result", id: msg.id, ok: true, result: {} }));
+    };
+    setTimeout(r, 400);
+  });
+  for (let i = 0; i < 100; i++) {
+    await new Promise((r) => setTimeout(r, 30));
+    const st = await (await fetch(`http://127.0.0.1:${PORT + 1}/api/status`, { headers: { authorization: `Bearer ${TOKEN}-old` } })).json();
+    if (st.hello?.version !== undefined) break;
+  }
+  const oldTabs = oldTools.find((t) => t.name === "browser_tabs");
+  let gateErr = null;
+  try { await oldTabs.execute({ action: "close", tabIds: [7, 8] }, { signal: new AbortController().signal }); } catch (e) { gateErr = e; }
+  check("旧扩展（1.0.15）批量关闭：在发命令之前就被拦下", gateErr !== null && gateErr.code === "extension_outdated", gateErr?.message?.slice(0, 120));
+  check("旧扩展（1.0.15）批量关闭：报得出是哪个命令、从哪版开始有", /tabs\.closeMany/.test(gateErr?.message ?? "") && /added in extension v1\.0\.17/.test(gateErr?.message ?? ""), gateErr?.message?.slice(0, 160));
+  check("旧扩展（1.0.15）批量关闭：一个字都没往扩展发", sent.length === 0, JSON.stringify(sent));
+  const singleOk = await oldTabs.execute({ action: "close", tabId: 7 }, { signal: new AbortController().signal }).then((v) => v, (e) => null);
+  check("旧扩展（1.0.15）单个关闭仍然可用（tabs.close 是 1.0.0 基线命令，不该被连坐）",
+    singleOk !== null && sent.join() === "tabs.close", JSON.stringify(sent));
+  // 关掉 socket 与桥之间留一拍：Windows 上 libuv 的 async handle 不能在关闭中途被 dispose，
+  // 否则进程退出时会撞 "!(handle->flags & UV_HANDLE_CLOSING)" 断言（退出码变成 0xC0000409）。
+  try { oldWs.close(); } catch {}
+  await new Promise((r) => setTimeout(r, 100));
+  for (const d of oldDisposers) { try { await d[0](); } catch {} }
+  await new Promise((r) => setTimeout(r, 100));
 }
 
 try { ws.close(); } catch { /* already closed */ }
