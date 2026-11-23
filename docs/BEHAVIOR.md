@@ -78,6 +78,14 @@ Chrome 对非前台标签页的 `setTimeout` 强制钳制到 ≥1s。长任务�
 - 页面用 `addEventListener('beforeunload', …)` 注册的监听无法从页面侧移除；这类页面仍可能弹一次。Chrome 原生文件选择器/权限提示等浏览器 UI 也可能激活窗口，扩展拦不住。
 - 实测：`verify_silent.mjs`（真 background.js + 焦点探针）。
 
+### 由此带来的一个反直觉代价（本次改动起在结果里自证）
+
+不抢前台有一个只在**从未激活过的标签页**上出现的副作用：这类标签没有合成表面，Chromium 会让每一个 `Input.dispatchMouseEvent` / `dispatchKeyEvent` 先等一个表面（每事件约 5s）。一次点击派发三个鼠标事件，于是整个工具调用约 **15s**；`type(mode:"type")` 按字符数放大。**同一标签上的 `evaluate` / `scroll` / 各种读取仍是 4–6ms**，所以现场看起来像是「页面卡了」，而不是「输入路径在等表面」。实测（Windows/Edge）：两个从未激活的标签 5024ms / 5033ms；**激活过一次**之后同一个标签 9ms / 15ms。
+
+桥的命令上限是 60s，所以它**从不报错**——静默地慢。本次改动起插件的 `execute()` 会量这次调用的真实耗时：凡是 `click` / `input(mode:"type")` / `press` 超过 1000ms，结果里就多出 `durationMs` 与一条 `warning: "slow_input: …"`，说明为什么慢、并指向 `browser_tabs action:"activate"`（激活一次之后输入就是毫秒级）。其余命令的结果形状**一个字不加**——`durationMs` 只出现在这三个工具的宽松 schema 上，`navigate` / `read` / `evaluate` 等严格 schema 的工具保持原样。实测台：`verify/verify_slow_input.mjs`。
+
+`input` 的 `fill` 模式走 JS 设值、不派发按键，所以再慢也不报这条警——那属于页面侧问题，用这条提示会把人带偏。
+
 ## 死站点检测
 
 导航落到 `chrome-error://` 时，`browser_navigate` 结果携带 `siteUnreachable: {reason}`（dns/unreachable），且 `url` 回报为请求的目标 URL 而非内部协议地址。
