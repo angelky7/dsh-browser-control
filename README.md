@@ -48,10 +48,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 或从 GitHub tag：
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.13"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.15"
 ```
 
-离线包：[dsh-browser-control-plugin-v1.7.14.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.14/dsh-browser-control-plugin-v1.7.14.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
+离线包：[dsh-browser-control-plugin-v1.7.15.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.15/dsh-browser-control-plugin-v1.7.15.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
 
 装完重启 dsh。桥默认开启，状态页 <http://127.0.0.1:9777/>。刚发布的版本装不上（镜像延迟 / 24 小时包龄闸门）见 [安装排障](docs/INSTALL.md)。
 
