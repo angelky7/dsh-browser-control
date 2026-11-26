@@ -71,7 +71,10 @@ await new Promise((r) => setTimeout(r, 400));
 const archive = tools.find((t) => t.name === "browser_archive");
 check("browser_archive 已注册", Boolean(archive));
 const props = archive?.parameters?.properties ?? {};
-check("参数表只有 tabId 与 path", "tabId" in props && "path" in props && Object.keys(props).length === 2, Object.keys(props).join(","));
+// v1.8.0: every browser-driving tool carries `instance` (routing), so the shape is
+// tabId + path + instance. Asserting the exact set still catches an accidental extra
+// param being added without thought — which is what this line exists for.
+check("参数表是 tabId / path / instance（路由参数不算 payload）", "tabId" in props && "path" in props && "instance" in props && Object.keys(props).length === 3, Object.keys(props).join(","));
 
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws?token=${TOKEN}`);
 await new Promise((r) => {

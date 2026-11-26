@@ -26,6 +26,7 @@
 不用起 headless，不用把登录态搬来搬去，也不需要 MCP——它驱动的就是你屏幕上那个已登录的 Chrome。
 
 - 30 个 `browser_*` 工具，agent 说人话就能用
+- **多浏览器并存**：同时驱动多个 Chrome profile（工作号 / 个人号），用 `instance` 按名称或 id 路由；不指定目标时直接报错，绝不猜
 - 操作可见：agent 开的标签自动进 `DSH` 分组；扩展弹窗一键锁定
 - 本机闸门：只读 / 禁脚本 / 上传白名单
 - 有账可查：操作审计 + 跨重启 journal
@@ -35,9 +36,9 @@
 
 ### 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.7.5.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.14/DSH-Browser-Control-v1.7.5.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
+下载 [DSH-Browser-Control-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/DSH-Browser-Control-v1.8.0.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
 
-> 装过 v1.7.2 的不用重装：v1.7.3–v1.7.10 的功能更新都不需要动扩展。
+> **v1.8.0 需要重装一次扩展**（加了实例身份：每个 profile 有一个稳定 id，桥用它区分浏览器）。装好后在弹窗「高级 → 实例名称」给每个 profile 起个名字（例如 `work` / `personal`），多浏览器时就能按名字路由。之后常规更新继续只更插件。
 
 ### 2. dsh 插件
 
@@ -48,10 +49,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 或从 GitHub tag：
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.15"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.0"
 ```
 
-离线包：[dsh-browser-control-plugin-v1.7.15.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.15/dsh-browser-control-plugin-v1.7.15.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
+离线包：[dsh-browser-control-plugin-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/dsh-browser-control-plugin-v1.8.0.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
 
 装完重启 dsh。桥默认开启，状态页 <http://127.0.0.1:9777/>。刚发布的版本装不上（镜像延迟 / 24 小时包龄闸门）见 [安装排障](docs/INSTALL.md)。
 

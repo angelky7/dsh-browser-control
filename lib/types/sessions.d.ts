@@ -7,12 +7,22 @@
  *   - 工作标签页被关掉 → 退回活动标签页，并改记新的；
  *   - 没带 agent 身份的调用（HTTP 面、测试、宿主老版本）完全维持旧行为。
  *
+ * v1.8.0：工作标签页升级成 **(instance, tabId)** 这对。`tabId` 是**实例内**编号——
+ * 浏览器 A 的第 5 个标签页和浏览器 B 的第 5 个标签页是两回事，只记 `tabId` 会让
+ * 会话把别人的页当成自己的。`instance` 省略表示「当时只有一个浏览器」这一语境，
+ * 所以只连了一个浏览器时行为与 v1.7.6 逐字一致。
+ *
  * 这是**建议性隔离**，不是所有权锁：显式传 tabId 永远有效，跨会话交接不需要解锁。
  * 硬性归属（borrow/return + 用户仲裁）留给扩展侧那一版。
  */
+export interface SessionTab {
+    /** 实例键（instance id / `legacy`）；省略表示「没有指定实例的那一档」。 */
+    instance?: string;
+    tabId: number;
+}
 export interface SessionInfo {
     sessionId: string;
-    workingTabId?: number;
+    workingTab?: SessionTab;
     /** epoch 毫秒 */
     lastActiveAt: number;
     calls: number;
@@ -21,12 +31,12 @@ export declare class SessionRegistry {
     private readonly sessions;
     /** 记一次活动（无论成败）。 */
     touch(sessionId: string): void;
-    /** 把某个标签页记为这个会话的工作标签页。 */
-    adopt(sessionId: string, tabId: number): void;
+    /** 把某个 (实例, 标签页) 记为这个会话的工作标签页。 */
+    adopt(sessionId: string, tab: SessionTab): void;
     /** 当前记录的工作标签页（不核对是否还开着——核对是控制器的事）。 */
-    workingTab(sessionId: string): number | undefined;
-    /** 清掉工作标签页；返回被清掉的 id。 */
-    release(sessionId: string): number | undefined;
+    workingTab(sessionId: string): SessionTab | undefined;
+    /** 清掉工作标签页；返回被清掉的。 */
+    release(sessionId: string): SessionTab | undefined;
     /** 全部会话，最近活跃的在前。 */
     list(): SessionInfo[];
     size(): number;

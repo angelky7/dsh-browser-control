@@ -1,5 +1,7 @@
 # Tools (30)
 
+> Since v1.8.0 every tool that drives a browser accepts an optional `instance` (name, full id, or unique id prefix); with several browsers attached it is required, and omitting it fails instead of guessing. The four local-only tools (`browser_cleanup` / `browser_audit` / `browser_journal` / `browser_sessions`) do not take it. `browser_audit`'s `instance` **filters the log**, it is not routing.
+
 | Tool | Purpose |
 |---|---|
 | `browser_navigate` | Navigate to a URL |

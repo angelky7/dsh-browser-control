@@ -41,6 +41,13 @@ Chrome 浏览器扩展 + DeepSeek Harness 插件，让 AI Agent 通过 CDP 驱�
 - 插件比扩展新时，缺命令的动作在发送前拦下：`extension_outdated` + 可执行的重装指引，绝不裸 unknown command
 - 扩展预埋 `cdp` 透传（内部原语，不进模型工具面）：CDP 层新能力从此只发插件，扩展装一次长期用
 
+## 多浏览器实例（v1.8.0）
+
+- 扩展在 hello 帧带 `instance: {id, label}`（id 落 `chrome.storage.local`，改名不换 id）。
+- 桥同时持有多条连接：按 instance id 建表，同一 id 重连只替换自己；无身份的老扩展进 `legacy` 单槽。
+- 26 个驱动浏览器的工具都带可选 `instance`；多实例未指定 ⇒ `instance_required` 且零派发。
+- `/api/status` 的 `instances[]` 是权威清单；单实例时旧字段照旧填。
+
 ## 关键文件
 
 - `src/index.ts` - 30 个 `browser_*` 工具注册 + settings 接线的版本兼容分支

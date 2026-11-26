@@ -18,6 +18,14 @@ export interface AuditEntry {
     t: number;
     command: string;
     tabId?: number;
+    /**
+     * Which browser the command went to (v1.8.0). `tabId` is an **instance-local**
+     * number, so without this field two browsers' tab 5 look like one row — the
+     * question this log exists to answer ("who touched this page") would be
+     * unanswerable exactly when it matters most. Absent when only one browser was
+     * attached, which keeps single-profile logs byte-identical to 1.7.x.
+     */
+    instance?: string;
     /** 脱敏后的参数摘要（JSON 文本，已截断） */
     params: string;
     ok: boolean;
@@ -29,6 +37,8 @@ export interface AuditEntry {
 }
 export interface AuditFilter {
     tabId?: number;
+    /** 只看发往这个实例的记录（instance id / label 归一后的键）。 */
+    instance?: string;
     /** 命令名子串匹配（如 "nav" 命中 nav / browser.info? 不需要——命令名如 tabs.open） */
     command?: string;
     /** 只返回 seq 严格大于它的条目（分页） */
@@ -58,6 +68,7 @@ export declare class AuditLog {
     record(input: {
         command: string;
         tabId?: number;
+        instance?: string;
         params: string;
         ok: boolean;
         code?: string;

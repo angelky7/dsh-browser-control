@@ -18,6 +18,14 @@ export interface AuditEntry {
 	t: number
 	command: string
 	tabId?: number
+	/**
+	 * Which browser the command went to (v1.8.0). `tabId` is an **instance-local**
+	 * number, so without this field two browsers' tab 5 look like one row — the
+	 * question this log exists to answer ("who touched this page") would be
+	 * unanswerable exactly when it matters most. Absent when only one browser was
+	 * attached, which keeps single-profile logs byte-identical to 1.7.x.
+	 */
+	instance?: string
 	/** 脱敏后的参数摘要（JSON 文本，已截断） */
 	params: string
 	ok: boolean
@@ -30,6 +38,8 @@ export interface AuditEntry {
 
 export interface AuditFilter {
 	tabId?: number
+	/** 只看发往这个实例的记录（instance id / label 归一后的键）。 */
+	instance?: string
 	/** 命令名子串匹配（如 "nav" 命中 nav / browser.info? 不需要——命令名如 tabs.open） */
 	command?: string
 	/** 只返回 seq 严格大于它的条目（分页） */
@@ -148,6 +158,7 @@ export class AuditLog {
 	record(input: {
 		command: string
 		tabId?: number
+		instance?: string
 		params: string
 		ok: boolean
 		code?: string
@@ -164,6 +175,7 @@ export class AuditLog {
 			durationMs: Math.max(0, Math.round(input.durationMs)),
 		}
 		if (input.tabId !== undefined) entry.tabId = input.tabId
+		if (input.instance !== undefined) entry.instance = input.instance
 		if (input.code !== undefined) entry.code = input.code
 		if (input.effectState !== undefined) entry.effectState = input.effectState
 		if (input.error !== undefined) {
@@ -191,6 +203,10 @@ export class AuditLog {
 	list(filter: AuditFilter = {}): AuditEntry[] {
 		let matched = this.entries
 		if (filter.tabId !== undefined) matched = matched.filter((e) => e.tabId === filter.tabId)
+		if (filter.instance !== undefined) {
+			const needle = filter.instance.trim().toLowerCase()
+			matched = matched.filter((e) => e.instance?.toLowerCase() === needle)
+		}
 		if (filter.command !== undefined && filter.command.length > 0) {
 			const needle = filter.command.toLowerCase()
 			matched = matched.filter((e) => e.command.toLowerCase().includes(needle))
