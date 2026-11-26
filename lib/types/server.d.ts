@@ -47,6 +47,38 @@ export interface BridgeHello {
      * predates the capability handshake — callers fall back to a version map.
      */
     readonly capabilities?: readonly string[];
+    /**
+     * Stable browser-profile identity (extension v1.8.0+). `id` survives restarts and
+     * extension reloads; `label` is whatever the user typed in the popup and may be
+     * empty. Absent on older extensions — those land in the `legacy` slot, which keeps
+     * the pre-1.8.0 "a newer connection replaces the older one" semantics, because two
+     * anonymous browsers cannot be told apart and silently keeping both would make
+     * "which browser did this click hit" unanswerable.
+     */
+    readonly instance?: {
+        readonly id: string;
+        readonly label?: string;
+    };
+}
+/** One connected browser, as reported on `/api/status`. */
+export interface BridgeInstanceSummary {
+    /** Routing key. The instance id, or the literal `legacy` for a pre-1.8.0 extension. */
+    readonly key: string;
+    /** The full instance id; absent for a legacy link (there is none to show). */
+    readonly id?: string;
+    readonly label?: string;
+    /** True when this connection carries no instance identity at all. */
+    readonly legacy: boolean;
+    readonly client: string;
+    readonly version: string;
+    readonly browser: {
+        readonly name: string;
+        readonly version: string;
+        readonly ua: string;
+    };
+    readonly protocol: number;
+    readonly connectedAt: string;
+    readonly capabilities?: readonly string[];
 }
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
 export interface BridgeServerStatus {
@@ -63,16 +95,33 @@ export interface BridgeServerStatus {
     readonly protocolCompatible: boolean;
     readonly protocolNote: string | null;
     readonly pendingCommands: number;
+    /**
+     * Every connected browser, in connection order. Always present (empty when none).
+     *
+     * `hello` / `connectedAt` / `extensionProtocol` above stay filled **only while
+     * exactly one browser is attached**, so callers written before multi-instance see
+     * byte-identical output; with two or more those fields go undefined and this list
+     * is the only truthful answer (two different hellos cannot share one field).
+     */
+    readonly instances: readonly BridgeInstanceSummary[];
     readonly lastError: string | undefined;
     /** True when the active token is the published default or too short to be a secret. */
     readonly insecureToken: boolean;
 }
 /** Caller controls for one {@link BridgeServer.execute} round-trip. */
 export interface BridgeExecuteOptions {
-    /** Fail the command after this many milliseconds; defaults to 60s, capped at 300s. */
+    /** Fail the command after this many milliseconds; defaults to 60s, capped to 300s. */
     readonly timeoutMs?: number;
     /** Cancellation from the tool execution; aborting fails the in-flight command. */
     readonly signal?: AbortSignal;
+    /**
+     * Which connected browser to send to (v1.8.0). Accepts the full instance id, the
+     * user's label (case-insensitive), `legacy`, or a unique id prefix. Omitted is
+     * only allowed while at most one browser is attached; with several it fails
+     * closed as `instance_required` with **zero dispatch** — guessing which account
+     * a click lands on is not a mistake this bridge is willing to make.
+     */
+    readonly instance?: string;
 }
 /** What {@link BridgeServer.cleanup} removed. */
 export interface CleanupResult {
@@ -81,6 +130,13 @@ export interface CleanupResult {
     /** Scratch files deleted (agent temp scripts/artifacts matched by convention). */
     readonly scratchRemoved: readonly string[];
 }
+/**
+ * Routing key for a browser that predates instance identity. Two anonymous browsers
+ * cannot be told apart, so they share this one slot with the pre-1.8.0 semantics: a
+ * newer connection replaces the older. It can coexist with named instances and be
+ * addressed explicitly with `instance: "legacy"`.
+ */
+export declare const LEGACY_INSTANCE_KEY = "legacy";
 export interface BridgeServerOptions {
     readonly port: number;
     readonly token: string;
@@ -111,34 +167,50 @@ export declare function cleanupArtifacts(options: {
 /**
  * One live bridge endpoint. Start/stop may cycle repeatedly on one instance;
  * a fresh listener is built per start so a changed config reuses the class
- * without re-allocation concerns. Exactly one extension link is held at a
- * time; a newer WebSocket replaces the older one.
+ * without re-allocation concerns.
+ *
+ * Several extension links are held at once (v1.8.0). Each named instance owns its
+ * own socket: a reconnect with the same id replaces only that browser. Anonymous
+ * (pre-instance) extensions share the single `legacy` slot and keep the old
+ * replace-the-previous behaviour.
  */
 export declare class BridgeServer {
     private readonly options;
     private httpServer;
-    private clientSocket;
-    private hello;
-    private connectedAt;
-    private readonly pending;
+    /** Every live link, by socket. */
+    private readonly links;
+    /** Routing table: instance key → socket. The same socket also appears in `links`. */
+    private readonly keyed;
     private lastError;
-    /**
-     * Payloads of the message being reassembled. **Buffers, not strings**: decoding
-     * each fragment with `toString('utf8')` corrupts any multi-byte character that
-     * straddles a fragment boundary. Decode once, at FIN.
-     */
-    private continuationChunks;
-    private continuationOpen;
     constructor(options: BridgeServerOptions);
     /** Current link state, also served verbatim as `/api/status`. */
     get status(): BridgeServerStatus;
+    private summarize;
     private get insecureToken();
     /** Bind `127.0.0.1:<port>` and start accepting the extension plus HTTP calls. */
     start(): Promise<void>;
     /** Close the extension link, fail every pending command, and release the port. Idempotent. */
     stop(): Promise<void>;
     /**
-     * Send one command to the connected extension and await its result.
+     * Pick the browser a command goes to.
+     *
+     * Fail-closed by contract: with zero links this is the offline error, with one
+     * link an omitted `instance` silently means "the only browser" (1.7.x behaviour),
+     * and with several links an omitted `instance` throws `instance_required` **before
+     * anything is written to any socket**.
+     */
+    private resolveLink;
+    /**
+     * Resolve `query` to a single instance **without throwing**, for the capability
+     * gate. Undefined means "cannot say" — no browser, or several browsers and no
+     * query — and callers fall back to their permissive path rather than inventing an
+     * answer. Routing itself still fails closed in {@link resolveLink}.
+     */
+    peekInstance(query: string | undefined): BridgeInstanceSummary | undefined;
+    /** Human-and-model readable one-liner for error text and the status page. */
+    private describe;
+    /**
+     * Send one command to a connected extension and await its result.
      * Throws while no extension is linked; the rejection message names the fix.
      */
     execute(command: string, params: Record<string, unknown>, options?: BridgeExecuteOptions): Promise<unknown>;
@@ -149,12 +221,12 @@ export declare class BridgeServer {
     cleanup(): Promise<CleanupResult>;
     private log;
     /**
-     * Mismatch description, or null when the two sides can talk. An older
-     * extension that declares nothing is treated as v1-compatible: it still
-     * answers every command this bridge has ever sent, so failing the link would
-     * break working installs for a cosmetic gap.
+     * Mismatch description for one link, or null when the two sides can talk. An older
+     * extension that declares nothing is treated as v1-compatible: it still answers
+     * every command this bridge has ever sent, so failing the link would break working
+     * installs for a cosmetic gap.
      */
-    private get protocolNote();
+    private protocolNoteFor;
     /**
      * Whether a request carries the bridge token, the same credential the WebSocket
      * upgrade checks. Accepted forms: `Authorization: Bearer <token>`, `X-Token: <token>`
@@ -168,7 +240,17 @@ export declare class BridgeServer {
     private handleUpgrade;
     private handleFrame;
     private handleText;
-    private closeClientSocket;
-    private failAllPending;
+    /**
+     * Give a link its routing key and evict the previous owner of that key.
+     *
+     * Named instances replace only themselves (two profiles stay connected side by
+     * side). `legacy` keeps the old single-slot behaviour on purpose: the bridge
+     * cannot tell two anonymous browsers apart, so keeping both would make
+     * "which browser did this land on" unanswerable.
+     */
+    private registerKey;
+    private closeLink;
+    /** Fail only the in-flight commands of the link that went away; other browsers keep working. */
+    private failPending;
     private logVerbose;
 }

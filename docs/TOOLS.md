@@ -1,5 +1,7 @@
 # 工具清单（30 个）
 
+> v1.8.0 起，除 `browser_cleanup` / `browser_audit` / `browser_journal` / `browser_sessions`（这四个只动本机）之外，所有工具都带可选参数 `instance`：同时连着多个浏览器时用它指定目标（名称 / 完整 id / 唯一前缀），不指定会直接报错而不是猜。`browser_audit` 的 `instance` 是**过滤日志**，不是路由。
+
 按用途分组的完整表；入参与回执的边界见 [BEHAVIOR.md](BEHAVIOR.md)。
 
 | 工具 | 功能 |

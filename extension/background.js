@@ -46,6 +46,70 @@ let lastError = null;
  *  until they click 立即连接 again. Reset on browser restart. */
 let manualDisconnect = false;
 
+/**
+ * Stable browser-profile identity (v1.8.0).
+ *
+ * Every profile gets its own id on first start, stored in `chrome.storage.local`.
+ * The id must survive browser restarts and extension reloads — that is the whole
+ * point: it is the routing key the bridge uses to tell two profiles apart, so
+ * re-minting one on every start would silently merge them.
+ *
+ * The label is what the user types in the popup ("work", "personal"). It is a
+ * convenience for humans and models, never the key: renaming must not change
+ * routing, so the id stays.
+ *
+ * No new permission is needed — `storage` was already declared. Identity is for
+ * routing, not a security boundary; if storage is unreadable we degrade to an
+ * in-memory id rather than refusing to connect.
+ */
+const INSTANCE_STORAGE_KEY = 'instance';
+let instance = null;
+/** In-flight identity load, so two concurrent callers cannot mint two ids. */
+let instanceLoading = null;
+
+/** `crypto.randomUUID` when available, else a timestamp+random fallback. */
+function freshInstanceId() {
+	try { return crypto.randomUUID(); } catch { /* fall through */ }
+	const rand = () => Math.random().toString(16).slice(2, 10);
+	return `${Date.now().toString(16)}-${rand()}-${rand()}`;
+}
+
+/**
+ * Load (or mint once and persist) this profile's identity. Memoised: the id is
+ * written at most once per profile, and concurrent callers share one load.
+ */
+async function loadInstance() {
+	if (instance !== null) return instance;
+	if (instanceLoading !== null) return instanceLoading;
+	instanceLoading = (async () => {
+		let stored = null;
+		try {
+			const got = await chrome.storage.local.get([INSTANCE_STORAGE_KEY]);
+			stored = got && got[INSTANCE_STORAGE_KEY] ? got[INSTANCE_STORAGE_KEY] : null;
+		} catch { /* 存储读不出来就退化成内存身份，连接照旧 */ }
+		const label = stored && typeof stored.label === 'string' ? stored.label.trim() : '';
+		const existingId = stored && typeof stored.id === 'string' && stored.id.trim().length > 0 ? stored.id.trim() : null;
+		if (existingId !== null) {
+			instance = { id: existingId, label };
+			return instance;
+		}
+		const minted = { id: freshInstanceId(), label };
+		try { await chrome.storage.local.set({ [INSTANCE_STORAGE_KEY]: minted }); } catch { /* 内存 id 照用 */ }
+		instance = minted;
+		return instance;
+	})().finally(() => { instanceLoading = null; });
+	return instanceLoading;
+}
+
+/** Rename this profile. The id deliberately does not change. */
+async function setInstanceLabel(raw) {
+	const label = typeof raw === 'string' ? raw.trim().slice(0, 60) : '';
+	const current = await loadInstance();
+	instance = { id: current.id, label };
+	try { await chrome.storage.local.set({ [INSTANCE_STORAGE_KEY]: instance }); } catch { /* 内存里已经改好 */ }
+	return instance;
+}
+
 /** Tab ids we hold a persistent debugger attachment on. Detach only on
  *  explicit disconnect, tab close, or DevTools stealing the tab. */
 const attachedTabs = new Set();
@@ -186,7 +250,9 @@ function connect() {
 		lastError = null;
 		setState('open');
 		startHeartbeat();
-		sendHello();
+		// fire-and-forget: `send` is a no-op once the socket is gone, and a failure to
+		// announce must never leave an unhandled rejection in the service worker.
+		sendHello().catch((err) => { lastError = String((err && err.message) || err); });
 	};
 	sock.onmessage = (ev) => {
 		if (sock !== ws || typeof ev.data !== 'string') return;
@@ -226,15 +292,24 @@ function stopHeartbeat() {
 	if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
 
-function sendHello() {
+async function sendHello() {
 	const ua = navigator.userAgent;
 	const name = /Edg\//.test(ua) ? 'edge' : /Chrome\//.test(ua) ? 'chrome' : 'chromium';
 	const versionMatch = ua.match(/(?:Edg|Chrome)\/([\d.]+)/);
 	helloInfo = { name, version: versionMatch ? versionMatch[1] : 'unknown', ua };
+	// Wait for identity before announcing: a hello without it would put this browser
+	// into the bridge's anonymous `legacy` slot, where a second profile would replace
+	// it instead of coexisting. Identity has to be in the FIRST frame.
+	const who = await loadInstance();
 	// 能力清单（v1.7.2）：把命令面原样报给桥，插件据此做能力对账——
 	// 缺什么、要不要重装扩展，由系统说话而不是让调用撞上 unknown command 再猜。
 	// 老插件不认识这个字段会直接忽略；本字段缺失时插件按版本静态映射兜底。
-	send({ type: 'hello', client: 'dsh-browser-extension', version: EXT_VERSION, protocol: PROTOCOL_VERSION, browser: helloInfo, capabilities: Object.keys(COMMANDS) });
+	// 实例身份（v1.8.0）：老插件同样忽略；新插件按 id 建连接表。
+	send({
+		type: 'hello', client: 'dsh-browser-extension', version: EXT_VERSION, protocol: PROTOCOL_VERSION,
+		browser: helloInfo, capabilities: Object.keys(COMMANDS),
+		instance: { id: who.id, label: who.label },
+	});
 }
 
 /* Alarm keeps the SW alive for reconnect even without user events. */
@@ -3085,8 +3160,25 @@ async function cmdDialogPolicy(params) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 	if (msg?.type === 'bridgeStatus') {
-		sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none' });
-		return false;
+		// Identity is loaded by now (init awaits it); the await keeps the popup honest
+		// on the very first open, when the service worker may still be starting.
+		loadInstance().then((who) => {
+			sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none', instance: who });
+		}).catch(() => {
+			sendResponse({ state: wsState, cfg, helloInfo, lastError, locked: hardLocked, lockReason: hardLocked ? hardLockReason : 'none' });
+		});
+		return true;
+	}
+	if (msg?.type === 'instanceSetLabel') {
+		// Rename is announced on the SAME socket: the id does not change, so the bridge
+		// updates the label in place instead of treating it as a new browser.
+		setInstanceLabel(msg.label)
+			.then(async (who) => {
+				await sendHello();
+				sendResponse({ instance: who });
+			})
+			.catch((err) => sendResponse({ error: String((err && err.message) || err) }));
+		return true;
 	}
 	if (msg?.type === 'lockSet') {
 		// The lock is set from the popup only (see the local-lock section): this
@@ -3119,6 +3211,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function init() {
 	await loadConfig();
+	// 身份先落盘再连：hello 必须第一帧就带 id，否则这个 profile 会落进桥的
+	// legacy 单槽，第二个 profile 一上来就把它替换掉（多实例共存的前提）。
+	await loadInstance();
 	// 先把本地锁读出来再连：service worker 被回收后重新唤醒时，如果只有第一条命令
 	// 才触发重读，那段时间图标上显示的是绿色 ON —— 用户以为锁着，桥那边却一切正常。
 	await syncHardLock();

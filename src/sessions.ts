@@ -7,19 +7,33 @@
  *   - 工作标签页被关掉 → 退回活动标签页，并改记新的；
  *   - 没带 agent 身份的调用（HTTP 面、测试、宿主老版本）完全维持旧行为。
  *
+ * v1.8.0：工作标签页升级成 **(instance, tabId)** 这对。`tabId` 是**实例内**编号——
+ * 浏览器 A 的第 5 个标签页和浏览器 B 的第 5 个标签页是两回事，只记 `tabId` 会让
+ * 会话把别人的页当成自己的。`instance` 省略表示「当时只有一个浏览器」这一语境，
+ * 所以只连了一个浏览器时行为与 v1.7.6 逐字一致。
+ *
  * 这是**建议性隔离**，不是所有权锁：显式传 tabId 永远有效，跨会话交接不需要解锁。
  * 硬性归属（borrow/return + 用户仲裁）留给扩展侧那一版。
  */
+export interface SessionTab {
+	/** 实例键（instance id / `legacy`）；省略表示「没有指定实例的那一档」。 */
+	instance?: string
+	tabId: number
+}
+
 export interface SessionInfo {
 	sessionId: string
-	workingTabId?: number
+	workingTab?: SessionTab
 	/** epoch 毫秒 */
 	lastActiveAt: number
 	calls: number
 }
 
-interface SessionState extends SessionInfo {
-	createdAt: number
+interface SessionState {
+	sessionId: string
+	workingTab?: SessionTab
+	lastActiveAt: number
+	calls: number
 }
 
 export class SessionRegistry {
@@ -30,36 +44,37 @@ export class SessionRegistry {
 		const now = Date.now()
 		const existing = this.sessions.get(sessionId)
 		if (existing === undefined) {
-			this.sessions.set(sessionId, { sessionId, lastActiveAt: now, calls: 1, createdAt: now })
+			this.sessions.set(sessionId, { sessionId, lastActiveAt: now, calls: 1 })
 			return
 		}
 		existing.lastActiveAt = now
 		existing.calls += 1
 	}
 
-	/** 把某个标签页记为这个会话的工作标签页。 */
-	adopt(sessionId: string, tabId: number): void {
+	/** 把某个 (实例, 标签页) 记为这个会话的工作标签页。 */
+	adopt(sessionId: string, tab: SessionTab): void {
 		const state = this.sessions.get(sessionId)
 		if (state === undefined) {
-			this.sessions.set(sessionId, { sessionId, workingTabId: tabId, lastActiveAt: Date.now(), calls: 0, createdAt: Date.now() })
+			this.sessions.set(sessionId, { sessionId, workingTab: { ...tab }, lastActiveAt: Date.now(), calls: 0 })
 			return
 		}
-		state.workingTabId = tabId
+		state.workingTab = { ...tab }
 		state.lastActiveAt = Date.now()
 	}
 
 	/** 当前记录的工作标签页（不核对是否还开着——核对是控制器的事）。 */
-	workingTab(sessionId: string): number | undefined {
-		return this.sessions.get(sessionId)?.workingTabId
+	workingTab(sessionId: string): SessionTab | undefined {
+		const tab = this.sessions.get(sessionId)?.workingTab
+		return tab === undefined ? undefined : { ...tab }
 	}
 
-	/** 清掉工作标签页；返回被清掉的 id。 */
-	release(sessionId: string): number | undefined {
+	/** 清掉工作标签页；返回被清掉的。 */
+	release(sessionId: string): SessionTab | undefined {
 		const state = this.sessions.get(sessionId)
 		if (state === undefined) return undefined
-		const previous = state.workingTabId
-		state.workingTabId = undefined
-		return previous
+		const previous = state.workingTab
+		state.workingTab = undefined
+		return previous === undefined ? undefined : { ...previous }
 	}
 
 	/** 全部会话，最近活跃的在前。 */
@@ -68,7 +83,7 @@ export class SessionRegistry {
 			.sort((a, b) => b.lastActiveAt - a.lastActiveAt)
 			.map((s) => {
 				const info: SessionInfo = { sessionId: s.sessionId, lastActiveAt: s.lastActiveAt, calls: s.calls }
-				if (s.workingTabId !== undefined) info.workingTabId = s.workingTabId
+				if (s.workingTab !== undefined) info.workingTab = { ...s.workingTab }
 				return info
 			})
 	}

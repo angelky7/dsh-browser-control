@@ -25,7 +25,8 @@ A dsh plugin plus a Chrome extension. The extension dials back to dsh over loopb
 
 No headless browser, no copying login state around, no MCP — it drives the signed-in Chrome on your screen.
 
-- 30 `browser_*` tools, usable from natural language
+- 30 `browser_*` tools
+- **Several browsers at once**: drive multiple Chrome profiles (work / personal) side by side and route with `instance` (a name or an id). With more than one attached and no target it fails loudly instead of guessing, usable from natural language
 - Visible: tabs the agent opens join a `DSH` group; one-click lock in the extension popup
 - Local gates: read-only / no arbitrary JS / upload allowlist
 - Auditable: in-memory audit trail plus a cross-restart journal
@@ -35,7 +36,7 @@ No headless browser, no copying login state around, no MCP — it drives the sig
 
 ### 1. Chrome extension
 
-Download [DSH-Browser-Control-v1.7.5.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.14/DSH-Browser-Control-v1.7.5.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
+Download [DSH-Browser-Control-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/DSH-Browser-Control-v1.8.0.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
 
 > Already on v1.7.2? No reinstall needed: the feature updates in v1.7.3–v1.7.10 do not touch the extension.
 
@@ -48,10 +49,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 Or from a GitHub tag:
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.7.15"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.0"
 ```
 
-Offline asset: [dsh-browser-control-plugin-v1.7.15.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.7.15/dsh-browser-control-plugin-v1.7.15.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
+Offline asset: [dsh-browser-control-plugin-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/dsh-browser-control-plugin-v1.8.0.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
 
 Restart dsh afterwards. The bridge is on by default; status page <http://127.0.0.1:9777/>. If a just-published version will not install (mirror lag / 24-hour package-age gate), see [Install troubleshooting](docs/INSTALL.md).
 

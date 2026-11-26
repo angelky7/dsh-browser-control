@@ -59,6 +59,32 @@ export interface BridgeHello {
    * predates the capability handshake — callers fall back to a version map.
    */
   readonly capabilities?: readonly string[]
+  /**
+   * Stable browser-profile identity (extension v1.8.0+). `id` survives restarts and
+   * extension reloads; `label` is whatever the user typed in the popup and may be
+   * empty. Absent on older extensions — those land in the `legacy` slot, which keeps
+   * the pre-1.8.0 "a newer connection replaces the older one" semantics, because two
+   * anonymous browsers cannot be told apart and silently keeping both would make
+   * "which browser did this click hit" unanswerable.
+   */
+  readonly instance?: { readonly id: string; readonly label?: string }
+}
+
+/** One connected browser, as reported on `/api/status`. */
+export interface BridgeInstanceSummary {
+  /** Routing key. The instance id, or the literal `legacy` for a pre-1.8.0 extension. */
+  readonly key: string
+  /** The full instance id; absent for a legacy link (there is none to show). */
+  readonly id?: string
+  readonly label?: string
+  /** True when this connection carries no instance identity at all. */
+  readonly legacy: boolean
+  readonly client: string
+  readonly version: string
+  readonly browser: { readonly name: string; readonly version: string; readonly ua: string }
+  readonly protocol: number
+  readonly connectedAt: string
+  readonly capabilities?: readonly string[]
 }
 
 /** Snapshot of the link and in-flight work, served verbatim on `/api/status`. */
@@ -76,6 +102,15 @@ export interface BridgeServerStatus {
   readonly protocolCompatible: boolean
   readonly protocolNote: string | null
   readonly pendingCommands: number
+  /**
+   * Every connected browser, in connection order. Always present (empty when none).
+   *
+   * `hello` / `connectedAt` / `extensionProtocol` above stay filled **only while
+   * exactly one browser is attached**, so callers written before multi-instance see
+   * byte-identical output; with two or more those fields go undefined and this list
+   * is the only truthful answer (two different hellos cannot share one field).
+   */
+  readonly instances: readonly BridgeInstanceSummary[]
   readonly lastError: string | undefined
   /** True when the active token is the published default or too short to be a secret. */
   readonly insecureToken: boolean
@@ -83,10 +118,18 @@ export interface BridgeServerStatus {
 
 /** Caller controls for one {@link BridgeServer.execute} round-trip. */
 export interface BridgeExecuteOptions {
-  /** Fail the command after this many milliseconds; defaults to 60s, capped at 300s. */
+  /** Fail the command after this many milliseconds; defaults to 60s, capped to 300s. */
   readonly timeoutMs?: number
   /** Cancellation from the tool execution; aborting fails the in-flight command. */
   readonly signal?: AbortSignal
+  /**
+   * Which connected browser to send to (v1.8.0). Accepts the full instance id, the
+   * user's label (case-insensitive), `legacy`, or a unique id prefix. Omitted is
+   * only allowed while at most one browser is attached; with several it fails
+   * closed as `instance_required` with **zero dispatch** — guessing which account
+   * a click lands on is not a mistake this bridge is willing to make.
+   */
+  readonly instance?: string
 }
 
 /** What {@link BridgeServer.cleanup} removed. */
@@ -103,6 +146,35 @@ interface PendingEntry {
   reject: (error: Error) => void
   timer: NodeJS.Timeout
   onAbort?: () => void
+}
+
+/**
+ * Routing key for a browser that predates instance identity. Two anonymous browsers
+ * cannot be told apart, so they share this one slot with the pre-1.8.0 semantics: a
+ * newer connection replaces the older. It can coexist with named instances and be
+ * addressed explicitly with `instance: "legacy"`.
+ */
+export const LEGACY_INSTANCE_KEY = 'legacy'
+
+/**
+ * One extension link. Everything that used to live on the server as a single slot —
+ * the hello, the connect time, the in-flight commands, and the frame reassembly
+ * buffer — lives here instead, because with several browsers attached those are
+ * per-browser facts.
+ *
+ * The reassembly buffer is the one that would have been a silent data-corruption bug
+ * if it had stayed server-wide: two sockets interleaving fragments would splice one
+ * browser's JSON into the other's message.
+ */
+interface LinkState {
+  readonly socket: net.Socket
+  /** Instance id, or {@link LEGACY_INSTANCE_KEY}; empty until the hello frame arrives. */
+  key: string
+  hello: BridgeHello | undefined
+  connectedAt: Date
+  readonly pending: Map<string, PendingEntry>
+  continuationChunks: Buffer[]
+  continuationOpen: boolean
 }
 
 export interface BridgeServerOptions {
@@ -155,24 +227,21 @@ export async function cleanupArtifacts(options: { shotsDir: string; scratchDir?:
 /**
  * One live bridge endpoint. Start/stop may cycle repeatedly on one instance;
  * a fresh listener is built per start so a changed config reuses the class
- * without re-allocation concerns. Exactly one extension link is held at a
- * time; a newer WebSocket replaces the older one.
+ * without re-allocation concerns.
+ *
+ * Several extension links are held at once (v1.8.0). Each named instance owns its
+ * own socket: a reconnect with the same id replaces only that browser. Anonymous
+ * (pre-instance) extensions share the single `legacy` slot and keep the old
+ * replace-the-previous behaviour.
  */
 export class BridgeServer {
   private readonly options: BridgeServerOptions
   private httpServer: http.Server | undefined
-  private clientSocket: net.Socket | undefined
-  private hello: BridgeHello | undefined
-  private connectedAt: Date | undefined
-  private readonly pending = new Map<string, PendingEntry>()
+  /** Every live link, by socket. */
+  private readonly links = new Map<net.Socket, LinkState>()
+  /** Routing table: instance key → socket. The same socket also appears in `links`. */
+  private readonly keyed = new Map<string, net.Socket>()
   private lastError: string | undefined
-  /**
-   * Payloads of the message being reassembled. **Buffers, not strings**: decoding
-   * each fragment with `toString('utf8')` corrupts any multi-byte character that
-   * straddles a fragment boundary. Decode once, at FIN.
-   */
-  private continuationChunks: Buffer[] = []
-  private continuationOpen = false
 
   constructor(options: BridgeServerOptions) {
     this.options = options
@@ -180,20 +249,49 @@ export class BridgeServer {
 
   /** Current link state, also served verbatim as `/api/status`. */
   get status(): BridgeServerStatus {
+    const links = [...this.links.values()]
+    // Exactly one browser keeps every legacy field filled, so a caller written
+    // against 1.7.x cannot tell the difference. Two or more cannot share them.
+    const single = links.length === 1 ? links[0] : undefined
+    let pendingCommands = 0
+    for (const link of links) pendingCommands += link.pending.size
+    const notes = links.map((link) => this.protocolNoteFor(link)).filter((note): note is string => note !== null)
     return {
       listening: this.httpServer !== undefined,
       port: this.httpServer !== undefined ? this.options.port : undefined,
-      extensionConnected: this.clientSocket !== undefined,
-      connectedAt: this.connectedAt?.toISOString(),
-      hello: this.hello,
+      extensionConnected: links.length > 0,
+      connectedAt: single?.connectedAt.toISOString(),
+      hello: single?.hello,
       bridgeProtocol: BRIDGE_PROTOCOL_VERSION,
-      extensionProtocol: this.hello?.protocol ?? 0,
-      protocolCompatible: this.protocolNote === null,
-      protocolNote: this.protocolNote,
-      pendingCommands: this.pending.size,
+      extensionProtocol: single?.hello?.protocol ?? 0,
+      protocolCompatible: notes.length === 0,
+      protocolNote: notes.length === 0 ? null : notes.join(' / '),
+      pendingCommands,
+      instances: links.map((link) => this.summarize(link)),
       lastError: this.lastError,
       insecureToken: this.insecureToken,
     }
+  }
+
+  private summarize(link: LinkState): BridgeInstanceSummary {
+    const instance = link.hello?.instance
+    const summary: BridgeInstanceSummary = {
+      key: link.key.length > 0 ? link.key : (instance?.id ?? LEGACY_INSTANCE_KEY),
+      legacy: instance === undefined,
+      client: link.hello?.client ?? 'unknown',
+      version: link.hello?.version ?? 'unknown',
+      browser: link.hello?.browser ?? { name: 'unknown', version: 'unknown', ua: '' },
+      protocol: link.hello?.protocol ?? 0,
+      connectedAt: link.connectedAt.toISOString(),
+    }
+    return instance === undefined
+      ? summary
+      : {
+          ...summary,
+          id: instance.id,
+          ...(instance.label !== undefined && instance.label.length > 0 ? { label: instance.label } : {}),
+          ...(link.hello?.capabilities !== undefined ? { capabilities: link.hello.capabilities } : {}),
+        }
   }
 
   private get insecureToken(): boolean {
@@ -248,8 +346,7 @@ export class BridgeServer {
     const server = this.httpServer
     if (server === undefined) return
     this.httpServer = undefined
-    this.closeClientSocket(1001, 'server stopping')
-    this.failAllPending(new Error('browser-bridge stopped'))
+    for (const link of [...this.links.values()]) this.closeLink(link, 1001, 'server stopping')
     await new Promise<void>((resolve) => {
       server.close(() => resolve())
     })
@@ -257,14 +354,82 @@ export class BridgeServer {
   }
 
   /**
-   * Send one command to the connected extension and await its result.
+   * Pick the browser a command goes to.
+   *
+   * Fail-closed by contract: with zero links this is the offline error, with one
+   * link an omitted `instance` silently means "the only browser" (1.7.x behaviour),
+   * and with several links an omitted `instance` throws `instance_required` **before
+   * anything is written to any socket**.
+   */
+  private resolveLink(command: string, query: string | undefined): LinkState {
+    const links = [...this.links.values()]
+    if (links.length === 0) {
+      throw classify(command, new Error('no browser extension connected — open the browser that has the DSH Browser Control extension installed'))
+    }
+    const trimmed = query?.trim() ?? ''
+    if (trimmed.length === 0) {
+      if (links.length === 1) return links[0]
+      throw new BridgeError(
+        command,
+        'instance_required',
+        'not_started',
+        `${links.length} browsers are connected and this call did not say which one — nothing was sent. Connected: ${links.map((link) => this.describe(link)).join('; ')}. Pass instance (an id, an id prefix, or the label the user set).`,
+      )
+    }
+    // `link.identity` is attached below so the generic matcher can be reused.
+    const matched = matchInstance(links.map(identityOf), trimmed)
+    if (matched.kind === 'one') return this.links.get(matched.hit.socket) as LinkState
+    if (matched.kind === 'ambiguous') {
+      throw new BridgeError(
+        command,
+        'instance_not_found',
+        'not_started',
+        `instance "${trimmed}" matches ${matched.hits.length} browsers by ${matched.stage} — nothing was sent. Use the full id: ${matched.hits.map(describeIdentity).join('; ')}.`,
+      )
+    }
+    throw new BridgeError(
+      command,
+      'instance_not_found',
+      'not_started',
+      `no connected browser matches instance "${trimmed}" — nothing was sent. Connected: ${links.map((link) => this.describe(link)).join('; ')}.`,
+    )
+  }
+
+  /**
+   * Resolve `query` to a single instance **without throwing**, for the capability
+   * gate. Undefined means "cannot say" — no browser, or several browsers and no
+   * query — and callers fall back to their permissive path rather than inventing an
+   * answer. Routing itself still fails closed in {@link resolveLink}.
+   */
+  peekInstance(query: string | undefined): BridgeInstanceSummary | undefined {
+    const links = [...this.links.values()]
+    if (links.length === 0) return undefined
+    const trimmed = query?.trim() ?? ''
+    if (trimmed.length === 0) return links.length === 1 ? this.summarize(links[0]) : undefined
+    const matched = matchInstance(links.map(identityOf), trimmed)
+    if (matched.kind !== 'one') return undefined
+    const link = this.links.get(matched.hit.socket)
+    return link === undefined ? undefined : this.summarize(link)
+  }
+
+  /** Human-and-model readable one-liner for error text and the status page. */
+  private describe(link: LinkState): string {
+    const instance = link.hello?.instance
+    const browser = link.hello === undefined
+      ? 'unknown browser'
+      : `${link.hello.browser.name} ${link.hello.browser.version}`
+    if (instance === undefined) return `legacy (${browser}, no instance identity — pre-1.8.0 extension)`
+    const label = instance.label !== undefined && instance.label.length > 0 ? `"${instance.label}"` : '(unnamed)'
+    return `${label} ${browser} id=${instance.id}`
+  }
+
+  /**
+   * Send one command to a connected extension and await its result.
    * Throws while no extension is linked; the rejection message names the fix.
    */
   async execute(command: string, params: Record<string, unknown>, options: BridgeExecuteOptions = {}): Promise<unknown> {
-    const socket = this.clientSocket
-    if (socket === undefined) {
-      throw classify(command, new Error('no browser extension connected — open the browser that has the DSH Browser Control extension installed'))
-    }
+    const link = this.resolveLink(command, options.instance)
+    const socket = link.socket
     const timeoutMs = Math.min(MAX_COMMAND_TIMEOUT_MS, Math.max(1, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS))
     const signal = options.signal
     if (signal?.aborted) throw new Error(`browser command cancelled before send: ${command}`)
@@ -274,7 +439,7 @@ export class BridgeServer {
       resolve: () => {},
       reject: () => {},
       timer: setTimeout(() => {
-        if (!this.pending.delete(id)) return
+        if (!link.pending.delete(id)) return
         entry.reject(new Error(`browser command timed out after ${timeoutMs}ms: ${command}`))
       }, timeoutMs),
     }
@@ -284,7 +449,7 @@ export class BridgeServer {
     })
     if (signal !== undefined) {
       entry.onAbort = (): void => {
-        if (!this.pending.delete(id)) return
+        if (!link.pending.delete(id)) return
         // 监听器只可能在 socket.write 之后触发（execute 从注册到写出是同步的、中间
         // 没有 await），所以这里必须说 after send：写命令的结果是未知，而不是
         // 「取消 = 什么都没发生」。before send 的那条检查在函数开头，措辞不同。
@@ -292,8 +457,8 @@ export class BridgeServer {
       }
       signal.addEventListener('abort', entry.onAbort, { once: true })
     }
-    this.pending.set(id, entry)
-    this.log(`-> ${command} (${id})`)
+    link.pending.set(id, entry)
+    this.log(`-> ${command} (${id})${this.links.size > 1 ? ` to ${link.key}` : ''}`)
     socket.write(encodeTextFrame(JSON.stringify({ type: 'command', id, command, params })))
     try {
       return await result
@@ -327,20 +492,21 @@ export class BridgeServer {
   }
 
   /**
-   * Mismatch description, or null when the two sides can talk. An older
-   * extension that declares nothing is treated as v1-compatible: it still
-   * answers every command this bridge has ever sent, so failing the link would
-   * break working installs for a cosmetic gap.
+   * Mismatch description for one link, or null when the two sides can talk. An older
+   * extension that declares nothing is treated as v1-compatible: it still answers
+   * every command this bridge has ever sent, so failing the link would break working
+   * installs for a cosmetic gap.
    */
-  private get protocolNote(): string | null {
-    if (this.hello === undefined) return null
-    const theirs = this.hello.protocol
+  private protocolNoteFor(link: LinkState): string | null {
+    if (link.hello === undefined) return null
+    const theirs = link.hello.protocol
     if (theirs === 0) return null
+    const who = link.key.length > 0 && link.key !== LEGACY_INSTANCE_KEY ? `${link.key}: ` : ''
     if (theirs > BRIDGE_PROTOCOL_VERSION) {
-      return `扩展声明协议 v${theirs}，本桥只支持到 v${BRIDGE_PROTOCOL_VERSION} —— 请升级 dsh 插件，否则新命令会报「未知命令」`
+      return `${who}扩展声明协议 v${theirs}，本桥只支持到 v${BRIDGE_PROTOCOL_VERSION} —— 请升级 dsh 插件，否则新命令会报「未知命令」`
     }
     if (theirs < BRIDGE_PROTOCOL_VERSION) {
-      return `扩展协议 v${theirs} 低于本桥 v${BRIDGE_PROTOCOL_VERSION} —— 旧扩展可能缺少新命令，必要时重新下载扩展包`
+      return `${who}扩展协议 v${theirs} 低于本桥 v${BRIDGE_PROTOCOL_VERSION} —— 旧扩展可能缺少新命令，必要时重新下载扩展包`
     }
     return null
   }
@@ -456,13 +622,18 @@ export class BridgeServer {
         this.respondJson(res, 400, { ok: false, error: 'body must be {"command": "...", "params": {...}}' })
         return
       }
-      const body = parsed as { command?: unknown; params?: unknown; timeoutMs?: unknown }
+      const body = parsed as { command?: unknown; params?: unknown; timeoutMs?: unknown; instance?: unknown }
       if (typeof body.command !== 'string' || body.command.length === 0) {
         this.respondJson(res, 400, { ok: false, error: 'body must be {"command": "...", "params": {...}}' })
         return
       }
       const timeoutMs = typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined
-      const options: BridgeExecuteOptions = timeoutMs === undefined ? {} : { timeoutMs }
+      // `instance` is routing, not a payload field: it must never reach the extension.
+      const instance = typeof body.instance === 'string' && body.instance.trim().length > 0 ? body.instance.trim() : undefined
+      const options: BridgeExecuteOptions = {
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(instance === undefined ? {} : { instance }),
+      }
       // The plugin's controller carries the read-only / script gates and the audit
       // trail; the raw execute() below is only the fallback for bare users.
       const run = this.options.httpCommand ?? ((command, params, opts) => this.execute(command, params, opts))
@@ -471,6 +642,7 @@ export class BridgeServer {
         (error) => {
           if (error instanceof BridgeError) {
             // 503 = 现在根本没法工作；504 = 超时且结果未知；403 = 本机策略拦下（零副作用）；
+            // 409 = 多实例没指定目标（零派发，补一个参数就能过）；404 = 指定的实例不存在（同理）；
             // 502 = 扩展报了具体失败
             const status = error.code === 'extension_offline' || error.code === 'bridge_disabled' || error.code === 'not_configured'
               ? 503
@@ -478,7 +650,11 @@ export class BridgeServer {
                 ? 504
                 : error.code === 'blocked_by_policy'
                   ? 403
-                  : 502
+                  : error.code === 'instance_required'
+                    ? 409
+                    : error.code === 'instance_not_found'
+                      ? 404
+                      : 502
             this.respondJson(res, status, error.toJSON())
             return
           }
@@ -533,71 +709,76 @@ export class BridgeServer {
       + `Sec-WebSocket-Accept: ${accept}\r\n`
       + '\r\n',
     )
-    this.closeClientSocket(1000, 'replaced by a newer connection')
-    this.clientSocket = socket
-    this.hello = undefined
-    this.connectedAt = new Date()
-    this.continuationChunks = []
-    this.continuationOpen = false
+    // The link starts without a key: identity arrives in the hello frame, and until
+    // then it is just "one more browser". `keyed` is only populated once we know what
+    // to call it.
+    const link: LinkState = {
+      socket,
+      key: '',
+      hello: undefined,
+      connectedAt: new Date(),
+      pending: new Map(),
+      continuationChunks: [],
+      continuationOpen: false,
+    }
+    this.links.set(socket, link)
     this.log(`extension connected from ${socket.remoteAddress}:${socket.remotePort}`)
     const reader = new FrameReader()
     socket.on('data', (chunk: Buffer) => {
-      // A replaced connection can still deliver buffered frames. Without this
-      // guard its pong/frames would be applied to the NEW link, and its close
-      // event could tear the new socket down (the close handler already checks,
-      // the data handler did not).
-      if (this.clientSocket !== socket) {
+      // A closed link can still deliver buffered frames. Without this guard its
+      // pong/frames would be applied to a different browser's link.
+      if (this.links.get(socket) !== link) {
         socket.destroy()
         return
       }
       reader.push(chunk)
       try {
-        reader.drain((frame) => this.handleFrame(frame))
+        reader.drain((frame) => this.handleFrame(link, frame))
       } catch (error) {
         this.log(`protocol error: ${errorMessage(error)}`)
         this.lastError = errorMessage(error)
-        this.closeClientSocket(1002, 'protocol error')
+        this.closeLink(link, 1002, 'protocol error')
       }
     })
     socket.on('error', (error) => {
       this.logVerbose(`socket error: ${errorMessage(error)}`)
-      this.closeClientSocket(1011, 'server error')
+      this.closeLink(link, 1011, 'server error')
     })
     socket.on('close', () => {
-      if (this.clientSocket !== socket) return
-      this.closeClientSocket(1000, '')
+      this.closeLink(link, 1000, '')
     })
   }
 
-  private handleFrame(frame: { fin: boolean; opcode: number; payload: Buffer }): void {
+  private handleFrame(link: LinkState, frame: { fin: boolean; opcode: number; payload: Buffer }): void {
     switch (frame.opcode) {
       case 0x1:
       case 0x0:
-        this.handleText(frame.payload, frame.fin, frame.opcode)
+        this.handleText(link, frame.payload, frame.fin, frame.opcode)
         return
       case 0x8:
-        this.closeClientSocket(1000, '')
+        this.closeLink(link, 1000, '')
         return
       case 0x9:
-        this.clientSocket?.write(encodeControlFrame(0xA, frame.payload))
+        // Pong goes back on the socket that pinged us, not on "the" connection.
+        link.socket.write(encodeControlFrame(0xA, frame.payload))
         return
       default:
         return // pong or binary: nothing to do
     }
   }
 
-  private handleText(payload: Buffer, fin: boolean, opcode: number): void {
-    if (opcode === 0x0 && !this.continuationOpen) return // stray continuation
-    if (opcode === 0x1) this.continuationChunks = []
-    this.continuationOpen = opcode === 0x0 || !fin
-    this.continuationChunks.push(payload)
+  private handleText(link: LinkState, payload: Buffer, fin: boolean, opcode: number): void {
+    if (opcode === 0x0 && !link.continuationOpen) return // stray continuation
+    if (opcode === 0x1) link.continuationChunks = []
+    link.continuationOpen = opcode === 0x0 || !fin
+    link.continuationChunks.push(payload)
     if (!fin) return
     // Decode only the complete message: per-fragment toString('utf8') splits
     // multi-byte characters at fragment boundaries and corrupts the JSON.
-    const full = Buffer.concat(this.continuationChunks).toString('utf8')
-    this.continuationChunks = []
-    this.continuationOpen = false
-    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown; capabilities?: unknown }
+    const full = Buffer.concat(link.continuationChunks).toString('utf8')
+    link.continuationChunks = []
+    link.continuationOpen = false
+    let msg: { type?: unknown; id?: unknown; ok?: unknown; result?: unknown; error?: unknown; t?: unknown; client?: unknown; version?: unknown; protocol?: unknown; browser?: unknown; capabilities?: unknown; instance?: unknown }
     try {
       msg = JSON.parse(full) as typeof msg
     } catch {
@@ -609,55 +790,81 @@ export class BridgeServer {
       const capabilities = Array.isArray(msg.capabilities)
         ? msg.capabilities.filter((c): c is string => typeof c === 'string')
         : undefined
-      this.hello = {
+      const instance = parseInstance(msg.instance)
+      link.hello = {
         client: typeof msg.client === 'string' ? msg.client : 'unknown',
         version: typeof msg.version === 'string' ? msg.version : 'unknown',
         protocol: declared,
         browser: (msg.browser ?? { name: 'unknown', version: 'unknown', ua: '' }) as BridgeHello['browser'],
         ...(capabilities !== undefined ? { capabilities } : {}),
+        ...(instance !== undefined ? { instance } : {}),
       }
-      this.log(`hello: client=${this.hello.client} v${this.hello.version} protocol=v${declared || '?'} browser=${this.hello.browser.name} ${this.hello.browser.version}${capabilities ? ` capabilities=${capabilities.length}` : ''}`)
-      const note = this.protocolNote
+      this.registerKey(link, instance?.id ?? LEGACY_INSTANCE_KEY)
+      this.log(`hello: key=${link.key} client=${link.hello.client} v${link.hello.version} protocol=v${declared || '?'} browser=${link.hello.browser.name} ${link.hello.browser.version}${instance !== undefined ? ` label=${instance.label ?? ''}` : ' (no instance identity)'}${capabilities ? ` capabilities=${capabilities.length}` : ''}`)
+      const note = this.protocolNoteFor(link)
       if (note !== null) this.log(`protocol mismatch: ${note}`)
       return
     }
     if (msg.type === 'pong') return
     if (msg.type === 'result' && typeof msg.id === 'string') {
-      const entry = this.pending.get(msg.id)
+      const entry = link.pending.get(msg.id)
       if (entry === undefined) {
         this.logVerbose(`result for unknown id ${msg.id}`)
         return
       }
-      this.pending.delete(msg.id)
+      link.pending.delete(msg.id)
       clearTimeout(entry.timer)
       if (msg.ok === true) entry.resolve(msg.result)
       else entry.reject(new Error(typeof msg.error === 'string' && msg.error.length > 0 ? msg.error : 'unknown extension error'))
     }
   }
 
-  private closeClientSocket(code: number, reason: string): void {
-    const socket = this.clientSocket
-    if (socket === undefined) return
-    this.clientSocket = undefined
-    this.hello = undefined
-    this.connectedAt = undefined
-    this.failAllPending(new Error('the browser extension disconnected mid-command'))
-    try {
-      socket.write(encodeCloseFrame(code, reason))
-      socket.end()
-      setTimeout(() => socket.destroy(), 500).unref()
-    } catch {
-      socket.destroy()
+  /**
+   * Give a link its routing key and evict the previous owner of that key.
+   *
+   * Named instances replace only themselves (two profiles stay connected side by
+   * side). `legacy` keeps the old single-slot behaviour on purpose: the bridge
+   * cannot tell two anonymous browsers apart, so keeping both would make
+   * "which browser did this land on" unanswerable.
+   */
+  private registerKey(link: LinkState, key: string): void {
+    const previous = this.keyed.get(key)
+    if (previous !== undefined && previous !== link.socket) {
+      const previousLink = this.links.get(previous)
+      if (previousLink === undefined) this.keyed.delete(key)
+      else {
+        this.log(key === LEGACY_INSTANCE_KEY
+          ? 'a newer anonymous extension replaces the previous one (pre-1.8.0 semantics)'
+          : `instance ${key} reconnected — replacing only that browser's previous link`)
+        this.closeLink(previousLink, 1000, 'replaced by a newer connection for the same instance')
+      }
     }
-    if (reason.length > 0) this.log(`extension disconnected (${reason})`)
+    link.key = key
+    this.keyed.set(key, link.socket)
   }
 
-  private failAllPending(error: Error): void {
-    for (const [, entry] of this.pending) {
+  private closeLink(link: LinkState, code: number, reason: string): void {
+    if (this.links.get(link.socket) !== link) return
+    this.links.delete(link.socket)
+    if (link.key.length > 0 && this.keyed.get(link.key) === link.socket) this.keyed.delete(link.key)
+    this.failPending(link, new Error('the browser extension disconnected mid-command'))
+    try {
+      link.socket.write(encodeCloseFrame(code, reason))
+      link.socket.end()
+      setTimeout(() => link.socket.destroy(), 500).unref()
+    } catch {
+      link.socket.destroy()
+    }
+    if (reason.length > 0) this.log(`extension disconnected${link.key.length > 0 ? ` (${link.key})` : ''} (${reason})`)
+  }
+
+  /** Fail only the in-flight commands of the link that went away; other browsers keep working. */
+  private failPending(link: LinkState, error: Error): void {
+    for (const [, entry] of link.pending) {
       clearTimeout(entry.timer)
       entry.reject(error)
     }
-    this.pending.clear()
+    link.pending.clear()
   }
 
   private logVerbose(line: string): void {
@@ -668,6 +875,86 @@ export class BridgeServer {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Read the optional `instance` object out of a hello frame.
+ *
+ * Deliberately strict about the shape but lenient about the label: the id is the
+ * routing key and has to be a non-empty string, while a missing or empty label is
+ * normal (the user has not named that profile yet) and simply means "route by id".
+ * Anything that does not look like `{id: string}` is treated as *no identity at
+ * all* rather than a made-up one — a fabricated key would silently merge two
+ * different browsers into one slot.
+ */
+function parseInstance(raw: unknown): { id: string; label?: string } | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const candidate = raw as { id?: unknown; label?: unknown }
+  if (typeof candidate.id !== 'string' || candidate.id.trim().length === 0) return undefined
+  const id = candidate.id.trim()
+  const label = typeof candidate.label === 'string' ? candidate.label.trim() : ''
+  return label.length > 0 ? { id, label } : { id }
+}
+
+/** The parts of a connected browser that instance matching looks at. */
+interface InstanceIdentity {
+  readonly key: string
+  readonly id?: string
+  readonly label?: string
+}
+
+/**
+ * The routing-relevant identity of one link, carrying its socket so a match can be
+ * turned back into the link it came from.
+ */
+interface LinkIdentity extends InstanceIdentity {
+  readonly socket: net.Socket
+}
+
+function identityOf(link: LinkState): LinkIdentity {
+  const instance = link.hello?.instance
+  return {
+    socket: link.socket,
+    key: link.key.length > 0 ? link.key : (instance?.id ?? LEGACY_INSTANCE_KEY),
+    ...(instance?.id !== undefined ? { id: instance.id } : {}),
+    ...(instance?.label !== undefined && instance.label.length > 0 ? { label: instance.label } : {}),
+  }
+}
+
+/** Identity-only one-liner, for ambiguity lists where the browser facts are not the point. */
+function describeIdentity(identity: InstanceIdentity): string {
+  if (identity.id === undefined) return `${identity.key} (no instance identity)`
+  const label = identity.label !== undefined && identity.label.length > 0 ? `"${identity.label}"` : '(unnamed)'
+  return `${label} id=${identity.id}`
+}
+
+/**
+ * The one instance-matching rule, shared by command routing and by the capability
+ * gate so the two can never disagree about which browser a call is aimed at.
+ *
+ * Preference order is deliberate: an exact routing key is never ambiguous, then an
+ * exact id, then the user-visible label, and only then an id prefix. Each stage
+ * stops at a single hit; **several hits at any stage are an error, never a pick** —
+ * choosing "the most likely one" is how a click lands on the wrong logged-in
+ * account.
+ */
+function matchInstance<T extends InstanceIdentity>(candidates: readonly T[], query: string):
+  | { readonly kind: 'one'; readonly hit: T }
+  | { readonly kind: 'ambiguous'; readonly stage: string; readonly hits: readonly T[] }
+  | { readonly kind: 'none' } {
+  const needle = query.trim().toLowerCase()
+  const stages: ReadonlyArray<readonly [string, (c: T) => boolean]> = [
+    ['key', (c) => c.key.toLowerCase() === needle],
+    ['id', (c) => c.id?.toLowerCase() === needle],
+    ['label', (c) => c.label !== undefined && c.label.length > 0 && c.label.toLowerCase() === needle],
+    ['prefix', (c) => c.id?.toLowerCase().startsWith(needle) === true],
+  ]
+  for (const [stage, test] of stages) {
+    const hits = candidates.filter(test)
+    if (hits.length === 1) return { kind: 'one', hit: hits[0] }
+    if (hits.length > 1) return { kind: 'ambiguous', stage, hits }
+  }
+  return { kind: 'none' }
 }
 
 /** Constant-time token comparison; a length mismatch is the only thing leaked. */
@@ -757,15 +1044,20 @@ async function refresh(){
   try{
     const r=await fetch('/api/status');const j=await r.json();
     const connected=j.extensionConnected;
+    const instances=j.instances||[];
     document.getElementById('dot').className='dot'+(connected?' on':'');
+    // 多实例时 hello 是空的（两个不同的 hello 争不了一个字段），所以标题走 instances。
     document.getElementById('sub').textContent=connected
-      ?(j.hello?j.hello.client+' '+j.hello.browser.name+' '+j.hello.browser.version:'已连接')
+      ?(instances.length>1
+          ?instances.length+' 个浏览器已连接'
+          :(j.hello?j.hello.client+' '+j.hello.browser.name+' '+j.hello.browser.version:'已连接'))
       :'等待浏览器扩展连接…';
+    const nameOf=(it)=>it.label?it.label:(it.legacy?'legacy（旧扩展，无实例身份）':String(it.key).slice(0,8));
     const rows=[
       ['监听端口','<span class="badge on">'+j.port+'</span>'],
-      ['扩展状态',connected?'<span class="badge on">已连接</span>':'<span class="badge off">未连接</span>'],
-      ['扩展类型',j.hello?(j.hello.client+' v'+j.hello.version):'—'],
-      ['浏览器',j.hello?(j.hello.browser.name+' '+j.hello.browser.version):'—'],
+      ['扩展状态',connected?'<span class="badge on">已连接'+(instances.length>1?' × '+instances.length:'')+'</span>':'<span class="badge off">未连接</span>'],
+      ['扩展类型',j.hello?(j.hello.client+' v'+j.hello.version):(instances.length>1?'见下方实例清单':'—')],
+      ['浏览器',j.hello?(j.hello.browser.name+' '+j.hello.browser.version):(instances.length>1?'见下方实例清单':'—')],
       ['等待命令',String(j.pendingCommands??0)],
       ['连接时间',j.connectedAt?new Date(j.connectedAt).toLocaleString():'—'],
       ['截图目录',j.shotsDir||'—'],
@@ -773,6 +1065,14 @@ async function refresh(){
       ['协议版本','桥 v'+j.bridgeProtocol+' / 扩展 v'+(j.extensionProtocol||'?')+(j.protocolCompatible?'':' <span class="badge off">不匹配</span>')],
     ];
     if(j.protocolNote) rows.push(['协议提示','<span style="color:var(--red)">'+j.protocolNote+'</span>']);
+    if(instances.length>0){
+      const list=instances.map((it)=>
+        '<div style="margin:4px 0"><span class="badge '+(it.legacy?'off':'on')+'">'+nameOf(it)+'</span> '
+        +it.browser.name+' '+it.browser.version
+        +(it.id?' <span style="color:#64748b">id '+String(it.id).slice(0,8)+'</span>':'')
+        +'</div>').join('');
+      rows.push(['实例清单 (instance)',list+'<div class="hint" style="margin-top:6px">多实例时命令必须带 <code>instance</code>：用上面的名称、完整 id 或唯一前缀。不指定会直接报错，不会猜。</div>']);
+    }
     document.getElementById('rows').innerHTML=rows.map(([k,v])=>'<div class="row"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>').join('');
     document.getElementById('raw').textContent=JSON.stringify(j,null,2);
   }catch(e){document.getElementById('sub').textContent='连接失败: '+e.message}
