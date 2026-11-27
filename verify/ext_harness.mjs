@@ -707,9 +707,17 @@ export function makeChrome(model, { withTabGroups = true, storage = {}, sessionS
       if (model.storageGetError && (!only || list.some((k) => only.includes(k)))) {
         return Promise.reject(new Error(model.storageGetError));
       }
-      return resolve(Object.fromEntries(
+      // Snapshot the answer NOW, resolve it later. `storageGetDelayMs` exists so the
+      // "a popup toggle lands while the read is still in flight" race can be tested
+      // deterministically: a real `chrome.storage.local.get` returns the value as it
+      // was at read time, so a delayed fake has to do the same or the test proves
+      // nothing.
+      const answer = Object.fromEntries(
         list.filter((k) => store[k] !== undefined).map((k) => [k, store[k]]),
-      ));
+      );
+      const delay = Number(model.storageGetDelayMs) || 0;
+      if (delay > 0) return new Promise((r) => setTimeout(() => r(answer), delay));
+      return resolve(answer);
     },
     // 真写入并广播：本地锁这类「必须活过 service worker 重启」的状态，
     // 用一个 set 不落盘的假件测不出来。

@@ -36,9 +36,11 @@
 
 ### 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/DSH-Browser-Control-v1.8.0.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
+下载 [DSH-Browser-Control-v1.8.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.1/DSH-Browser-Control-v1.8.1.zip)，解压到固定文件夹（别删），打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」→ 选那个文件夹。需要 Chrome 116+；图标绿点 = 已连接。
 
-> **v1.8.0 需要重装一次扩展**（加了实例身份：每个 profile 有一个稳定 id，桥用它区分浏览器）。装好后在弹窗「高级 → 实例名称」给每个 profile 起个名字（例如 `work` / `personal`），多浏览器时就能按名字路由。之后常规更新继续只更插件。
+> **v1.8.1 需要重装一次扩展**（v1.8.0 加了实例身份，v1.8.1 修了本地硬锁的并发失效）。装好后在弹窗「高级 → 实例名称」给每个 profile 起个名字（例如 `work` / `personal`），多浏览器时就能按名字路由。之后常规更新继续只更插件。
+>
+> **如果你已经装了 v1.8.0，强烈建议升到 v1.8.1**：v1.8.0 里，用户在弹窗点「锁定」的那一刻如果正好有命令在读本地存储，锁会被静默丢掉（图标从 `LOCK` 变回绿色 `OFF`，命令照常执行）。
 
 ### 2. dsh 插件
 
@@ -49,10 +51,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 或从 GitHub tag：
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.0"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.1"
 ```
 
-离线包：[dsh-browser-control-plugin-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/dsh-browser-control-plugin-v1.8.0.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
+离线包：[dsh-browser-control-plugin-v1.8.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.1/dsh-browser-control-plugin-v1.8.1.zip)，解压后对含 `package.json` 的那一层执行 `dsh plugin --profile web add file:<那一层>`。
 
 装完重启 dsh。桥默认开启，状态页 <http://127.0.0.1:9777/>。刚发布的版本装不上（镜像延迟 / 24 小时包龄闸门）见 [安装排障](docs/INSTALL.md)。
 

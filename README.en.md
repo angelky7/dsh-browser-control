@@ -36,9 +36,9 @@ No headless browser, no copying login state around, no MCP — it drives the sig
 
 ### 1. Chrome extension
 
-Download [DSH-Browser-Control-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/DSH-Browser-Control-v1.8.0.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
+Download [DSH-Browser-Control-v1.8.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.1/DSH-Browser-Control-v1.8.1.zip), unzip to a fixed folder (don't delete it), open `chrome://extensions` → enable Developer mode → "Load unpacked" → pick that folder. Chrome 116+; a green dot means connected.
 
-> Already on v1.7.2? No reinstall needed: the feature updates in v1.7.3–v1.7.10 do not touch the extension.
+> **v1.8.1 needs one extension reinstall** (v1.8.0 added instance identity; v1.8.1 fixed a concurrency failure in the local hard lock). **If you are on v1.8.0, upgrading is strongly recommended**: there, a lock toggled in the popup while a command was reading local storage was silently dropped — the badge went from `LOCK` back to a green `OFF` and commands ran anyway.
 
 ### 2. dsh plugin
 
@@ -49,10 +49,10 @@ dsh plugin --profile web add @angelky7/dsh-browser-control
 Or from a GitHub tag:
 
 ```bash
-dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.0"
+dsh plugin --profile web add "github:angelky7/dsh-browser-control#v1.8.1"
 ```
 
-Offline asset: [dsh-browser-control-plugin-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/dsh-browser-control-plugin-v1.8.0.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
+Offline asset: [dsh-browser-control-plugin-v1.8.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.1/dsh-browser-control-plugin-v1.8.1.zip); unzip and run `dsh plugin --profile web add file:<the layer containing package.json>`.
 
 Restart dsh afterwards. The bridge is on by default; status page <http://127.0.0.1:9777/>. If a just-published version will not install (mirror lag / 24-hour package-age gate), see [Install troubleshooting](docs/INSTALL.md).
 

@@ -344,31 +344,54 @@ const HARD_LOCK_UNREADABLE_MARKER = 'browser-lock-unreadable:';
 let hardLocked = false;
 let hardLockLoaded = false;
 let hardLockReason = 'user';
+/** Bumped by every popup toggle, so an in-flight storage read cannot overwrite it. */
+let hardLockGeneration = 0;
+/** Shared in-flight read; concurrent commands await the same one. */
+let hardLockSync = null;
 
 /** Read the persisted flag once per worker lifetime. */
 async function syncHardLock() {
 	if (hardLockLoaded) return;
-	try {
-		const stored = await chrome.storage.local.get([HARD_LOCK_KEY]);
-		hardLocked = stored[HARD_LOCK_KEY] === true;
-		hardLockReason = 'user';
-		hardLockLoaded = true;
-	} catch (err) {
-		// 读不到锁的状态时按「锁着」处理。panic switch 唯一的失败方式就是「以为锁着
-		// 其实没锁」，而 fail-open 恰好是那种失败；这里宁可让模型多做一次询问。
-		// 不置 hardLockLoaded：下一条命令再读一次，存储恢复后自愈。
-		// 用户仍然能解：弹窗那条通道走的是内存里的 setHardLock，不依赖这次读。
-		hardLocked = true;
-		hardLockReason = 'unreadable';
-		lastError = `读取本地锁失败，已按「锁定」处理：${err.message}`;
-	}
-	// A worker that came back after eviction has not painted the badge yet; do it
-	// now so "locked" is visible before the first command rather than after it.
-	if (hardLocked) setState(wsState);
+	// Two commands can arrive at once (the bridge dispatches without awaiting), so
+	// they must share ONE read instead of each reading and each assigning.
+	if (hardLockSync !== null) return hardLockSync;
+	const generationAtStart = hardLockGeneration;
+	hardLockSync = (async () => {
+		try {
+			const stored = await chrome.storage.local.get([HARD_LOCK_KEY]);
+			// The read is a snapshot of the value *at read time*. If the user toggled the
+			// lock in the popup while it was in flight, their decision is newer than this
+			// answer and must win. Without this check the stale value overwrites it and the
+			// panic switch silently flips — and failing open is the only way this feature
+			// can fail that matters.
+			if (generationAtStart !== hardLockGeneration) return;
+			hardLocked = stored[HARD_LOCK_KEY] === true;
+			hardLockReason = 'user';
+			hardLockLoaded = true;
+		} catch (err) {
+			if (generationAtStart !== hardLockGeneration) return;
+			// 读不到锁的状态时按「锁着」处理。panic switch 唯一的失败方式就是「以为锁着
+			// 其实没锁」，而 fail-open 恰好是那种失败；这里宁可让模型多做一次询问。
+			// 不置 hardLockLoaded：下一条命令再读一次，存储恢复后自愈。
+			// 用户仍然能解：弹窗那条通道走的是内存里的 setHardLock，不依赖这次读。
+			hardLocked = true;
+			hardLockReason = 'unreadable';
+			lastError = `读取本地锁失败，已按「锁定」处理：${err.message}`;
+		} finally {
+			hardLockSync = null;
+		}
+		// A worker that came back after eviction has not painted the badge yet; do it
+		// now so "locked" is visible before the first command rather than after it.
+		if (hardLocked) setState(wsState);
+	})();
+	return hardLockSync;
 }
 
 /** Persist and apply the lock; called only from the popup message handler. */
 async function setHardLock(locked) {
+	// Bump first: any read that is still in flight belongs to an older decision and
+	// will discard its own answer when it lands.
+	hardLockGeneration += 1;
 	hardLocked = Boolean(locked);
 	hardLockLoaded = true;
 	hardLockReason = 'user';
@@ -3067,11 +3090,46 @@ async function snapshotViaAx(send, tab, limit) {
 	};
 }
 
+/**
+ * Per-tab snapshot chain.
+ *
+ * Snapshot = "clear all refs, then stamp a freshly numbered set", and commands are
+ * dispatched concurrently, so two snapshots on one tab would interleave those two
+ * phases. The observable damage is duplicate `data-dsh-ref` values across elements,
+ * which turns a ref click into a coin flip. Serialising per tab makes the pair atomic.
+ *
+ * Rejections are swallowed into the chain so one failed snapshot cannot wedge the tab
+ * forever; the caller still gets the real rejection through the returned promise.
+ */
+const snapshotChains = new Map();
+
+function withSnapshotLock(tabId, run) {
+	const previous = snapshotChains.get(tabId) ?? Promise.resolve();
+	const mine = previous.then(run, run);
+	// `tail` never rejects, so a failed snapshot cannot wedge the tab's chain forever;
+	// the caller still gets the real rejection through `mine`.
+	const tail = mine.then(() => {}, () => {});
+	snapshotChains.set(tabId, tail);
+	void tail.then(() => {
+		// Leave nothing behind once this was the last one, so closed tabs do not leak.
+		if (snapshotChains.get(tabId) === tail) snapshotChains.delete(tabId);
+	});
+	return mine;
+}
+
 async function cmdSnapshot(params) {
 	const tab = await resolveTab(params.tabId);
 	const limit = Math.min(200, Math.max(1, Number(params.limit) || 120));
 	const wantAx = String(params.mode ?? params.source ?? 'dom').toLowerCase() === 'ax';
-	return withCDP(tab.id, async (send) => {
+	// Serialised per tab. A snapshot is "clear every ref, then stamp a fresh numbered set",
+	// and the bridge dispatches commands without awaiting, so two of them can interleave:
+	// A clears, B clears, then A stamps e1 and B stamps e1 on a *different* element. The
+	// page is then left holding duplicate `data-dsh-ref="e1"` values, and clicking a ref
+	// picks whichever one `querySelector` happens to return first — a wrong-element click
+	// produced entirely by timing. This is the "快照串行" half of the deferred list; the
+	// "ref 代次" half (making a ref from an older snapshot fail loudly instead of silently
+	// resolving to a renumbered one) is still open, see CHANGELOG.
+	return withSnapshotLock(tab.id, () => withCDP(tab.id, async (send) => {
 		await send('Runtime.enable').catch(() => {});
 		if (!wantAx) return snapshotViaDom(send, tab, limit);
 		try {
@@ -3085,7 +3143,7 @@ async function cmdSnapshot(params) {
 			payload.axFallback = String((error && error.message) || error);
 			return payload;
 		}
-	});
+	}));
 }
 
 const COMMANDS = {
