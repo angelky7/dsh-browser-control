@@ -8,7 +8,7 @@
 
 ## 1. Chrome 扩展
 
-下载 [DSH-Browser-Control-v1.8.0.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.0/DSH-Browser-Control-v1.8.0.zip) → 解压到固定文件夹（别删）→ `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选解压后的文件夹。
+下载 [DSH-Browser-Control-v1.8.1.zip](https://github.com/angelky7/dsh-browser-control/releases/download/v1.8.1/DSH-Browser-Control-v1.8.1.zip) → 解压到固定文件夹（别删）→ `chrome://extensions` → 开启「开发者模式」→「加载已解压的扩展程序」→ 选解压后的文件夹。
 
 工具栏出现鲸鱼图标、绿点呼吸 = 已连接。
 
